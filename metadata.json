@@ -1,0 +1,6 @@
+{
+  "name": "ZXC[STREAM] — Stream & Download",
+  "description": "Stream or download movies and TV by TMDB ID. Dive into endless hours of free streaming of Movies & TV Shows with a free, easy-to-embed player.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
