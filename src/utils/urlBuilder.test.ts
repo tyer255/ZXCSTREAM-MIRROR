@@ -60,11 +60,15 @@ describe('ZXC[STREAM] URL Builder & Route Utilities', () => {
   it('builds Download endpoint URLs accurately', () => {
     assert.equal(
       buildDownloadUrl('movie', '128'),
-      'https://zxcstream.cc/download/movie/128'
+      'https://zxcstream-mirror.vercel.app/download/movie/128'
     );
     assert.equal(
       buildDownloadUrl('tv', '66732'),
-      'https://zxcstream.cc/download/tv/66732'
+      'https://zxcstream-mirror.vercel.app/download/tv/66732'
+    );
+    assert.equal(
+      buildDownloadUrl('movie', '128', 'https://custom-domain.com'),
+      'https://custom-domain.com/download/movie/128'
     );
   });
 

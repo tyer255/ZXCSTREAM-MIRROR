@@ -9,12 +9,15 @@ import {
   Copy,
   Check,
   ExternalLink,
+  Code,
 } from 'lucide-react';
 import {
   DUB_LANGUAGES,
   MediaType,
   PlayerMode,
   buildPlayerUrl,
+  getDefaultOrigin,
+  buildEmbedIframeCode,
 } from '../utils/urlBuilder';
 import { CustomPlayerView } from './CustomPlayerView';
 import { AnnouncementModal } from './AnnouncementModal';
@@ -44,15 +47,26 @@ export const HomePage: React.FC<HomePageProps> = ({
   const [season, setSeason] = useState<string>('1');
   const [episode, setEpisode] = useState<string>('1');
   const [copied, setCopied] = useState<boolean>(false);
+  const [copiedIframe, setCopiedIframe] = useState<boolean>(false);
+
+  const currentOrigin = getDefaultOrigin();
 
   const generatedUrl = buildPlayerUrl({
-    baseOrigin: 'https://zxcstream.cc',
+    baseOrigin: currentOrigin,
     playerMode,
     mediaType,
     tmdbId,
     season,
     episode,
   });
+
+  const embedIframeCode = buildEmbedIframeCode(
+    mediaType,
+    tmdbId,
+    season,
+    episode,
+    currentOrigin
+  );
 
   const handleCopy = async () => {
     try {
@@ -62,6 +76,16 @@ export const HomePage: React.FC<HomePageProps> = ({
     }
     setCopied(true);
     window.setTimeout(() => setCopied(false), 2000);
+  };
+
+  const handleCopyIframe = async () => {
+    try {
+      await navigator.clipboard.writeText(embedIframeCode);
+    } catch {
+      // Fallback copy
+    }
+    setCopiedIframe(true);
+    window.setTimeout(() => setCopiedIframe(false), 2000);
   };
 
   return (
@@ -78,7 +102,7 @@ export const HomePage: React.FC<HomePageProps> = ({
               <p className="text-zinc-200 leading-snug">
                 Download endpoint is now available, usage:{' '}
                 <span className="font-mono text-zinc-100 break-words">
-                  https://zxcstream.cc/download/&#123;media_type&#125;/&#123;tmdbId&#125;
+                  {currentOrigin}/download/&#123;media_type&#125;/&#123;tmdbId&#125;
                 </span>
               </p>
             </div>
@@ -104,30 +128,12 @@ export const HomePage: React.FC<HomePageProps> = ({
         <div className="z-20 absolute inset-x-0 top-0 flex justify-center items-center p-6">
           <div className="flex items-center gap-4 text-xs lg:text-base font-medium">
             <a
-              href="https://zxcprime.icu"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-zinc-400 hover:text-zinc-50 transition-colors"
-            >
-              zxcprime.icu
-            </a>
-            <span className="text-zinc-500">•</span>
-            <a
               href="https://vidstuck.cc"
               target="_blank"
               rel="noopener noreferrer"
               className="text-sm lg:text-xl font-semibold text-zinc-50 hover:text-blue-500 transition-colors animate-pulse"
             >
               vidstuck.cc
-            </a>
-            <span className="text-zinc-500">•</span>
-            <a
-              href="https://zxcstream.com"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-zinc-400 hover:text-zinc-50 transition-colors"
-            >
-              zxcstream.com
             </a>
           </div>
         </div>
@@ -314,13 +320,40 @@ export const HomePage: React.FC<HomePageProps> = ({
                 type="button"
                 onClick={handleCopy}
                 data-testid="copy-url-button"
+                title="Copy Direct URL"
                 aria-label="Copy player URL"
-                className="inline-flex items-center justify-center rounded-md px-2.5 py-1.5 text-sm font-medium hover:bg-zinc-800 transition cursor-pointer"
+                className="inline-flex items-center gap-1.5 justify-center rounded-md px-2.5 py-1.5 text-xs font-medium hover:bg-zinc-800 transition cursor-pointer text-zinc-300 hover:text-white"
               >
                 {copied ? (
-                  <Check className="w-4 h-4 text-green-500" />
+                  <>
+                    <Check className="w-4 h-4 text-green-500" />
+                    <span className="hidden sm:inline text-green-400">Copied URL</span>
+                  </>
                 ) : (
-                  <Copy className="w-4 h-4 text-zinc-300" />
+                  <>
+                    <Copy className="w-4 h-4" />
+                    <span className="hidden sm:inline">Copy URL</span>
+                  </>
+                )}
+              </button>
+              <button
+                type="button"
+                onClick={handleCopyIframe}
+                data-testid="copy-embed-code-button"
+                title="Copy Iframe Embed Code for your website"
+                aria-label="Copy Iframe Embed Code"
+                className="inline-flex items-center gap-1.5 justify-center rounded-md px-2.5 py-1.5 text-xs font-medium bg-zinc-800 hover:bg-zinc-700 text-zinc-200 transition cursor-pointer border border-white/5"
+              >
+                {copiedIframe ? (
+                  <>
+                    <Check className="w-4 h-4 text-green-500" />
+                    <span className="text-green-400">Copied Embed Code</span>
+                  </>
+                ) : (
+                  <>
+                    <Code className="w-4 h-4 text-blue-400" />
+                    <span className="hidden sm:inline">Copy Embed Code</span>
+                  </>
                 )}
               </button>
               {tmdbId.trim() && (
@@ -493,21 +526,12 @@ export const HomePage: React.FC<HomePageProps> = ({
             <h2 className="text-sm font-mono tracking-wider text-zinc-400 uppercase">
               Join our community!
             </h2>
-            <div className="flex items-center gap-6 text-sm">
+            <div className="flex items-center justify-center gap-6 text-sm">
               <a
-                href="https://t.me/+s77s3A294G5kN2I1"
+                href="https://discord.gg/FRHmkQWUP"
                 target="_blank"
                 rel="noopener noreferrer"
-                className="font-mono text-zinc-50 hover:opacity-70 transition"
-              >
-                Telegram
-              </a>
-              <span className="text-zinc-400">•</span>
-              <a
-                href="https://discord.gg/yv7wJV97Jd"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="font-mono text-zinc-50 hover:opacity-70 transition"
+                className="font-mono text-zinc-50 hover:opacity-70 transition flex items-center gap-2"
               >
                 Discord
               </a>

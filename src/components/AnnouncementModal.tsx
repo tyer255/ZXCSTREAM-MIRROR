@@ -26,20 +26,19 @@ export const AnnouncementModal: React.FC<AnnouncementModalProps> = ({ open, onDi
             className="space-y-3 pt-2 text-sm leading-relaxed text-zinc-400"
           >
             <p>
-              To avoid confusion, please only use and follow the{' '}
-              <span className="font-semibold text-zinc-50">zxcstream.cc</span>
+              To avoid confusion, please only use and follow our active mirror at{' '}
+              <span className="font-semibold text-zinc-50">zxcstream-mirror.vercel.app</span>
             </p>
             <p>
-              Our main domain serves as a central entry point and may redirect to whichever active
-              domain is currently available. This ensures uninterrupted access even if we change
-              domains in the future.
+              Our player and embed endpoints provide fast, ad-free streaming with full TMDB catalog support
+              and responsive custom controls.
             </p>
             <div className="space-y-1 rounded-md bg-zinc-800/60 p-3 text-xs text-zinc-200">
               <p>
-                ✅ Always use: <strong>zxcstream.cc</strong>
+                ✅ Official Mirror: <strong>zxcstream-mirror.vercel.app</strong>
               </p>
-              <p>✅ Any domain changes will be handled automatically through redirects</p>
-              <p>✅ No need to save or share temporary domains</p>
+              <p>✅ Embeddable without ads on your own websites</p>
+              <p>✅ Supports full movie & TV series TMDB catalog</p>
             </div>
             <p>Thank you for your support and understanding.</p>
           </div>

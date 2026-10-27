@@ -103,14 +103,20 @@ export const STREAM_SERVERS = [
   },
 ] as const;
 
+export const USER_DEPLOYMENT_ORIGIN = 'https://zxcstream-mirror.vercel.app';
+
+export function getDefaultOrigin(): string {
+  return USER_DEPLOYMENT_ORIGIN;
+}
+
 /**
  * Builds the canonical display URL shown in the ZXC[STREAM] copy bar.
- * Matches exact behaviour of module 31713 in zxcstream.cc:
+ * Uses the user's mirror deployment domain (https://zxcstream-mirror.vercel.app)
  * `${origin}/${playerMode === 'custom' ? 'player' : 'embed'}/${mediaType}/${id}`
  * and appends `/${season}/${episode}` for tv series.
  */
 export function buildPlayerUrl(options: PlayerUrlOptions): string {
-  const origin = (options.baseOrigin ?? 'https://zxcstream.cc').replace(/\/+$/, '');
+  const origin = (options.baseOrigin ?? getDefaultOrigin()).replace(/\/+$/, '');
   const endpoint = options.playerMode === 'custom' ? 'player' : 'embed';
   const cleanId = options.tmdbId.trim();
 
@@ -146,10 +152,28 @@ export function buildPlayerUrl(options: PlayerUrlOptions): string {
 export function buildDownloadUrl(
   mediaType: MediaType,
   tmdbId: string,
-  baseOrigin = 'https://zxcstream.cc'
+  baseOrigin?: string
 ): string {
-  const origin = baseOrigin.replace(/\/+$/, '');
+  const origin = (baseOrigin ?? getDefaultOrigin()).replace(/\/+$/, '');
   return `${origin}/download/${mediaType}/${encodeURIComponent(tmdbId.trim())}`;
+}
+
+export function buildEmbedIframeCode(
+  mediaType: MediaType,
+  tmdbId: string,
+  season = '1',
+  episode = '1',
+  baseOrigin?: string
+): string {
+  const url = buildPlayerUrl({
+    baseOrigin: baseOrigin ?? getDefaultOrigin(),
+    playerMode: 'builtin',
+    mediaType,
+    tmdbId,
+    season,
+    episode,
+  });
+  return `<iframe src="${url}" width="100%" height="100%" frameborder="0" scrolling="no" allowfullscreen="true" webkitallowfullscreen="true" mozallowfullscreen="true"></iframe>`;
 }
 
 export function formatRuntime(minutes?: number | null): string {

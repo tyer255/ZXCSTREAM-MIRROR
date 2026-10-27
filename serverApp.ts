@@ -557,11 +557,12 @@ apiRouter.get('/stream/proxy', async (req, res) => {
 
 // Sentinel Embed endpoint
 apiRouter.get('/embed/sentinel', (req, res) => {
+  const base = 'https://zxcstream-mirror.vercel.app';
   const { mediaType = 'movie', tmdbId = '128', season = '1', episode = '1' } = req.query;
   const path =
     mediaType === 'tv'
-      ? `https://zxcstream.cc/embed/tv/${tmdbId}/${season}/${episode}`
-      : `https://zxcstream.cc/embed/movie/${tmdbId}`;
+      ? `${base}/embed/tv/${tmdbId}/${season}/${episode}`
+      : `${base}/embed/movie/${tmdbId}`;
   return res.json({ embed: path });
 });
 
