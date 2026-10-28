@@ -161,9 +161,9 @@ async function resolveForServer(
 
   if (imdbId) query.set(FIELD_MAP.imdbId, imdbId);
 
-  if (dubCode && dubType !== '') {
+  if (dubCode) {
     query.set('dubCode', dubCode);
-    query.set('dubType', dubType);
+    query.set('dubType', dubType !== '' ? String(dubType) : '0');
   }
 
   const sourceRes = await fetch(
@@ -221,6 +221,7 @@ async function resolveForServer(
     ...sourceData,
     success: verifiedLinks.length > 0,
     links: verifiedLinks,
+    dubAudioUrl: verifiedLinks[0]?.link || rawLinks[0]?.link || null,
     server: targetServer,
   };
 }
@@ -295,10 +296,11 @@ apiRouter.post('/stream/resolve', async (req, res) => {
   const serverPath = reqServerPath || preferredServer || 'orion';
 
   let mediaType = reqMediaType;
-  let { title = '', releaseYear = '', date = '', imdbId = '', lastAirDate = '' } = req.body;
+  let { title = '', releaseYear = '', year = '', date = '', imdbId = '', lastAirDate = '' } = req.body;
+  if (!releaseYear && year) releaseYear = String(year);
 
   try {
-    if (!title || !date || !releaseYear) {
+    if (!title || !releaseYear) {
       const details = await fetchTmdbDetailsWithFallback(mediaType, String(tmdbId));
       if (details) {
         if (details.resolvedMediaType) {
@@ -552,6 +554,37 @@ apiRouter.get('/stream/proxy', async (req, res) => {
     return res.send(buffer);
   } catch (err: any) {
     return res.status(502).send(err.message || 'Upstream fetch proxy failed');
+  }
+});
+
+// Audio-only DASH MPD proxy for playing Orion dubbed audio on non-HEVC browsers
+apiRouter.get('/stream/mpd-audio', async (req, res) => {
+  const targetUrl = req.query.url as string;
+  if (!targetUrl || !targetUrl.startsWith('http')) {
+    return res.status(400).send('Invalid or missing target URL');
+  }
+
+  try {
+    const upstream = await fetch(targetUrl, {
+      headers: {
+        'User-Agent': COMMON_HEADERS['User-Agent'],
+        Referer: 'https://zxcstream.cc/',
+        Origin: 'https://zxcstream.cc',
+      },
+    });
+    if (!upstream.ok) {
+      return res.status(upstream.status).send('Failed to fetch upstream MPD');
+    }
+    const mpdText = await upstream.text();
+    const audioOnlyMpd = mpdText.replace(
+      /<AdaptationSet[^>]*contentType="video"[\s\S]*?<\/AdaptationSet>/g,
+      ''
+    );
+    res.setHeader('Content-Type', 'application/dash+xml');
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    return res.send(audioOnlyMpd);
+  } catch (err: any) {
+    return res.status(502).send(err.message || 'Upstream MPD audio proxy failed');
   }
 });
 

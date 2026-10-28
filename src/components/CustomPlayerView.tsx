@@ -358,8 +358,11 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
+  const dubAudioRef = useRef<HTMLAudioElement>(null);
   const hlsRef = useRef<Hls | null>(null);
   const dashRef = useRef<dashjs.MediaPlayerClass | null>(null);
+  const dubDashRef = useRef<dashjs.MediaPlayerClass | null>(null);
+  const loadedStreamDubRef = useRef<string>('');
   const seekBarRef = useRef<HTMLDivElement>(null);
 
   const [activeMediaType, setActiveMediaType] = useState<MediaType>(initialMediaType);
@@ -411,6 +414,12 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
   const [settingsOpen, setSettingsOpen] = useState<boolean>(false);
   const [settingsTab, setSettingsTab] = useState<string>('main');
   const [selectedDub, setSelectedDub] = useState<string>(dubLang.toLowerCase());
+  const [selectedDubType, setSelectedDubType] = useState<string>('0');
+  const [availableDubs, setAvailableDubs] = useState<
+    { type: number; lang: string; name: string; original?: boolean }[]
+  >([]);
+  const [usingExternalDub, setUsingExternalDub] = useState<boolean>(false);
+  const [loadingDub, setLoadingDub] = useState<boolean>(false);
   const [playbackRate, setPlaybackRate] = useState<number>(1);
   const [brightness, setBrightness] = useState<number>(100);
   const [aspectMode, setAspectMode] = useState<'contain' | 'cover' | 'fill'>('contain');
@@ -474,7 +483,34 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
     setCurrentEpisode(initialEpisode || 1);
   }, [initialEpisode]);
 
+  useEffect(() => {
+    setSelectedDub(dubLang.toLowerCase());
+    setSelectedDubType('0');
+  }, [dubLang]);
+
+  const selectedDubTypeRef = useRef<string>(selectedDubType);
+  selectedDubTypeRef.current = selectedDubType;
+
+  const cleanupDubAudioEngine = useCallback(() => {
+    if (dubDashRef.current) {
+      try {
+        dubDashRef.current.reset();
+      } catch {
+        // ignore
+      }
+      dubDashRef.current = null;
+    }
+    if (dubAudioRef.current) {
+      dubAudioRef.current.pause();
+      dubAudioRef.current.removeAttribute('src');
+      dubAudioRef.current.load();
+    }
+    setUsingExternalDub(false);
+    setLoadingDub(false);
+  }, []);
+
   const cleanupMediaEngines = useCallback(() => {
+    cleanupDubAudioEngine();
     if (hlsRef.current) {
       try {
         hlsRef.current.destroy();
@@ -495,7 +531,7 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
       videoRef.current.removeAttribute('src');
       videoRef.current.load();
     }
-  }, []);
+  }, [cleanupDubAudioEngine]);
 
   useEffect(() => {
     return () => cleanupMediaEngines();
@@ -749,6 +785,7 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
             year: meta.year,
             imdbId: meta.imdbId,
             dubCode: serverIdx === 0 ? dubCodeToUse : '',
+            dubType: serverIdx === 0 && dubCodeToUse ? selectedDubTypeRef.current : '',
             preferredServer: serverDef.id,
             strictSingleServer: true,
             allowHevc,
@@ -757,6 +794,9 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
 
         if (probeRunIdRef.current !== runId) return;
         const data = await res.json();
+        if (Array.isArray(data?.dubs) && data.dubs.length > 0) {
+          setAvailableDubs(data.dubs);
+        }
         if (!res.ok || !data?.success || !data?.link) {
           advanceToNextServer();
           return;
@@ -764,6 +804,7 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
 
         // Server found a candidate stream -> transition to 'connecting' (backdrop turns color!)
         updateServerStatus(serverIdx, 'connecting');
+        loadedStreamDubRef.current = serverIdx === 0 ? dubCodeToUse.toLowerCase() : '';
 
         const videoEl = videoRef.current;
         if (!videoEl) return;
@@ -875,9 +916,13 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
     [autoplay, cleanupMediaEngines, currentEpisode, currentSeason, updateServerStatus]
   );
 
-  // Trigger server probing when metadata, season, episode, or dub changes
+  // Trigger server probing when metadata, season, or episode changes
+  const initialDubRef = useRef<string>(selectedDub);
+  initialDubRef.current = selectedDub;
+
   useEffect(() => {
     if (!metadata) return;
+    setAvailableDubs([]);
     const runId = ++probeRunIdRef.current;
     const startIdx = Math.max(0, Math.min(PLAYER_SERVERS.length - 1, initialServer));
     setServers(
@@ -888,11 +933,150 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
         status: 'queue',
       }))
     );
-    probeServerAtIndex(startIdx, runId, metadata, selectedDub);
+    probeServerAtIndex(startIdx, runId, metadata, initialDubRef.current);
+
+    // If starting on a server other than Orion (0), still fetch Orion's available dubs list in background
+    if (startIdx !== 0) {
+      fetch('/api/stream/resolve', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          tmdbId: String(metadata.id),
+          mediaType: metadata.mediaType,
+          season: metadata.mediaType === 'tv' ? currentSeason : 1,
+          episode: metadata.mediaType === 'tv' ? currentEpisode : 1,
+          title: metadata.title,
+          year: metadata.year,
+          imdbId: metadata.imdbId,
+          preferredServer: 'orion',
+          strictSingleServer: true,
+          allowHevc: true,
+        }),
+      })
+        .then((r) => (r.ok ? r.json() : null))
+        .then((d) => {
+          if (Array.isArray(d?.dubs) && d.dubs.length > 0) {
+            setAvailableDubs(d.dubs);
+          }
+        })
+        .catch(() => {});
+    }
+
     return () => {
       probeRunIdRef.current++;
     };
-  }, [metadata, currentSeason, currentEpisode, selectedDub, initialServer, probeServerAtIndex]);
+  }, [metadata, currentSeason, currentEpisode, initialServer, probeServerAtIndex]);
+
+  // Synchronize external Dub Audio stream (from Orion /api/stream/mpd-audio) whenever selectedDub differs from the loaded video's audio
+  useEffect(() => {
+    if (!canPlay || !metadata) return;
+    const normalizedSelected = selectedDub.trim().toLowerCase();
+    const normalizedLoaded = loadedStreamDubRef.current.trim().toLowerCase();
+
+    // If the currently playing video already has the desired dub audio baked in, use video's native audio
+    if (normalizedSelected === normalizedLoaded) {
+      cleanupDubAudioEngine();
+      if (videoRef.current) {
+        videoRef.current.muted = muted;
+        videoRef.current.volume = volume;
+      }
+      return;
+    }
+
+    let cancelled = false;
+    setLoadingDub(true);
+
+    fetch('/api/stream/resolve', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        tmdbId: String(metadata.id),
+        mediaType: metadata.mediaType,
+        season: metadata.mediaType === 'tv' ? currentSeason : 1,
+        episode: metadata.mediaType === 'tv' ? currentEpisode : 1,
+        title: metadata.title,
+        year: metadata.year,
+        imdbId: metadata.imdbId,
+        dubCode: normalizedSelected,
+        dubType: normalizedSelected ? selectedDubType : '',
+        preferredServer: 'orion',
+        strictSingleServer: true,
+        allowHevc: true,
+      }),
+    })
+      .then((r) => r.json())
+      .then((data) => {
+        if (cancelled) return;
+        if (Array.isArray(data?.dubs) && data.dubs.length > 0) {
+          setAvailableDubs(data.dubs);
+        }
+        const dubMpdUrl: string | null = data?.dubAudioUrl || data?.link || null;
+        const audioEl = dubAudioRef.current;
+        const videoEl = videoRef.current;
+        if (!dubMpdUrl || !audioEl || !videoEl) {
+          setLoadingDub(false);
+          return;
+        }
+
+        if (dubDashRef.current) {
+          try {
+            dubDashRef.current.reset();
+          } catch {
+            // ignore
+          }
+          dubDashRef.current = null;
+        }
+
+        const audioOnlyManifestUrl = `/api/stream/mpd-audio?url=${encodeURIComponent(dubMpdUrl)}`;
+        const audioPlayer = dashjs.MediaPlayer().create();
+        dubDashRef.current = audioPlayer;
+        audioPlayer.updateSettings({
+          streaming: {
+            buffer: { fastSwitchEnabled: true },
+            abr: { autoSwitchBitrate: { audio: true } },
+          },
+        });
+
+        const startTime = videoEl.currentTime || 0;
+        audioPlayer.initialize(audioEl, audioOnlyManifestUrl, !videoEl.paused);
+
+        audioPlayer.on(dashjs.MediaPlayer.events.STREAM_INITIALIZED, () => {
+          if (cancelled) return;
+          setUsingExternalDub(true);
+          setLoadingDub(false);
+          audioEl.playbackRate = videoEl.playbackRate || 1;
+          audioEl.volume = volume;
+          audioEl.muted = muted;
+          videoEl.muted = true;
+          if (Math.abs(audioEl.currentTime - videoEl.currentTime) > 0.25) {
+            audioEl.currentTime = videoEl.currentTime || startTime;
+          }
+          if (!videoEl.paused) {
+            audioEl.play().catch(() => {});
+          }
+        });
+
+        audioPlayer.on(dashjs.MediaPlayer.events.ERROR, () => {
+          if (cancelled) return;
+          setLoadingDub(false);
+        });
+      })
+      .catch(() => {
+        if (!cancelled) setLoadingDub(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    canPlay,
+    metadata,
+    currentSeason,
+    currentEpisode,
+    selectedDub,
+    selectedDubType,
+    cleanupDubAudioEngine,
+  ]);
 
   // Manual server switch from user clicking a server in the right-side carousel
   const handleManualServerSelect = (idx: number) => {
@@ -943,6 +1127,9 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
     if (!v) return;
     const nextTime = Math.max(0, Math.min(v.duration || Infinity, v.currentTime + seconds));
     v.currentTime = nextTime;
+    if (dubAudioRef.current) {
+      dubAudioRef.current.currentTime = nextTime;
+    }
     setCurrentTime(nextTime);
     const dir = seconds < 0 ? 'left' : 'right';
     setSkipFeedback((prev) => ({
@@ -998,18 +1185,30 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
   const toggleMute = () => {
     const v = videoRef.current;
     if (!v) return;
-    v.muted = !v.muted;
-    setMuted(v.muted);
+    const nextMuted = !muted;
+    setMuted(nextMuted);
+    if (usingExternalDub && dubAudioRef.current) {
+      dubAudioRef.current.muted = nextMuted;
+      v.muted = true;
+    } else {
+      v.muted = nextMuted;
+    }
   };
 
   const handleVolumeChange = (val: number) => {
     const v = videoRef.current;
     if (!v) return;
     const clamped = Math.max(0, Math.min(1, val));
-    v.volume = clamped;
-    v.muted = clamped === 0;
     setVolume(clamped);
     setMuted(clamped === 0);
+    if (usingExternalDub && dubAudioRef.current) {
+      dubAudioRef.current.volume = clamped;
+      dubAudioRef.current.muted = clamped === 0;
+      v.muted = true;
+    } else {
+      v.volume = clamped;
+      v.muted = clamped === 0;
+    }
   };
 
   const [isPortrait, setIsPortrait] = useState<boolean>(() => {
@@ -1155,6 +1354,9 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
     const pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
     const target = pct * duration;
     videoRef.current.currentTime = target;
+    if (dubAudioRef.current) {
+      dubAudioRef.current.currentTime = target;
+    }
     setCurrentTime(target);
   };
 
@@ -1178,11 +1380,36 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
     setSettingsTab('main');
   };
 
+  // Embedded Audio Track change handler (for multi-audio HLS/DASH streams)
+  const handleSelectAudioTrack = (trackId: number) => {
+    setSelectedAudioTrack(trackId);
+    if (hlsRef.current) {
+      hlsRef.current.audioTrack = trackId;
+    } else if (dashRef.current) {
+      const tracks = dashRef.current.getTracksFor('audio') || [];
+      if (tracks[trackId]) {
+        dashRef.current.setCurrentTrack(tracks[trackId]);
+      }
+    }
+    setSettingsTab('main');
+  };
+
+  // Dub language selection handler
+  const handleSelectDub = (langCode: string, dubTypeVal: number | string = 0) => {
+    const cleanCode = langCode.trim().toLowerCase();
+    setSelectedDub(cleanCode);
+    setSelectedDubType(String(dubTypeVal ?? 0));
+    setSettingsTab('main');
+  };
+
   // Playback speed change handler
   const handleSelectSpeed = (rate: number) => {
     setPlaybackRate(rate);
     if (videoRef.current) {
       videoRef.current.playbackRate = rate;
+    }
+    if (dubAudioRef.current) {
+      dubAudioRef.current.playbackRate = rate;
     }
     setSettingsTab('main');
   };
@@ -1274,15 +1501,52 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
           setPlaying(true);
           setWaiting(false);
           updateServerStatus(currentServerIndex, 'available');
+          if (usingExternalDub && dubAudioRef.current && videoRef.current) {
+            videoRef.current.muted = true;
+            if (Math.abs(dubAudioRef.current.currentTime - videoRef.current.currentTime) > 0.35) {
+              dubAudioRef.current.currentTime = videoRef.current.currentTime;
+            }
+            dubAudioRef.current.play().catch(() => {});
+          }
         }}
-        onPlay={() => setPlaying(true)}
-        onPause={() => setPlaying(false)}
-        onWaiting={() => setWaiting(true)}
+        onPlay={() => {
+          setPlaying(true);
+          if (usingExternalDub && dubAudioRef.current && videoRef.current) {
+            videoRef.current.muted = true;
+            dubAudioRef.current.play().catch(() => {});
+          }
+        }}
+        onPause={() => {
+          setPlaying(false);
+          if (dubAudioRef.current) {
+            dubAudioRef.current.pause();
+          }
+        }}
+        onWaiting={() => {
+          setWaiting(true);
+          if (dubAudioRef.current) {
+            dubAudioRef.current.pause();
+          }
+        }}
+        onSeeked={(e) => {
+          if (usingExternalDub && dubAudioRef.current) {
+            dubAudioRef.current.currentTime = e.currentTarget.currentTime;
+          }
+        }}
         onTimeUpdate={(e) => {
           const v = e.currentTarget;
           setCurrentTime(v.currentTime);
           if (v.buffered.length > 0) {
             setBufferedEnd(v.buffered.end(v.buffered.length - 1));
+          }
+          if (usingExternalDub && dubAudioRef.current) {
+            if (!v.muted) v.muted = true;
+            if (!v.paused && !waiting && dubAudioRef.current.paused) {
+              dubAudioRef.current.play().catch(() => {});
+            }
+            if (Math.abs(dubAudioRef.current.currentTime - v.currentTime) > 0.45) {
+              dubAudioRef.current.currentTime = v.currentTime;
+            }
           }
         }}
         onDurationChange={(e) => {
@@ -1308,6 +1572,9 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
           canPlay ? 'opacity-100' : 'opacity-0 pointer-events-none'
         }`}
       />
+
+      {/* Auxiliary Synchronized Audio Element for Orion Multi-Language Dubs */}
+      <audio ref={dubAudioRef} crossOrigin="anonymous" className="hidden" />
 
       {/* Custom Subtitle Overlay */}
       {canPlay && activeCueText && (
@@ -1832,7 +2099,15 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
                       >
                         <span className="text-zinc-300 font-medium">Audio Dub</span>
                         <span className="flex items-center gap-1 font-semibold text-white">
-                          {DUB_LANGUAGES.find((d) => d.code === selectedDub)?.label || 'Original'}
+                          {loadingDub
+                            ? 'Switching...'
+                            : selectedDub === ''
+                            ? 'Original'
+                            : availableDubs
+                                .find((d) => !d.original && d.lang.toLowerCase() === selectedDub)
+                                ?.name.replace(/\s+dub$/i, '') ||
+                              DUB_LANGUAGES.find((d) => d.code === selectedDub)?.label ||
+                              selectedDub.toUpperCase()}
                           <ChevronRight className="w-4 h-4 text-zinc-400" />
                         </span>
                       </button>
@@ -1992,33 +2267,76 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
                         className="flex items-center gap-1 text-zinc-400 hover:text-white px-2 py-1.5 text-xs font-semibold rounded-lg hover:bg-white/[0.08] transition-colors cursor-pointer"
                       >
                         <ChevronLeft className="w-4 h-4" />
-                        <span>Audio Dub (Server 0)</span>
+                        <span>Audio Dub</span>
                       </button>
                       <button
                         type="button"
-                        onClick={() => {
-                          setSelectedDub('');
-                          setSettingsTab('main');
-                        }}
+                        onClick={() => handleSelectDub('', 0)}
                         className="w-full flex items-center justify-between px-3 py-1.5 rounded-xl hover:bg-white/[0.08] active:bg-white/[0.12] transition-colors cursor-pointer"
                       >
                         <span>Original Audio</span>
                         {selectedDub === '' && <Check className="w-4 h-4 text-green-400" />}
                       </button>
-                      {DUB_LANGUAGES.map((lang) => (
+                      {availableDubs.filter((d) => !d.original).length > 0
+                        ? availableDubs
+                            .filter((d) => !d.original)
+                            .map((dub, idx) => {
+                              const code = (dub.lang || '').toLowerCase();
+                              const isSelected =
+                                selectedDub === code &&
+                                String(selectedDubType) === String(dub.type ?? 0);
+                              return (
+                                <button
+                                  key={`${code}-${dub.type ?? 0}-${idx}`}
+                                  type="button"
+                                  onClick={() => handleSelectDub(code, dub.type ?? 0)}
+                                  className="w-full flex items-center justify-between px-3 py-1.5 rounded-xl hover:bg-white/[0.08] active:bg-white/[0.12] transition-colors cursor-pointer"
+                                >
+                                  <span>
+                                    {dub.name || code.toUpperCase()} ({code.toUpperCase()})
+                                  </span>
+                                  {isSelected && <Check className="w-4 h-4 text-green-400" />}
+                                </button>
+                              );
+                            })
+                        : DUB_LANGUAGES.map((lang) => (
+                            <button
+                              key={lang.code}
+                              type="button"
+                              onClick={() => handleSelectDub(lang.code, 0)}
+                              className="w-full flex items-center justify-between px-3 py-1.5 rounded-xl hover:bg-white/[0.08] active:bg-white/[0.12] transition-colors cursor-pointer"
+                            >
+                              <span>
+                                {lang.label} ({lang.code.toUpperCase()})
+                              </span>
+                              {selectedDub === lang.code && (
+                                <Check className="w-4 h-4 text-green-400" />
+                              )}
+                            </button>
+                          ))}
+                    </div>
+                  )}
+
+                  {/* Embedded Audio Track Submenu */}
+                  {settingsTab === 'audio' && (
+                    <div className="space-y-1">
+                      <button
+                        type="button"
+                        onClick={() => setSettingsTab('main')}
+                        className="flex items-center gap-1 text-zinc-400 hover:text-white px-2 py-1.5 text-xs font-semibold rounded-lg hover:bg-white/[0.08] transition-colors cursor-pointer"
+                      >
+                        <ChevronLeft className="w-4 h-4" />
+                        <span>Audio Track</span>
+                      </button>
+                      {audioTracks.map((track) => (
                         <button
-                          key={lang.code}
+                          key={track.id}
                           type="button"
-                          onClick={() => {
-                            setSelectedDub(lang.code);
-                            setSettingsTab('main');
-                          }}
+                          onClick={() => handleSelectAudioTrack(track.id)}
                           className="w-full flex items-center justify-between px-3 py-1.5 rounded-xl hover:bg-white/[0.08] active:bg-white/[0.12] transition-colors cursor-pointer"
                         >
-                          <span>
-                            {lang.label} ({lang.code.toUpperCase()})
-                          </span>
-                          {selectedDub === lang.code && (
+                          <span>{track.label}</span>
+                          {selectedAudioTrack === track.id && (
                             <Check className="w-4 h-4 text-green-400" />
                           )}
                         </button>
