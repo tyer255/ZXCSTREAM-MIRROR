@@ -177,7 +177,7 @@ export const HomePage: React.FC<HomePageProps> = ({
           <div className="w-full flex flex-col items-center justify-center text-center">
             {/* Join our Discord Pill */}
             <a
-              href="https://discord.gg/yv7wJV97Jd"
+              href="https://discord.gg/FRHmkQWUP"
               target="_blank"
               rel="noopener noreferrer"
               className="inline-flex items-center justify-center rounded-md border border-transparent bg-zinc-800 hover:bg-zinc-800/80 px-2.5 py-1 text-xs font-medium text-zinc-50 gap-1 mb-2 transition"
@@ -232,7 +232,12 @@ export const HomePage: React.FC<HomePageProps> = ({
             <div className="inline-flex bg-zinc-900 p-0.5 rounded-lg">
               <button
                 type="button"
-                onClick={() => setMediaType('movie')}
+                onClick={() => {
+                  setMediaType('movie');
+                  if (tmdbId.trim() === '66732' || tmdbId.trim() === '1396') {
+                    setTmdbId('128');
+                  }
+                }}
                 data-testid="toggle-movie-player"
                 className={`flex items-center gap-2 px-5 py-2.5 rounded-lg font-medium text-xs lg:text-sm cursor-pointer transition-all duration-300 ${
                   mediaType === 'movie'
@@ -245,7 +250,14 @@ export const HomePage: React.FC<HomePageProps> = ({
               </button>
               <button
                 type="button"
-                onClick={() => setMediaType('tv')}
+                onClick={() => {
+                  setMediaType('tv');
+                  if (tmdbId.trim() === '128' || tmdbId.trim() === '1184918') {
+                    setTmdbId('66732');
+                    setSeason('1');
+                    setEpisode('1');
+                  }
+                }}
                 data-testid="toggle-series-player"
                 className={`flex items-center gap-2 px-5 py-2.5 rounded-lg font-medium text-xs lg:text-sm cursor-pointer transition-all duration-300 ${
                   mediaType === 'tv'
@@ -486,7 +498,7 @@ export const HomePage: React.FC<HomePageProps> = ({
                 {/* domainAd */}
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-2 border-b border-zinc-800 pb-5">
                   <div className="font-mono text-sm text-zinc-50">
-                    domainAd = e.g zxcstream.icu
+                    domainAd = e.g vidstuck.cc
                   </div>
                   <div className="md:col-span-2 text-sm text-zinc-400">
                     Displays your domain watermark inside the player during playback.

@@ -5,24 +5,37 @@ import {
   Check,
   ChevronLeft,
   ChevronRight,
+  FastForward,
   Loader,
   LoaderCircle,
   Minus,
+  Play,
   RotateCcw,
   RotateCw,
   Search,
+  SkipForward,
   Volume1,
   Volume2,
   X,
 } from 'lucide-react';
 import {
   DUB_LANGUAGES,
+  EpisodeTimingMetadata,
   MediaType,
   PLAYER_HINTS,
   PLAYER_SERVERS,
   PlayerMode,
+  RawOrionDub,
+  evaluatePlaybackSkipState,
+  filterAudioDubTracks,
   formatPlayerTime,
+  parsePlayerQueryParams,
+  resolveEffectiveDubSelection,
+  resolveEpisodeTiming,
+  resolveNextEpisode,
+  shouldSyncDubAudioTime,
 } from '../utils/urlBuilder';
+import { getEpisodeTimingMetadata } from '../data/tmdbCatalog';
 
 // Exact custom SVGs extracted from zxcstream.cc chunk 00uxoksvhj._d.js
 const BackSvg = () => (
@@ -306,6 +319,8 @@ interface TmdbMetadata {
   mediaType: MediaType;
   title: string;
   year: string;
+  releaseDate: string;
+  lastAirDate: string;
   imdbId: string;
   backdropPaths: string[];
   logoPaths: string[];
@@ -320,6 +335,13 @@ interface EpisodeItem {
   name: string;
   overview: string;
   still_path: string | null;
+  runtime?: number | null;
+  introStart?: number | null;
+  introEnd?: number | null;
+  outroStart?: number | null;
+  outroEnd?: number | null;
+  nextEpisodeTriggerTime?: number | null;
+  nextEpisodeId?: string | null;
 }
 
 interface SubtitleTrack {
@@ -415,11 +437,10 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
   const [settingsTab, setSettingsTab] = useState<string>('main');
   const [selectedDub, setSelectedDub] = useState<string>(dubLang.toLowerCase());
   const [selectedDubType, setSelectedDubType] = useState<string>('0');
-  const [availableDubs, setAvailableDubs] = useState<
-    { type: number; lang: string; name: string; original?: boolean }[]
-  >([]);
+  const [availableDubs, setAvailableDubs] = useState<RawOrionDub[]>([]);
   const [usingExternalDub, setUsingExternalDub] = useState<boolean>(false);
   const [loadingDub, setLoadingDub] = useState<boolean>(false);
+  const [dubFallbackNotice, setDubFallbackNotice] = useState<string | null>(null);
   const [playbackRate, setPlaybackRate] = useState<number>(1);
   const [brightness, setBrightness] = useState<number>(100);
   const [aspectMode, setAspectMode] = useState<'contain' | 'cover' | 'fill'>('contain');
@@ -447,11 +468,22 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
   const [activeCueText, setActiveCueText] = useState<string>('');
   const [parsedCues, setParsedCues] = useState<{ start: number; end: number; text: string }[]>([]);
 
-  // TV Episodes drawer state matching uq component
+  // TV Episodes drawer & season episode cache matching uq component
   const [showEpisodeDrawer, setShowEpisodeDrawer] = useState<boolean>(false);
   const [selectedSeasonForDrawer, setSelectedSeasonForDrawer] = useState<number>(initialSeason || 1);
-  const [seasonEpisodes, setSeasonEpisodes] = useState<EpisodeItem[]>([]);
+  const [episodesBySeason, setEpisodesBySeason] = useState<Record<number, EpisodeItem[]>>({});
   const [loadingEpisodes, setLoadingEpisodes] = useState<boolean>(false);
+
+  // Deterministic Skip Intro, Skip Recap, Skip Outro & Next Episode state (TheIntroDB v4 + rule-based)
+  const [apiEpisodeTiming, setApiEpisodeTiming] = useState<EpisodeTimingMetadata | null>(null);
+  const [skippedIntro, setSkippedIntro] = useState<boolean>(false);
+  const [skippedRecap, setSkippedRecap] = useState<boolean>(false);
+  const [skippedOutro, setSkippedOutro] = useState<boolean>(false);
+  const [videoEnded, setVideoEnded] = useState<boolean>(false);
+  const [autoPlayNext, setAutoPlayNext] = useState<boolean>(autoplay);
+  const [countdownCancelled, setCountdownCancelled] = useState<boolean>(false);
+  const [nextCountdown, setNextCountdown] = useState<number | null>(null);
+  const hasTriggeredNextRef = useRef<boolean>(false);
 
   // Rotating hint index matching dr component
   const [hintIndex, setHintIndex] = useState<number>(0);
@@ -469,7 +501,7 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
     return () => window.clearInterval(id);
   }, []);
 
-  // Sync props when parent changes season/episode/mediaType
+  // Sync props when parent changes season/episode/mediaType/autoplay
   useEffect(() => {
     setActiveMediaType(initialMediaType);
   }, [initialMediaType]);
@@ -484,12 +516,75 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
   }, [initialEpisode]);
 
   useEffect(() => {
+    setAutoPlayNext(autoplay);
+  }, [autoplay]);
+
+  useEffect(() => {
     setSelectedDub(dubLang.toLowerCase());
     setSelectedDubType('0');
   }, [dubLang]);
 
+  const pendingSkipSeekRef = useRef<boolean>(false);
+  const isProgrammaticSkipRef = useRef<boolean>(false);
+  const lastReportedTimeRef = useRef<number>(0);
+  const activeEpisodeKeyRef = useRef<string>('');
+  const seekCleanupRef = useRef<(() => void) | null>(null);
+
+  // Reset episode-scoped skip/countdown states whenever media or episode changes
+  useEffect(() => {
+    if (seekCleanupRef.current) {
+      seekCleanupRef.current();
+      seekCleanupRef.current = null;
+    }
+    pendingSkipSeekRef.current = false;
+    isProgrammaticSkipRef.current = false;
+    lastReportedTimeRef.current = 0;
+    hasTriggeredNextRef.current = false;
+    setApiEpisodeTiming(null);
+    setSkippedIntro(false);
+    setSkippedRecap(false);
+    setSkippedOutro(false);
+    setVideoEnded(false);
+    setCountdownCancelled(false);
+    setNextCountdown(null);
+    setCurrentTime(0);
+    setDuration(0);
+    setBufferedEnd(0);
+  }, [tmdbId, activeMediaType, currentSeason, currentEpisode]);
+
+  // Reset season cache when switching series
+  useEffect(() => {
+    setEpisodesBySeason({});
+  }, [tmdbId]);
+
   const selectedDubTypeRef = useRef<string>(selectedDubType);
   selectedDubTypeRef.current = selectedDubType;
+
+  const availableDubsRef = useRef<RawOrionDub[]>(availableDubs);
+  availableDubsRef.current = availableDubs;
+
+  const usingExternalDubRef = useRef<boolean>(usingExternalDub);
+  usingExternalDubRef.current = usingExternalDub;
+
+  const mutedRef = useRef<boolean>(muted);
+  mutedRef.current = muted;
+
+  const volumeRef = useRef<number>(volume);
+  volumeRef.current = volume;
+
+  const dubRequestIdRef = useRef<number>(0);
+  const lastDriftSyncTimeRef = useRef<number>(0);
+  const dubFallbackTimerRef = useRef<number | null>(null);
+
+  const showDubFallbackBanner = useCallback((message: string) => {
+    setDubFallbackNotice(message);
+    if (dubFallbackTimerRef.current) {
+      window.clearTimeout(dubFallbackTimerRef.current);
+    }
+    dubFallbackTimerRef.current = window.setTimeout(() => {
+      setDubFallbackNotice(null);
+    }, 4000);
+  }, []);
 
   const cleanupDubAudioEngine = useCallback(() => {
     if (dubDashRef.current) {
@@ -505,6 +600,7 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
       dubAudioRef.current.removeAttribute('src');
       dubAudioRef.current.load();
     }
+    usingExternalDubRef.current = false;
     setUsingExternalDub(false);
     setLoadingDub(false);
   }, []);
@@ -595,6 +691,8 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
           mediaType: resolvedType,
           title: raw.title || raw.name || `TMDB #${cleanId}`,
           year,
+          releaseDate: releaseStr,
+          lastAirDate: raw.last_air_date || '',
           imdbId: raw.imdb_id || '',
           backdropPaths,
           logoPaths,
@@ -707,32 +805,122 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
     setActiveCueText(hit ? hit.text : '');
   }, [currentTime, parsedCues, subTimeOffset]);
 
-  // 4. Fetch TV Season Episodes when TV show metadata or selectedSeasonForDrawer changes
+  // 4. Fetch TV Season Episodes for active playing season, drawer season, and next season (for season finales)
   useEffect(() => {
     if (!metadata || metadata.mediaType !== 'tv') return;
+    const nextSeasonObj = metadata.seasons?.find((s) => s.season_number === currentSeason + 1);
+    const seasonsToFetch = Array.from(
+      new Set(
+        [
+          currentSeason,
+          selectedSeasonForDrawer,
+          nextSeasonObj ? nextSeasonObj.season_number : null,
+        ].filter((n): n is number => typeof n === 'number' && n > 0)
+      )
+    );
     let cancelled = false;
-    setLoadingEpisodes(true);
-    fetch(`/api/tmdb/season/${metadata.id}/season/${selectedSeasonForDrawer}`)
-      .then((r) => (r.ok ? r.json() : null))
-      .then((json) => {
-        if (cancelled || !json) return;
-        const eps = Array.isArray(json?.data?.episodes)
-          ? json.data.episodes
-          : Array.isArray(json?.episodes)
-          ? json.episodes
-          : [];
-        setSeasonEpisodes(eps);
-      })
-      .catch(() => {
-        if (!cancelled) setSeasonEpisodes([]);
-      })
-      .finally(() => {
-        if (!cancelled) setLoadingEpisodes(false);
-      });
+
+    for (const sNum of seasonsToFetch) {
+      if (episodesBySeason[sNum] && episodesBySeason[sNum].length > 0) continue;
+      if (sNum === selectedSeasonForDrawer) {
+        setLoadingEpisodes(true);
+      }
+      fetch(`/api/tmdb/season/${metadata.id}/season/${sNum}`)
+        .then((r) => (r.ok ? r.json() : null))
+        .then((json) => {
+          if (cancelled || !json) return;
+          const eps: EpisodeItem[] = Array.isArray(json?.data?.episodes)
+            ? json.data.episodes
+            : Array.isArray(json?.episodes)
+            ? json.episodes
+            : [];
+          if (eps.length > 0) {
+            setEpisodesBySeason((prev) => ({ ...prev, [sNum]: eps }));
+          }
+        })
+        .catch(() => {})
+        .finally(() => {
+          if (!cancelled && sNum === selectedSeasonForDrawer) {
+            setLoadingEpisodes(false);
+          }
+        });
+    }
+
     return () => {
       cancelled = true;
     };
-  }, [metadata, selectedSeasonForDrawer]);
+  }, [metadata, currentSeason, selectedSeasonForDrawer, episodesBySeason]);
+
+  // 4b. Fetch deterministic timing metadata from TheIntroDB v4 /api/intro when media or episode changes
+  const durationCluster = duration > 0 ? Math.round(duration / 30) * 30 : 0;
+  useEffect(() => {
+    const resolvedMediaType = metadata?.mediaType ?? activeMediaType;
+    const resolvedId = String(metadata?.id ?? tmdbId).trim();
+    if (!resolvedId) {
+      setApiEpisodeTiming(null);
+      return;
+    }
+    const requestEpisodeKey =
+      resolvedMediaType === 'tv'
+        ? `${resolvedId}:${currentSeason}:${currentEpisode}`
+        : `movie:${resolvedId}`;
+    let cancelled = false;
+
+    const qs = new URLSearchParams({
+      tmdbId: resolvedId,
+      mediaType: resolvedMediaType,
+    });
+    if (resolvedMediaType === 'tv') {
+      qs.set('season', String(currentSeason));
+      qs.set('episode', String(currentEpisode));
+    }
+    if (metadata?.imdbId) qs.set('imdbId', metadata.imdbId);
+    if (duration > 0) {
+      qs.set('durationMs', String(Math.round(duration * 1000)));
+      qs.set('durationSec', String(Math.round(duration)));
+    }
+
+    fetch(`/api/intro?${qs.toString()}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (cancelled) return;
+        if (data && typeof data === 'object' && Object.keys(data).length > 0) {
+          const matchesRequestedEpisode =
+            resolvedMediaType === 'movie' ||
+            ((data.season === undefined || Number(data.season) === currentSeason) &&
+              (data.episode === undefined || Number(data.episode) === currentEpisode));
+          if (matchesRequestedEpisode) {
+            setApiEpisodeTiming({
+              ...data,
+              episodeKey: requestEpisodeKey,
+              tmdbId: resolvedId,
+              season: resolvedMediaType === 'tv' ? currentSeason : undefined,
+              episode: resolvedMediaType === 'tv' ? currentEpisode : undefined,
+            });
+          } else {
+            setApiEpisodeTiming(null);
+          }
+        } else {
+          setApiEpisodeTiming(null);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setApiEpisodeTiming(null);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    tmdbId,
+    activeMediaType,
+    metadata?.id,
+    metadata?.mediaType,
+    metadata?.imdbId,
+    currentSeason,
+    currentEpisode,
+    durationCluster,
+  ]);
 
   // 5. Sequential Server Probing & Playback Engine (exact match to zxcstream.cc u2 + dashjs/hlsjs failover)
   const updateServerStatus = useCallback((idx: number, status: ServerProbeStatus) => {
@@ -783,6 +971,8 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
             episode: meta.mediaType === 'tv' ? currentEpisode : 1,
             title: meta.title,
             year: meta.year,
+            date: meta.releaseDate,
+            lastAirDate: meta.lastAirDate,
             imdbId: meta.imdbId,
             dubCode: serverIdx === 0 ? dubCodeToUse : '',
             dubType: serverIdx === 0 && dubCodeToUse ? selectedDubTypeRef.current : '',
@@ -839,12 +1029,12 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
               .filter((q: { height: number }) => q.height > 0);
             setQualities(qList);
 
-            const aTracks = player.getTracksFor('audio') || [];
+            const aTracks = (player.getTracksFor('audio') || []) as any[];
             setAudioTracks(
-              aTracks.map((t: { lang?: string; labels?: { text?: string }[] }, i: number) => ({
+              aTracks.map((t: any, i: number) => ({
                 id: i,
                 label: t.labels?.[0]?.text || t.lang || `Audio ${i + 1}`,
-                lang: t.lang,
+                lang: t.lang || undefined,
               }))
             );
           });
@@ -947,6 +1137,8 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
           episode: metadata.mediaType === 'tv' ? currentEpisode : 1,
           title: metadata.title,
           year: metadata.year,
+          date: metadata.releaseDate,
+          lastAirDate: metadata.lastAirDate,
           imdbId: metadata.imdbId,
           preferredServer: 'orion',
           strictSingleServer: true,
@@ -970,21 +1162,42 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
   // Synchronize external Dub Audio stream (from Orion /api/stream/mpd-audio) whenever selectedDub differs from the loaded video's audio
   useEffect(() => {
     if (!canPlay || !metadata) return;
-    const normalizedSelected = selectedDub.trim().toLowerCase();
+    const effective = resolveEffectiveDubSelection(selectedDub, availableDubsRef.current);
     const normalizedLoaded = loadedStreamDubRef.current.trim().toLowerCase();
 
-    // If the currently playing video already has the desired dub audio baked in, use video's native audio
-    if (normalizedSelected === normalizedLoaded) {
+    // If the user selected Original Audio (and loaded video is Original) or the loaded video already has this exact dub baked in
+    if (
+      (effective.isOriginal && normalizedLoaded === '') ||
+      (!effective.isOriginal && effective.dubCode === normalizedLoaded)
+    ) {
       cleanupDubAudioEngine();
       if (videoRef.current) {
-        videoRef.current.muted = muted;
-        videoRef.current.volume = volume;
+        videoRef.current.muted = mutedRef.current;
+        videoRef.current.volume = volumeRef.current;
       }
       return;
     }
 
     let cancelled = false;
+    const reqId = ++dubRequestIdRef.current;
+    let readyTimeoutId: number | null = null;
     setLoadingDub(true);
+
+    const fallbackToNativeAudio = (noticeMsg: string) => {
+      if (cancelled || dubRequestIdRef.current !== reqId) return;
+      if (readyTimeoutId) {
+        window.clearTimeout(readyTimeoutId);
+        readyTimeoutId = null;
+      }
+      cleanupDubAudioEngine();
+      if (videoRef.current) {
+        videoRef.current.muted = mutedRef.current;
+        videoRef.current.volume = volumeRef.current;
+      }
+      setSelectedDub(loadedStreamDubRef.current || '');
+      setSelectedDubType('0');
+      showDubFallbackBanner(noticeMsg);
+    };
 
     fetch('/api/stream/resolve', {
       method: 'POST',
@@ -996,25 +1209,36 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
         episode: metadata.mediaType === 'tv' ? currentEpisode : 1,
         title: metadata.title,
         year: metadata.year,
+        date: metadata.releaseDate,
+        lastAirDate: metadata.lastAirDate,
         imdbId: metadata.imdbId,
-        dubCode: normalizedSelected,
-        dubType: normalizedSelected ? selectedDubType : '',
+        dubCode: effective.dubCode,
+        dubType: effective.dubType,
         preferredServer: 'orion',
         strictSingleServer: true,
         allowHevc: true,
       }),
     })
-      .then((r) => r.json())
-      .then((data) => {
-        if (cancelled) return;
-        if (Array.isArray(data?.dubs) && data.dubs.length > 0) {
+      .then(async (r) => {
+        const data = await r.json().catch(() => ({}));
+        return { ok: r.ok, data };
+      })
+      .then(({ ok, data }) => {
+        if (cancelled || dubRequestIdRef.current !== reqId) return;
+        if (
+          Array.isArray(data?.dubs) &&
+          data.dubs.length > 0 &&
+          availableDubsRef.current.length === 0
+        ) {
           setAvailableDubs(data.dubs);
         }
         const dubMpdUrl: string | null = data?.dubAudioUrl || data?.link || null;
         const audioEl = dubAudioRef.current;
         const videoEl = videoRef.current;
-        if (!dubMpdUrl || !audioEl || !videoEl) {
-          setLoadingDub(false);
+        if (!ok || !data?.success || !dubMpdUrl || !audioEl || !videoEl) {
+          fallbackToNativeAudio(
+            `${effective.displayLabel} audio is unavailable — playing Original Audio`
+          );
           return;
         }
 
@@ -1037,36 +1261,117 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
           },
         });
 
-        const startTime = videoEl.currentTime || 0;
-        audioPlayer.initialize(audioEl, audioOnlyManifestUrl, !videoEl.paused);
+        let activated = false;
+        const activateExternalDub = () => {
+          if (cancelled || dubRequestIdRef.current !== reqId || activated) return;
+          activated = true;
+          if (readyTimeoutId) {
+            window.clearTimeout(readyTimeoutId);
+            readyTimeoutId = null;
+          }
+          audioEl.removeEventListener('loadeddata', onAudioCanPlay);
+          audioEl.removeEventListener('canplay', onAudioCanPlay);
+          audioEl.removeEventListener('playing', onAudioCanPlay);
+          audioEl.removeEventListener('timeupdate', onAudioCanPlay);
 
-        audioPlayer.on(dashjs.MediaPlayer.events.STREAM_INITIALIZED, () => {
-          if (cancelled) return;
+          usingExternalDubRef.current = true;
           setUsingExternalDub(true);
           setLoadingDub(false);
+          lastDriftSyncTimeRef.current = performance.now();
+
           audioEl.playbackRate = videoEl.playbackRate || 1;
-          audioEl.volume = volume;
-          audioEl.muted = muted;
+          audioEl.volume = volumeRef.current;
+          audioEl.muted = mutedRef.current;
           videoEl.muted = true;
-          if (Math.abs(audioEl.currentTime - videoEl.currentTime) > 0.25) {
-            audioEl.currentTime = videoEl.currentTime || startTime;
+
+          if (Math.abs(audioEl.currentTime - videoEl.currentTime) > 0.35) {
+            try {
+              audioEl.currentTime = videoEl.currentTime;
+            } catch {
+              // ignore
+            }
           }
           if (!videoEl.paused) {
             audioEl.play().catch(() => {});
+          } else {
+            audioEl.pause();
+          }
+        };
+
+        const onAudioCanPlay = () => {
+          if (audioEl.readyState >= 2) {
+            activateExternalDub();
+          }
+        };
+
+        audioEl.addEventListener('loadeddata', onAudioCanPlay);
+        audioEl.addEventListener('canplay', onAudioCanPlay);
+        audioEl.addEventListener('playing', onAudioCanPlay);
+        audioEl.addEventListener('timeupdate', onAudioCanPlay);
+
+        const startTime = Math.max(0, videoEl.currentTime || 0);
+        // Keep auxiliary audio muted while initial segment buffers so there is no blip before sync
+        audioEl.muted = true;
+        audioPlayer.initialize(audioEl, audioOnlyManifestUrl, true, startTime);
+
+        readyTimeoutId = window.setTimeout(() => {
+          if (!activated) {
+            audioEl.removeEventListener('loadeddata', onAudioCanPlay);
+            audioEl.removeEventListener('canplay', onAudioCanPlay);
+            audioEl.removeEventListener('playing', onAudioCanPlay);
+            audioEl.removeEventListener('timeupdate', onAudioCanPlay);
+            fallbackToNativeAudio(
+              `${effective.displayLabel} audio timed out — playing Original Audio`
+            );
+          }
+        }, 12000);
+
+        audioPlayer.on(dashjs.MediaPlayer.events.STREAM_INITIALIZED, () => {
+          if (cancelled || dubRequestIdRef.current !== reqId) return;
+          const targetTime = videoEl.currentTime || startTime;
+          if (Math.abs(audioEl.currentTime - targetTime) > 0.5) {
+            try {
+              audioEl.currentTime = targetTime;
+            } catch {
+              // ignore
+            }
+          }
+          if (audioEl.readyState >= 2) {
+            activateExternalDub();
           }
         });
 
-        audioPlayer.on(dashjs.MediaPlayer.events.ERROR, () => {
-          if (cancelled) return;
-          setLoadingDub(false);
+        audioPlayer.on(dashjs.MediaPlayer.events.CAN_PLAY, () => {
+          if (cancelled || dubRequestIdRef.current !== reqId) return;
+          activateExternalDub();
+        });
+
+        audioPlayer.on(dashjs.MediaPlayer.events.ERROR, (e: { error?: { code?: number; message?: string } }) => {
+          if (cancelled || dubRequestIdRef.current !== reqId) return;
+          audioEl.removeEventListener('loadeddata', onAudioCanPlay);
+          audioEl.removeEventListener('canplay', onAudioCanPlay);
+          audioEl.removeEventListener('playing', onAudioCanPlay);
+          audioEl.removeEventListener('timeupdate', onAudioCanPlay);
+          if (e?.error) {
+            fallbackToNativeAudio(
+              `${effective.displayLabel} audio failed to load — playing Original Audio`
+            );
+          }
         });
       })
       .catch(() => {
-        if (!cancelled) setLoadingDub(false);
+        if (!cancelled && dubRequestIdRef.current === reqId) {
+          fallbackToNativeAudio(
+            `${effective.displayLabel} audio is unavailable — playing Original Audio`
+          );
+        }
       });
 
     return () => {
       cancelled = true;
+      if (readyTimeoutId) {
+        window.clearTimeout(readyTimeoutId);
+      }
     };
   }, [
     canPlay,
@@ -1076,6 +1381,7 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
     selectedDub,
     selectedDubType,
     cleanupDubAudioEngine,
+    showDubFallbackBanner,
   ]);
 
   // Manual server switch from user clicking a server in the right-side carousel
@@ -1131,6 +1437,14 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
       dubAudioRef.current.currentTime = nextTime;
     }
     setCurrentTime(nextTime);
+    if (v.duration && nextTime < v.duration - 1) {
+      setVideoEnded(false);
+    }
+    lastReportedTimeRef.current = nextTime;
+    if (seconds < 0) {
+      setSkippedIntro(false);
+      setSkippedOutro(false);
+    }
     const dir = seconds < 0 ? 'left' : 'right';
     setSkipFeedback((prev) => ({
       dir,
@@ -1186,8 +1500,9 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
     const v = videoRef.current;
     if (!v) return;
     const nextMuted = !muted;
+    mutedRef.current = nextMuted;
     setMuted(nextMuted);
-    if (usingExternalDub && dubAudioRef.current) {
+    if (usingExternalDubRef.current && dubAudioRef.current) {
       dubAudioRef.current.muted = nextMuted;
       v.muted = true;
     } else {
@@ -1199,9 +1514,11 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
     const v = videoRef.current;
     if (!v) return;
     const clamped = Math.max(0, Math.min(1, val));
+    volumeRef.current = clamped;
+    mutedRef.current = clamped === 0;
     setVolume(clamped);
     setMuted(clamped === 0);
-    if (usingExternalDub && dubAudioRef.current) {
+    if (usingExternalDubRef.current && dubAudioRef.current) {
       dubAudioRef.current.volume = clamped;
       dubAudioRef.current.muted = clamped === 0;
       v.muted = true;
@@ -1358,6 +1675,13 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
       dubAudioRef.current.currentTime = target;
     }
     setCurrentTime(target);
+    lastReportedTimeRef.current = target;
+    if (target < duration - 1) {
+      setVideoEnded(false);
+    }
+    setSkippedIntro(false);
+    setSkippedRecap(false);
+    setSkippedOutro(false);
   };
 
   // Quality change handler
@@ -1397,6 +1721,20 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
   // Dub language selection handler
   const handleSelectDub = (langCode: string, dubTypeVal: number | string = 0) => {
     const cleanCode = langCode.trim().toLowerCase();
+    setDubFallbackNotice(null);
+    // Selecting a dub is a direct user interaction: if autoplay policy muted initial load, unmute so audio is heard
+    if (mutedRef.current) {
+      mutedRef.current = false;
+      setMuted(false);
+    }
+    if (volumeRef.current <= 0) {
+      volumeRef.current = 1;
+      setVolume(1);
+    }
+    if (dubAudioRef.current) {
+      dubAudioRef.current.muted = false;
+      dubAudioRef.current.volume = volumeRef.current;
+    }
     setSelectedDub(cleanCode);
     setSelectedDubType(String(dubTypeVal ?? 0));
     setSettingsTab('main');
@@ -1422,19 +1760,355 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
   const genreLabel = metadata?.genres?.[0] || (activeMediaType === 'tv' ? 'Drama' : 'Feature');
   const statusLabel = metadata?.status || 'Released';
 
-  // Next episode calculation for TV shows
-  const hasNextEpisode =
-    activeMediaType === 'tv' &&
-    (seasonEpisodes.some((ep) => ep.episode_number === currentEpisode + 1) ||
-      seasonEpisodes.length === 0);
+  // Active season episodes & drawer episodes
+  const currentSeasonEpisodes: EpisodeItem[] = episodesBySeason[currentSeason] || [];
+  const nextSeasonEpisodes: EpisodeItem[] = episodesBySeason[currentSeason + 1] || [];
+  const seasonEpisodes: EpisodeItem[] = episodesBySeason[selectedSeasonForDrawer] || [];
 
-  const handleTriggerNextEpisode = () => {
-    const nextEp = currentEpisode + 1;
-    setCurrentEpisode(nextEp);
-    onEpisodeChange?.(currentSeason, nextEp);
+  const resolvedSeriesId = String(metadata?.id ?? tmdbId).trim();
+  const activeEpisodeKey = `${resolvedSeriesId}:${currentSeason}:${currentEpisode}`;
+  activeEpisodeKeyRef.current = activeEpisodeKey;
+
+  // Deterministic Next Episode resolution (strictly TV series with a valid next episode)
+  const nextEpisodeInfo = resolveNextEpisode({
+    mediaType: activeMediaType,
+    tmdbId: resolvedSeriesId,
+    currentSeason,
+    currentEpisode,
+    currentSeasonEpisodes,
+    nextSeasonEpisodes,
+    seasons: metadata?.seasons,
+  });
+
+  // Strictly match /api/intro response to the exact currently loaded episodeKey
+  const matchedApiTiming =
+    apiEpisodeTiming && apiEpisodeTiming.episodeKey === activeEpisodeKey
+      ? apiEpisodeTiming
+      : null;
+
+  const currentEpisodeRecord =
+    currentSeasonEpisodes.find((ep) => ep.episode_number === currentEpisode) || null;
+  const catalogTiming = getEpisodeTimingMetadata(
+    resolvedSeriesId,
+    currentSeason,
+    currentEpisode,
+    activeMediaType
+  );
+  const urlQueryTiming =
+    typeof window !== 'undefined' ? parsePlayerQueryParams(window.location.search) : null;
+
+  const hasApiTimingResponse = matchedApiTiming !== null;
+
+  const rawMergedTiming: EpisodeTimingMetadata | null =
+    activeMediaType === 'tv' ||
+    activeMediaType === 'movie' ||
+    urlQueryTiming?.introStart !== undefined ||
+    urlQueryTiming?.outroStart !== undefined
+      ? {
+          episodeKey: activeEpisodeKey,
+          tmdbId: resolvedSeriesId,
+          season: currentSeason,
+          episode: currentEpisode,
+          introStart:
+            urlQueryTiming?.introStart ??
+            matchedApiTiming?.introStart ??
+            matchedApiTiming?.intro?.start_sec ??
+            currentEpisodeRecord?.introStart ??
+            catalogTiming?.introStart ??
+            null,
+          introEnd:
+            urlQueryTiming?.introEnd ??
+            matchedApiTiming?.introEnd ??
+            matchedApiTiming?.intro?.end_sec ??
+            currentEpisodeRecord?.introEnd ??
+            catalogTiming?.introEnd ??
+            null,
+          recapStart:
+            matchedApiTiming?.recapStart ??
+            matchedApiTiming?.recap?.start_sec ??
+            (currentEpisodeRecord as any)?.recapStart ??
+            null,
+          recapEnd:
+            matchedApiTiming?.recapEnd ??
+            matchedApiTiming?.recap?.end_sec ??
+            (currentEpisodeRecord as any)?.recapEnd ??
+            null,
+          outroStart:
+            urlQueryTiming?.outroStart ??
+            matchedApiTiming?.outroStart ??
+            matchedApiTiming?.outro?.start_sec ??
+            matchedApiTiming?.credits?.start_sec ??
+            currentEpisodeRecord?.outroStart ??
+            catalogTiming?.outroStart ??
+            null,
+          outroEnd:
+            urlQueryTiming?.outroEnd ??
+            matchedApiTiming?.outroEnd ??
+            matchedApiTiming?.outro?.end_sec ??
+            matchedApiTiming?.credits?.end_sec ??
+            currentEpisodeRecord?.outroEnd ??
+            catalogTiming?.outroEnd ??
+            null,
+          intro: matchedApiTiming?.intro ?? null,
+          recap: matchedApiTiming?.recap ?? null,
+          outro: matchedApiTiming?.outro ?? null,
+          credits: matchedApiTiming?.credits ?? null,
+          source: matchedApiTiming?.source ?? (catalogTiming ? 'catalog' : null),
+          nextEpisodeTriggerTime:
+            urlQueryTiming?.nextEpisodeTriggerTime ??
+            matchedApiTiming?.nextEpisodeTriggerTime ??
+            currentEpisodeRecord?.nextEpisodeTriggerTime ??
+            catalogTiming?.nextEpisodeTriggerTime ??
+            null,
+          nextEpisodeId:
+            matchedApiTiming?.nextEpisodeId ??
+            currentEpisodeRecord?.nextEpisodeId ??
+            catalogTiming?.nextEpisodeId ??
+            nextEpisodeInfo?.episodeId ??
+            null,
+        }
+      : null;
+
+  const resolvedTiming = resolveEpisodeTiming({
+    raw: rawMergedTiming,
+    duration,
+    mediaType: activeMediaType,
+    nextEpisode: nextEpisodeInfo,
+  });
+
+  const skipState = evaluatePlaybackSkipState({
+    canPlay,
+    mediaType: activeMediaType,
+    currentTime,
+    duration,
+    videoEnded,
+    timing: resolvedTiming,
+    nextEpisode: nextEpisodeInfo,
+    skippedIntro,
+    skippedRecap,
+    skippedOutro,
+  });
+
+  // Reset Next Episode countdown if user seeks back out of the Next Episode window
+  useEffect(() => {
+    if (!skipState.inNextEpisodeWindow) {
+      if (countdownCancelled) {
+        setCountdownCancelled(false);
+      }
+      if (nextCountdown !== null) {
+        setNextCountdown(null);
+      }
+    }
+  }, [skipState.inNextEpisodeWindow, countdownCancelled, nextCountdown]);
+
+  const handleTriggerNextEpisode = useCallback(() => {
+    if (!nextEpisodeInfo || hasTriggeredNextRef.current) return;
+    hasTriggeredNextRef.current = true;
+    if (seekCleanupRef.current) {
+      seekCleanupRef.current();
+      seekCleanupRef.current = null;
+    }
+    pendingSkipSeekRef.current = false;
+    isProgrammaticSkipRef.current = false;
+    setNextCountdown(null);
+    setSkippedIntro(false);
+    setSkippedOutro(false);
+    setVideoEnded(false);
+    setCurrentSeason(nextEpisodeInfo.season);
+    setSelectedSeasonForDrawer(nextEpisodeInfo.season);
+    setCurrentEpisode(nextEpisodeInfo.episode);
+    onEpisodeChange?.(nextEpisodeInfo.season, nextEpisodeInfo.episode);
+  }, [nextEpisodeInfo, onEpisodeChange]);
+
+  // Start countdown when entering Next Episode window with autoplay enabled
+  useEffect(() => {
+    if (!skipState.showNextEpisode || !nextEpisodeInfo || !autoPlayNext || countdownCancelled) {
+      setNextCountdown(null);
+      return;
+    }
+    setNextCountdown((prev) => (prev === null ? 5 : prev));
+  }, [skipState.showNextEpisode, nextEpisodeInfo, autoPlayNext, countdownCancelled]);
+
+  // Tick down the Next Episode autoplay countdown every 1s while playing or when video has ended
+  useEffect(() => {
+    if (
+      !skipState.showNextEpisode ||
+      !nextEpisodeInfo ||
+      !autoPlayNext ||
+      countdownCancelled ||
+      nextCountdown === null
+    ) {
+      return;
+    }
+    if (!playing && !videoEnded) {
+      return;
+    }
+    if (nextCountdown <= 0) {
+      handleTriggerNextEpisode();
+      return;
+    }
+    const timerId = window.setTimeout(() => {
+      setNextCountdown((prev) => (prev !== null ? Math.max(0, prev - 1) : null));
+    }, 1000);
+    return () => window.clearTimeout(timerId);
+  }, [
+    skipState.showNextEpisode,
+    nextEpisodeInfo,
+    autoPlayNext,
+    countdownCancelled,
+    nextCountdown,
+    playing,
+    videoEnded,
+    handleTriggerNextEpisode,
+  ]);
+
+  // Exact, async-safe seek execution for Skip Intro, Skip Recap & Skip Outro
+  const executePlayerSeek = useCallback(
+    (targetTime: number | null, kind: 'intro' | 'recap' | 'outro') => {
+      const v = videoRef.current;
+      if (!v || targetTime === null || !Number.isFinite(targetTime) || targetTime < 0) {
+        return;
+      }
+      if (pendingSkipSeekRef.current) {
+        return;
+      }
+
+      const liveDuration =
+        Number.isFinite(v.duration) && v.duration > 0 ? v.duration : duration;
+      if (liveDuration > 0 && targetTime > liveDuration) {
+        return;
+      }
+
+      const seekEpisodeKey = activeEpisodeKeyRef.current;
+      const seekRunId = probeRunIdRef.current;
+      const shouldResume = !v.paused || playing;
+
+      if (seekCleanupRef.current) {
+        seekCleanupRef.current();
+        seekCleanupRef.current = null;
+      }
+
+      pendingSkipSeekRef.current = true;
+      isProgrammaticSkipRef.current = true;
+
+      if (kind === 'intro') {
+        setSkippedIntro(true);
+      } else if (kind === 'recap') {
+        setSkippedRecap(true);
+      } else {
+        setSkippedOutro(true);
+      }
+
+      lastReportedTimeRef.current = targetTime;
+      lastDriftSyncTimeRef.current = performance.now();
+      setCurrentTime(targetTime);
+
+      let finished = false;
+      const finalizeSeek = () => {
+        if (finished) return;
+        finished = true;
+        v.removeEventListener('seeked', onSeekedComplete);
+        window.clearTimeout(fallbackTimer);
+        seekCleanupRef.current = null;
+
+        // Guard against stale async callbacks if the episode or stream changed during seek
+        if (
+          activeEpisodeKeyRef.current !== seekEpisodeKey ||
+          probeRunIdRef.current !== seekRunId
+        ) {
+          return;
+        }
+
+        pendingSkipSeekRef.current = false;
+        isProgrammaticSkipRef.current = false;
+
+        const settledTime =
+          Number.isFinite(v.currentTime) && Math.abs(v.currentTime - targetTime) <= 2
+            ? v.currentTime
+            : targetTime;
+        lastReportedTimeRef.current = settledTime;
+        setCurrentTime(settledTime);
+
+        if (usingExternalDubRef.current && dubAudioRef.current) {
+          lastDriftSyncTimeRef.current = performance.now();
+          dubAudioRef.current.currentTime = settledTime;
+        }
+
+        if (shouldResume && v.paused && !v.ended) {
+          v.play().catch(() => {});
+        }
+      };
+
+      const onSeekedComplete = () => {
+        finalizeSeek();
+      };
+
+      const fallbackTimer = window.setTimeout(finalizeSeek, 300);
+      v.addEventListener('seeked', onSeekedComplete, { once: true });
+      seekCleanupRef.current = () => {
+        finished = true;
+        v.removeEventListener('seeked', onSeekedComplete);
+        window.clearTimeout(fallbackTimer);
+      };
+
+      try {
+        v.currentTime = targetTime;
+      } catch {
+        finalizeSeek();
+        return;
+      }
+
+      if (dubAudioRef.current) {
+        try {
+          dubAudioRef.current.currentTime = targetTime;
+        } catch {
+          // ignore
+        }
+      }
+
+      if (v.paused && !v.ended) {
+        v.play().catch(() => {});
+      }
+    },
+    [duration, playing]
+  );
+
+  const handleSkipRecap = () => {
+    if (resolvedTiming.recapEnd === null) return;
+    const target = Math.min((duration || Infinity) - 0.5, resolvedTiming.recapEnd + 0.4);
+    executePlayerSeek(target, 'recap');
+  };
+
+  const handleSkipIntro = () => {
+    if (resolvedTiming.introEnd === null) return;
+    const target = Math.min((duration || Infinity) - 0.5, resolvedTiming.introEnd + 0.4);
+    executePlayerSeek(target, 'intro');
+  };
+
+  const handleSkipOutro = () => {
+    if (resolvedTiming.outroEnd !== null) {
+      const target = Math.min((duration || Infinity) - 0.5, resolvedTiming.outroEnd + 0.4);
+      executePlayerSeek(target, 'outro');
+    } else if (nextEpisodeInfo) {
+      handleTriggerNextEpisode();
+    }
+  };
+
+  const handleCancelNextCountdown = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setCountdownCancelled(true);
+    setNextCountdown(null);
   };
 
   const handleSelectEpisodeFromDrawer = (epNum: number) => {
+    if (
+      selectedSeasonForDrawer === currentSeason &&
+      epNum === currentEpisode
+    ) {
+      setShowEpisodeDrawer(false);
+      return;
+    }
+    hasTriggeredNextRef.current = true;
     setCurrentSeason(selectedSeasonForDrawer);
     setCurrentEpisode(epNum);
     setShowEpisodeDrawer(false);
@@ -1443,6 +2117,8 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
 
   const progressPercent = duration > 0 ? Math.min(100, (currentTime / duration) * 100) : 0;
   const bufferPercent = duration > 0 ? Math.min(100, (bufferedEnd / duration) * 100) : 0;
+  const validAudioDubTracks = filterAudioDubTracks(availableDubs);
+  const effectiveDubDisplay = resolveEffectiveDubSelection(selectedDub, availableDubs);
 
   return (
     <div
@@ -1451,6 +2127,16 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
       data-player-state={canPlay ? (playing ? 'playing' : 'paused') : 'loading'}
       data-is-fullscreen={isFullscreen}
       data-orientation={isFullscreen ? (isPortrait ? 'forced-landscape' : 'landscape') : 'auto'}
+      data-episode-key={activeEpisodeKey}
+      data-intro-start={resolvedTiming.introStart ?? ''}
+      data-intro-end={resolvedTiming.introEnd ?? ''}
+      data-recap-start={resolvedTiming.recapStart ?? ''}
+      data-recap-end={resolvedTiming.recapEnd ?? ''}
+      data-outro-start={resolvedTiming.outroStart ?? ''}
+      data-outro-end={resolvedTiming.outroEnd ?? ''}
+      data-next-trigger-time={resolvedTiming.nextEpisodeTriggerTime ?? ''}
+      data-next-episode-id={resolvedTiming.nextEpisodeId ?? ''}
+      data-timing-source={resolvedTiming.source ?? ''}
       onMouseMove={wakeControls}
       onClick={wakeControls}
       className={`relative bg-black overflow-hidden select-none font-sans text-white ${
@@ -1491,19 +2177,34 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
             toggleFullscreen();
           }
         }}
-        onCanPlay={() => {
+        onCanPlay={(e) => {
+          const v = e.currentTarget;
+          if (v.duration && Number.isFinite(v.duration) && v.duration > 0) {
+            setDuration(v.duration);
+          }
           setCanPlay(true);
           setWaiting(false);
           updateServerStatus(currentServerIndex, 'available');
         }}
-        onPlaying={() => {
+        onPlaying={(e) => {
+          const v = e.currentTarget;
+          if (v.duration && Number.isFinite(v.duration) && v.duration > 0) {
+            setDuration(v.duration);
+          }
           setCanPlay(true);
           setPlaying(true);
           setWaiting(false);
           updateServerStatus(currentServerIndex, 'available');
-          if (usingExternalDub && dubAudioRef.current && videoRef.current) {
+          if (usingExternalDubRef.current && dubAudioRef.current && videoRef.current) {
             videoRef.current.muted = true;
-            if (Math.abs(dubAudioRef.current.currentTime - videoRef.current.currentTime) > 0.35) {
+            dubAudioRef.current.muted = mutedRef.current;
+            dubAudioRef.current.volume = volumeRef.current;
+            if (
+              !dubAudioRef.current.seeking &&
+              dubAudioRef.current.readyState >= 2 &&
+              Math.abs(dubAudioRef.current.currentTime - videoRef.current.currentTime) > 0.65
+            ) {
+              lastDriftSyncTimeRef.current = performance.now();
               dubAudioRef.current.currentTime = videoRef.current.currentTime;
             }
             dubAudioRef.current.play().catch(() => {});
@@ -1511,8 +2212,9 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
         }}
         onPlay={() => {
           setPlaying(true);
-          if (usingExternalDub && dubAudioRef.current && videoRef.current) {
+          if (usingExternalDubRef.current && dubAudioRef.current && videoRef.current) {
             videoRef.current.muted = true;
+            dubAudioRef.current.muted = mutedRef.current;
             dubAudioRef.current.play().catch(() => {});
           }
         }}
@@ -1528,29 +2230,186 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
             dubAudioRef.current.pause();
           }
         }}
+        onLoadedMetadata={(e) => {
+          const v = e.currentTarget;
+          if (v.duration && Number.isFinite(v.duration) && v.duration > 0) {
+            setDuration(v.duration);
+            setCanPlay(true);
+          }
+          const t = v.currentTime || 0;
+          lastReportedTimeRef.current = t;
+          setCurrentTime(t);
+        }}
+        onDurationChange={(e) => {
+          const v = e.currentTarget;
+          if (v.duration && Number.isFinite(v.duration) && v.duration > 0) {
+            setDuration(v.duration);
+            setCanPlay(true);
+          }
+        }}
+        onSeeking={(e) => {
+          const v = e.currentTarget;
+          const t = v.currentTime;
+          if (!isProgrammaticSkipRef.current) {
+            if (
+              resolvedTiming.recapStart !== null &&
+              t < resolvedTiming.recapStart - 2
+            ) {
+              setSkippedRecap(false);
+            }
+            if (
+              resolvedTiming.introStart !== null &&
+              t < resolvedTiming.introStart - 2
+            ) {
+              setSkippedIntro(false);
+            }
+            if (
+              resolvedTiming.outroStart !== null &&
+              t < resolvedTiming.outroStart - 2
+            ) {
+              setSkippedOutro(false);
+            }
+          }
+          lastReportedTimeRef.current = t;
+          setCurrentTime(t);
+          if (v.duration && t < v.duration - 1) {
+            setVideoEnded(false);
+          }
+        }}
         onSeeked={(e) => {
-          if (usingExternalDub && dubAudioRef.current) {
-            dubAudioRef.current.currentTime = e.currentTarget.currentTime;
+          const v = e.currentTarget;
+          const t = v.currentTime;
+          if (!isProgrammaticSkipRef.current) {
+            if (
+              resolvedTiming.recapStart !== null &&
+              t < resolvedTiming.recapStart - 2
+            ) {
+              setSkippedRecap(false);
+            }
+            if (
+              resolvedTiming.introStart !== null &&
+              t < resolvedTiming.introStart - 2
+            ) {
+              setSkippedIntro(false);
+            }
+            if (
+              resolvedTiming.outroStart !== null &&
+              t < resolvedTiming.outroStart - 2
+            ) {
+              setSkippedOutro(false);
+            }
+          }
+          lastReportedTimeRef.current = t;
+          setCurrentTime(t);
+          if (v.duration && t < v.duration - 1) {
+            setVideoEnded(false);
+          }
+          if (usingExternalDubRef.current && dubAudioRef.current) {
+            lastDriftSyncTimeRef.current = performance.now();
+            dubAudioRef.current.currentTime = t;
           }
         }}
         onTimeUpdate={(e) => {
           const v = e.currentTarget;
-          setCurrentTime(v.currentTime);
-          if (v.buffered.length > 0) {
-            setBufferedEnd(v.buffered.end(v.buffered.length - 1));
+          if (v.duration && Number.isFinite(v.duration) && v.duration > 0 && duration <= 0) {
+            setDuration(v.duration);
           }
-          if (usingExternalDub && dubAudioRef.current) {
-            if (!v.muted) v.muted = true;
-            if (!v.paused && !waiting && dubAudioRef.current.paused) {
-              dubAudioRef.current.play().catch(() => {});
+          if (!canPlay && v.duration && Number.isFinite(v.duration) && v.duration > 0) {
+            setCanPlay(true);
+          }
+          if (isProgrammaticSkipRef.current || pendingSkipSeekRef.current) {
+            return;
+          }
+          const t = v.currentTime;
+          const prevT = lastReportedTimeRef.current;
+
+          // Detect manual backward scrub > 3s to reset skip state
+          if (t < prevT - 3) {
+            if (
+              resolvedTiming.introStart !== null &&
+              t < resolvedTiming.introStart - 2
+            ) {
+              setSkippedIntro(false);
             }
-            if (Math.abs(dubAudioRef.current.currentTime - v.currentTime) > 0.45) {
-              dubAudioRef.current.currentTime = v.currentTime;
+            if (
+              resolvedTiming.outroStart !== null &&
+              t < resolvedTiming.outroStart - 2
+            ) {
+              setSkippedOutro(false);
+            }
+          }
+
+          // Avoid unnecessary React state updates on every fractional timeupdate unless crossing a boundary or >=0.2s elapsed
+          const crossedBoundary = [
+            resolvedTiming.introStart,
+            resolvedTiming.introEnd,
+            resolvedTiming.outroStart,
+            resolvedTiming.outroEnd,
+            resolvedTiming.nextEpisodeTriggerTime,
+          ].some(
+            (b) =>
+              b !== null &&
+              ((prevT < b && t >= b) || (prevT >= b && t < b))
+          );
+
+          if (
+            crossedBoundary ||
+            Math.abs(t - prevT) >= 0.2 ||
+            Math.floor(t) !== Math.floor(prevT)
+          ) {
+            lastReportedTimeRef.current = t;
+            setCurrentTime(t);
+          }
+
+          if (v.duration && t < v.duration - 1 && videoEnded) {
+            setVideoEnded(false);
+          }
+          if (v.buffered.length > 0) {
+            const newBuf = v.buffered.end(v.buffered.length - 1);
+            if (Math.abs(newBuf - bufferedEnd) >= 0.5) {
+              setBufferedEnd(newBuf);
+            }
+          }
+          const audioEl = dubAudioRef.current;
+          if (usingExternalDubRef.current && audioEl) {
+            if (!v.muted) v.muted = true;
+            if (audioEl.muted !== mutedRef.current) {
+              audioEl.muted = mutedRef.current;
+            }
+            if (Math.abs(audioEl.volume - volumeRef.current) > 0.01) {
+              audioEl.volume = volumeRef.current;
+            }
+            if (
+              !v.paused &&
+              !waiting &&
+              audioEl.paused &&
+              !audioEl.seeking &&
+              audioEl.readyState >= 2
+            ) {
+              audioEl.play().catch(() => {});
+            }
+            const now = performance.now();
+            if (
+              shouldSyncDubAudioTime({
+                videoTime: t,
+                audioTime: audioEl.currentTime,
+                isAudioSeeking: audioEl.seeking,
+                audioReadyState: audioEl.readyState,
+                lastSyncTimestampMs: lastDriftSyncTimeRef.current,
+                nowMs: now,
+              })
+            ) {
+              lastDriftSyncTimeRef.current = now;
+              audioEl.currentTime = t;
             }
           }
         }}
-        onDurationChange={(e) => {
-          setDuration(e.currentTarget.duration || 0);
+        onEnded={() => {
+          setPlaying(false);
+          setVideoEnded(true);
+          if (dubAudioRef.current) {
+            dubAudioRef.current.pause();
+          }
         }}
         onError={() => {
           // If native video error happens before playback, mark server failed and advance
@@ -1576,11 +2435,32 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
       {/* Auxiliary Synchronized Audio Element for Orion Multi-Language Dubs */}
       <audio ref={dubAudioRef} crossOrigin="anonymous" className="hidden" />
 
-      {/* Custom Subtitle Overlay */}
+      {/* Dub Audio Status / Fallback Toast Banner */}
+      {(dubFallbackNotice || loadingDub) && canPlay && (
+        <div
+          data-testid="dub-status-banner"
+          className="absolute top-14 left-1/2 -translate-x-1/2 z-30 pointer-events-none px-4 py-1.5 rounded-full bg-zinc-950/85 backdrop-blur-md border border-white/15 text-xs font-medium text-zinc-100 shadow-lg flex items-center gap-2 transition-opacity duration-300"
+        >
+          {loadingDub ? (
+            <>
+              <Loader className="w-3.5 h-3.5 animate-spin text-white" />
+              <span>Switching audio dub...</span>
+            </>
+          ) : (
+            <span>{dubFallbackNotice}</span>
+          )}
+        </div>
+      )}
+
+      {/* Custom Subtitle Overlay — automatically lifts above seekbar when bottom controls are visible */}
       {canPlay && activeCueText && (
         <div
-          style={{ top: `${subPosition}%` }}
-          className="absolute inset-x-0 z-20 flex justify-center pointer-events-none px-6 -translate-y-1/2"
+          style={{
+            top: `${
+              controlsVisible || !playing ? Math.min(subPosition, 75) : subPosition
+            }%`,
+          }}
+          className="absolute inset-x-0 z-20 flex justify-center pointer-events-none px-6 -translate-y-1/2 transition-all duration-200"
         >
           <div
             style={{
@@ -1588,7 +2468,7 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
               color: subTextColor,
               backgroundColor: `rgba(0, 0, 0, ${subBgOpacity / 100})`,
             }}
-            className="px-3 py-1 rounded text-center whitespace-pre-line leading-snug drop-shadow-md max-w-3xl"
+            className="px-3 py-1 rounded text-center whitespace-pre-line leading-snug drop-shadow-md max-w-2xl"
           >
             {activeCueText}
           </div>
@@ -1621,6 +2501,130 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
           <TailspinLoader size={60} stroke={8} color="white" />
         </div>
       )}
+
+      {/* =====================================================================
+          UNIFIED SMART PLAYBACK OVERLAY (TheIntroDB Integration)
+          Renders Skip Recap, Skip Intro, Skip Outro/Credits & Next Episode
+          in a single, non-overlapping vertically stacked container.
+         ===================================================================== */}
+      {canPlay &&
+        !settingsOpen &&
+        !showServersOverlay &&
+        !showEpisodeDrawer &&
+        (skipState.showSkipRecap ||
+          skipState.showSkipIntro ||
+          skipState.showSkipOutro ||
+          (skipState.showNextEpisode && nextEpisodeInfo)) && (
+          <div
+            data-testid="smart-playback-controls"
+            onClick={(e) => e.stopPropagation()}
+            className={`absolute right-4 sm:right-6 lg:right-8 z-30 flex flex-col items-end gap-2.5 transition-all duration-300 pointer-events-auto ${
+              controlsVisible || !playing
+                ? 'bottom-24 sm:bottom-28 lg:bottom-32'
+                : activeCueText
+                ? 'bottom-16 sm:bottom-20'
+                : 'bottom-8 sm:bottom-10'
+            }`}
+          >
+            {/* Skip Recap Button */}
+            {skipState.showSkipRecap && (
+              <button
+                type="button"
+                data-testid="skip-recap-button"
+                aria-label="Skip Recap"
+                onClick={handleSkipRecap}
+                className="group flex items-center gap-2 px-4 py-2 sm:px-5 sm:py-2.5 rounded-lg bg-zinc-900/90 hover:bg-white text-white hover:text-zinc-950 font-semibold text-xs sm:text-sm tracking-wide backdrop-blur-md border border-white/25 hover:border-white shadow-[0_8px_28px_rgba(0,0,0,0.75)] transition-all duration-200 active:scale-95 cursor-pointer"
+              >
+                <FastForward className="w-3.5 h-3.5 sm:w-4 sm:h-4 fill-current transition-transform group-hover:translate-x-0.5" />
+                <span>Skip Recap</span>
+              </button>
+            )}
+
+            {/* Skip Intro Button */}
+            {skipState.showSkipIntro && (
+              <button
+                type="button"
+                data-testid="skip-intro-button"
+                aria-label="Skip Intro"
+                onClick={handleSkipIntro}
+                className="group flex items-center gap-2 px-4 py-2 sm:px-5 sm:py-2.5 rounded-lg bg-zinc-900/90 hover:bg-white text-white hover:text-zinc-950 font-semibold text-xs sm:text-sm tracking-wide backdrop-blur-md border border-white/25 hover:border-white shadow-[0_8px_28px_rgba(0,0,0,0.75)] transition-all duration-200 active:scale-95 cursor-pointer"
+              >
+                <FastForward className="w-3.5 h-3.5 sm:w-4 sm:h-4 fill-current transition-transform group-hover:translate-x-0.5" />
+                <span>Skip Intro</span>
+              </button>
+            )}
+
+            {/* Skip Outro / Credits Button */}
+            {skipState.showSkipOutro && (
+              <button
+                type="button"
+                data-testid="skip-outro-button"
+                aria-label="Skip Outro"
+                onClick={handleSkipOutro}
+                className="group flex items-center gap-2 px-4 py-2 sm:px-5 sm:py-2.5 rounded-lg bg-zinc-900/90 hover:bg-white text-white hover:text-zinc-950 font-semibold text-xs sm:text-sm tracking-wide backdrop-blur-md border border-white/25 hover:border-white shadow-[0_8px_28px_rgba(0,0,0,0.75)] transition-all duration-200 active:scale-95 cursor-pointer"
+              >
+                <SkipForward className="w-3.5 h-3.5 sm:w-4 sm:h-4 fill-current transition-transform group-hover:translate-x-0.5" />
+                <span>Skip Outro</span>
+              </button>
+            )}
+
+            {/* Next Episode Card */}
+            {skipState.showNextEpisode && nextEpisodeInfo && (
+              <div
+                data-testid="next-episode-container"
+                className="flex flex-col gap-1.5 rounded-xl bg-zinc-950/90 backdrop-blur-xl border border-white/15 p-2.5 sm:p-3.5 shadow-[0_12px_36px_rgba(0,0,0,0.85)] w-64 sm:w-72"
+              >
+                <div className="w-full flex items-center justify-between gap-2 px-0.5">
+                  <span className="text-[10px] sm:text-[11px] font-semibold uppercase tracking-wider text-zinc-400">
+                    Up Next • S{nextEpisodeInfo.season}E{nextEpisodeInfo.episode}
+                  </span>
+                  {autoPlayNext && !countdownCancelled && nextCountdown !== null && (
+                    <span
+                      data-testid="next-episode-countdown"
+                      className="text-[10px] sm:text-[11px] font-mono font-bold text-amber-400 tabular-nums"
+                    >
+                      Playing in {nextCountdown}s
+                    </span>
+                  )}
+                </div>
+
+                <div className="w-full text-xs sm:text-sm font-semibold text-white truncate px-0.5 mb-0.5">
+                  {nextEpisodeInfo.title}
+                </div>
+
+                <div className="flex items-center gap-2 w-full">
+                  <button
+                    type="button"
+                    data-testid="next-episode-button"
+                    aria-label="Next Episode"
+                    onClick={handleTriggerNextEpisode}
+                    className="relative flex-1 overflow-hidden flex items-center justify-center gap-1.5 px-3.5 py-2 rounded-lg bg-white hover:bg-zinc-100 text-zinc-950 font-bold text-xs sm:text-sm transition-all active:scale-95 cursor-pointer"
+                  >
+                    <Play className="w-3.5 h-3.5 fill-zinc-950 text-zinc-950 shrink-0" />
+                    <span>
+                      Next Episode
+                      {autoPlayNext && !countdownCancelled && nextCountdown !== null
+                        ? ` (${nextCountdown}s)`
+                        : ''}
+                    </span>
+                  </button>
+
+                  {autoPlayNext && !countdownCancelled && nextCountdown !== null && (
+                    <button
+                      type="button"
+                      data-testid="cancel-next-episode-countdown"
+                      aria-label="Cancel autoplay countdown"
+                      onClick={handleCancelNextCountdown}
+                      className="px-2.5 py-2 rounded-lg bg-white/10 hover:bg-white/20 text-zinc-200 hover:text-white font-semibold text-xs transition-colors cursor-pointer shrink-0"
+                    >
+                      Cancel
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
 
       {/* =====================================================================
           EXACT ZXCSTREAM.CC SERVER LOADING SCREEN (!canPlay)
@@ -1932,9 +2936,9 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
           onClick={(e) => e.stopPropagation()}
           className="space-y-3 pointer-events-auto bg-gradient-to-t from-black/90 via-black/50 to-transparent -mx-4 -mb-4 p-4 lg:-mx-6 lg:-mb-6 lg:p-6 pt-12"
         >
-          {/* Above-Seekbar "You're Watching" Metadata Block (shown on Custom Player) */}
+          {/* Above-Seekbar "You're Watching" Metadata Block (shown on desktop/tablet Custom Player, hidden on compact mobile to prevent overlap) */}
           {playerMode === 'custom' && metadata && (
-            <div className="space-y-0.5 mb-2">
+            <div className="hidden md:block space-y-0.5 mb-2 max-w-[55%] pointer-events-none">
               <div className="flex items-center gap-2">
                 <div
                   style={{ backgroundColor: normalizedColor }}
@@ -1942,7 +2946,7 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
                 />
                 <span className="text-xs text-zinc-300 font-medium">You&apos;re Watching</span>
               </div>
-              <div className="text-sm lg:text-base font-bold text-white leading-snug">
+              <div className="text-sm lg:text-base font-bold text-white leading-snug truncate">
                 {metadata.title}{' '}
                 {activeMediaType === 'tv' ? `S${currentSeason}E${currentEpisode}` : ''}{' '}
                 {metadata.year ? `(${metadata.year})` : ''}
@@ -1978,6 +2982,38 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
                 style={{ width: `${bufferPercent}%` }}
                 className="absolute inset-y-0 left-0 bg-white/40 rounded-full"
               />
+              {/* Intro Segment Marker on Seekbar */}
+              {duration > 0 &&
+                resolvedTiming.introStart !== null &&
+                resolvedTiming.introEnd !== null && (
+                  <div
+                    data-testid="seekbar-intro-marker"
+                    style={{
+                      left: `${(resolvedTiming.introStart / duration) * 100}%`,
+                      width: `${Math.max(
+                        0.5,
+                        ((resolvedTiming.introEnd - resolvedTiming.introStart) / duration) * 100
+                      )}%`,
+                    }}
+                    className="absolute inset-y-0 bg-amber-400/60 pointer-events-none z-10"
+                  />
+                )}
+              {/* Outro Segment Marker on Seekbar */}
+              {duration > 0 &&
+                resolvedTiming.outroStart !== null &&
+                resolvedTiming.outroEnd !== null && (
+                  <div
+                    data-testid="seekbar-outro-marker"
+                    style={{
+                      left: `${(resolvedTiming.outroStart / duration) * 100}%`,
+                      width: `${Math.max(
+                        0.5,
+                        ((resolvedTiming.outroEnd - resolvedTiming.outroStart) / duration) * 100
+                      )}%`,
+                    }}
+                    className="absolute inset-y-0 bg-amber-400/60 pointer-events-none z-10"
+                  />
+                )}
               {/* Active Progress Bar */}
               <div
                 style={{
@@ -1991,7 +3027,7 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
             {/* White Vertical Pill Thumb matching oX */}
             <div
               style={{ left: `${progressPercent}%` }}
-              className="absolute -translate-x-1/2 h-4 w-1.5 lg:h-5 lg:w-2 bg-white rounded-full shadow-md transition-transform group-hover:scale-110"
+              className="absolute -translate-x-1/2 h-4 w-1.5 lg:h-5 lg:w-2 bg-white rounded-full shadow-md transition-transform group-hover:scale-110 z-20"
             />
           </div>
 
@@ -2065,19 +3101,6 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
               >
                 {formatPlayerTime(currentTime)} / {formatPlayerTime(duration)}
               </div>
-
-              {/* Next Episode Button for TV Series */}
-              {hasNextEpisode && (
-                <button
-                  type="button"
-                  onClick={handleTriggerNextEpisode}
-                  className="hidden sm:inline-flex items-center gap-1 text-xs lg:text-sm font-semibold text-white hover:text-zinc-300 transition cursor-pointer ml-2"
-                >
-                  <span>
-                    Next Episode S{currentSeason}-E{currentEpisode + 1}
-                  </span>
-                </button>
-              )}
             </div>
 
             {/* Right Cluster: [ ⚙ Settings > ] Pill Button (lK), TV Episode Selector (uX), Fullscreen (os/oo) */}
@@ -2094,20 +3117,20 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
                       {/* Audio Dub (Server 0) */}
                       <button
                         type="button"
+                        data-testid="settings-open-dub-tab"
                         onClick={() => setSettingsTab('dub')}
                         className="w-full flex items-center justify-between px-3 py-2 rounded-xl hover:bg-white/[0.08] active:bg-white/[0.12] transition-colors cursor-pointer"
                       >
                         <span className="text-zinc-300 font-medium">Audio Dub</span>
-                        <span className="flex items-center gap-1 font-semibold text-white">
+                        <span
+                          data-testid="settings-current-dub-label"
+                          className="flex items-center gap-1 font-semibold text-white"
+                        >
                           {loadingDub
                             ? 'Switching...'
-                            : selectedDub === ''
+                            : effectiveDubDisplay.isOriginal
                             ? 'Original'
-                            : availableDubs
-                                .find((d) => !d.original && d.lang.toLowerCase() === selectedDub)
-                                ?.name.replace(/\s+dub$/i, '') ||
-                              DUB_LANGUAGES.find((d) => d.code === selectedDub)?.label ||
-                              selectedDub.toUpperCase()}
+                            : (effectiveDubDisplay.displayLabel || 'Original').replace(/\s+dub$/i, '')}
                           <ChevronRight className="w-4 h-4 text-zinc-400" />
                         </span>
                       </button>
@@ -2242,6 +3265,27 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
                         </div>
                       </div>
 
+                      {/* Autoplay Next Episode Toggle (for TV Series) */}
+                      {activeMediaType === 'tv' && (
+                        <button
+                          type="button"
+                          data-testid="settings-toggle-autoplay-next"
+                          onClick={() => {
+                            setAutoPlayNext((prev) => !prev);
+                            setCountdownCancelled(false);
+                          }}
+                          className="w-full flex items-center justify-between px-3 py-2 rounded-xl hover:bg-white/[0.08] active:bg-white/[0.12] transition-colors cursor-pointer"
+                        >
+                          <span className="text-zinc-300 font-medium">Autoplay next</span>
+                          <span
+                            data-testid="settings-autoplay-next-status"
+                            className="font-semibold text-white"
+                          >
+                            {autoPlayNext ? 'On' : 'Off'}
+                          </span>
+                        </button>
+                      )}
+
                       {/* Sleep Timer */}
                       <button
                         type="button"
@@ -2260,7 +3304,7 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
 
                   {/* Dub Language Submenu */}
                   {settingsTab === 'dub' && (
-                    <div className="space-y-1">
+                    <div className="space-y-1" data-testid="settings-dub-submenu">
                       <button
                         type="button"
                         onClick={() => setSettingsTab('main')}
@@ -2271,24 +3315,29 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
                       </button>
                       <button
                         type="button"
+                        data-testid="dub-option-original"
                         onClick={() => handleSelectDub('', 0)}
                         className="w-full flex items-center justify-between px-3 py-1.5 rounded-xl hover:bg-white/[0.08] active:bg-white/[0.12] transition-colors cursor-pointer"
                       >
                         <span>Original Audio</span>
-                        {selectedDub === '' && <Check className="w-4 h-4 text-green-400" />}
+                        {effectiveDubDisplay.isOriginal && (
+                          <Check className="w-4 h-4 text-green-400" />
+                        )}
                       </button>
-                      {availableDubs.filter((d) => !d.original).length > 0
-                        ? availableDubs
+                      {validAudioDubTracks.filter((d) => !d.original).length > 0
+                        ? validAudioDubTracks
                             .filter((d) => !d.original)
                             .map((dub, idx) => {
                               const code = (dub.lang || '').toLowerCase();
                               const isSelected =
-                                selectedDub === code &&
+                                !effectiveDubDisplay.isOriginal &&
+                                effectiveDubDisplay.dubCode === code &&
                                 String(selectedDubType) === String(dub.type ?? 0);
                               return (
                                 <button
                                   key={`${code}-${dub.type ?? 0}-${idx}`}
                                   type="button"
+                                  data-testid={`dub-option-${code}`}
                                   onClick={() => handleSelectDub(code, dub.type ?? 0)}
                                   className="w-full flex items-center justify-between px-3 py-1.5 rounded-xl hover:bg-white/[0.08] active:bg-white/[0.12] transition-colors cursor-pointer"
                                 >
@@ -2303,6 +3352,7 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
                             <button
                               key={lang.code}
                               type="button"
+                              data-testid={`dub-option-${lang.code}`}
                               onClick={() => handleSelectDub(lang.code, 0)}
                               className="w-full flex items-center justify-between px-3 py-1.5 rounded-xl hover:bg-white/[0.08] active:bg-white/[0.12] transition-colors cursor-pointer"
                             >

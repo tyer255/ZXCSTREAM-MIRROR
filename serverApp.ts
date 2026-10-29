@@ -1,6 +1,13 @@
 import express from 'express';
 import cors from 'cors';
 import crypto from 'node:crypto';
+import {
+  getCatalogSeasonEpisodes,
+  getEpisodeTimingMetadata,
+  getSeriesImdbId,
+  getSeriesTvdbId,
+} from './src/data/tmdbCatalog';
+import { normalizeIntervalSeconds } from './src/utils/urlBuilder';
 
 const app = express();
 
@@ -59,6 +66,8 @@ const COMMON_HEADERS = {
   'Content-Type': 'application/json',
 };
 
+const tmdbImdbCache = new Map<string, string>();
+
 async function fetchTmdbDetailsWithFallback(mediaType: string, tmdbId: string, language = 'en-US') {
   const tryType = async (type: string) => {
     const res = await fetch(
@@ -72,8 +81,12 @@ async function fetchTmdbDetailsWithFallback(mediaType: string, tmdbId: string, l
     );
     if (!res.ok) return null;
     const data = await res.json();
-    if (!data || (!data.title && !data.name && !data.id)) return null;
-    return { ...data, resolvedMediaType: type };
+    const raw = data?.data || data;
+    if (!raw || (!raw.title && !raw.name && !raw.id)) return null;
+    if (raw.imdb_id) {
+      tmdbImdbCache.set(String(tmdbId).trim(), String(raw.imdb_id).trim());
+    }
+    return { ...raw, resolvedMediaType: type };
   };
 
   const primary = await tryType(mediaType);
@@ -81,6 +94,30 @@ async function fetchTmdbDetailsWithFallback(mediaType: string, tmdbId: string, l
 
   const altType = mediaType === 'movie' ? 'tv' : 'movie';
   return await tryType(altType);
+}
+
+// Short-lived in-memory cache for verified DASH MPD XML manifests so /api/stream/mpd-audio
+// can serve the audio-only MPD immediately without a second round-trip to vidstuck.cc.
+const mpdManifestCache = new Map<string, { xml: string; expiresAt: number }>();
+
+function cacheMpdXml(url: string, xml: string) {
+  const now = Date.now();
+  if (mpdManifestCache.size > 120) {
+    for (const [k, v] of mpdManifestCache.entries()) {
+      if (v.expiresAt < now) mpdManifestCache.delete(k);
+    }
+    if (mpdManifestCache.size > 120) {
+      const oldestKey = mpdManifestCache.keys().next().value;
+      if (oldestKey) mpdManifestCache.delete(oldestKey);
+    }
+  }
+  mpdManifestCache.set(url, { xml, expiresAt: now + 5 * 60 * 1000 });
+}
+
+function stripVideoFromMpd(mpdText: string): string {
+  return mpdText
+    .replace(/<AdaptationSet[^>]*contentType=["']video["'][\s\S]*?<\/AdaptationSet>/gi, '')
+    .replace(/<AdaptationSet[^>]*mimeType=["']video\/[^"']*["'][\s\S]*?<\/AdaptationSet>/gi, '');
 }
 
 async function resolveForServer(
@@ -113,6 +150,10 @@ async function resolveForServer(
     dubType = '',
   } = options;
 
+  const refererUrl = `https://zxcstream.cc/player/${mediaType}/${tmdbId}${
+    mediaType === 'tv' ? `/${season}/${episode}` : ''
+  }`;
+
   const fuckuBody: Record<string, any> = {
     [FIELD_MAP.id]: String(tmdbId),
     [FIELD_MAP.mediaType]: mediaType,
@@ -124,104 +165,168 @@ async function resolveForServer(
     fuckuBody[FIELD_MAP.episode] = Number(episode) || 1;
   }
 
-  const tokenRes = await fetch('https://zxcstream.cc/backend/fucku', {
-    method: 'POST',
-    headers: {
-      ...COMMON_HEADERS,
-      Referer: `https://zxcstream.cc/player/${mediaType}/${tmdbId}${mediaType === 'tv' ? `/${season}/${episode}` : ''}`,
-    },
-    body: JSON.stringify(fuckuBody),
-  });
+  let sourceData: any = null;
+  let lastError = 'Request failed';
 
-  if (!tokenRes.ok) {
-    return { success: false, server: targetServer, error: 'Token request failed', links: [] };
-  }
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const tokenRes = await fetch('https://zxcstream.cc/backend/fucku', {
+        method: 'POST',
+        headers: {
+          ...COMMON_HEADERS,
+          Referer: refererUrl,
+        },
+        body: JSON.stringify(fuckuBody),
+      });
 
-  const tokenData = await tokenRes.json();
-  if (!tokenData.token) {
-    return { success: false, server: targetServer, error: 'No token', links: [] };
-  }
+      if (!tokenRes.ok) {
+        lastError = `Token HTTP ${tokenRes.status}`;
+        if (attempt === 0 && (tokenRes.status >= 500 || tokenRes.status === 429)) {
+          await new Promise((r) => setTimeout(r, 250));
+          continue;
+        }
+        return { success: false, server: targetServer, error: lastError, links: [] };
+      }
 
-  const query = new URLSearchParams({
-    [FIELD_MAP.id]: String(tmdbId),
-    [FIELD_MAP.path]: targetServer,
-    [FIELD_MAP.mediaType]: mediaType,
-    [FIELD_MAP.ts]: String(tokenData.ts),
-    [FIELD_MAP.token]: tokenData.token,
-    [FIELD_MAP.title]: title,
-    [FIELD_MAP.year]: releaseYear,
-    [FIELD_MAP.date]: String(date),
-  });
+      const tokenData = await tokenRes.json();
+      if (!tokenData.token) {
+        return { success: false, server: targetServer, error: 'No token', links: [] };
+      }
 
-  if (mediaType === 'tv') {
-    query.set(FIELD_MAP.season, String(Number(season) || 1));
-    query.set(FIELD_MAP.episode, String(Number(episode) || 1));
-    if (lastAirDate) query.set(FIELD_MAP.latestDate, String(lastAirDate));
-  }
+      const query = new URLSearchParams({
+        [FIELD_MAP.id]: String(tmdbId),
+        [FIELD_MAP.path]: targetServer,
+        [FIELD_MAP.mediaType]: mediaType,
+        [FIELD_MAP.ts]: String(tokenData.ts),
+        [FIELD_MAP.token]: tokenData.token,
+        [FIELD_MAP.title]: title,
+        [FIELD_MAP.year]: releaseYear,
+        [FIELD_MAP.date]: String(date),
+      });
 
-  if (imdbId) query.set(FIELD_MAP.imdbId, imdbId);
+      if (mediaType === 'tv') {
+        query.set(FIELD_MAP.season, String(Number(season) || 1));
+        query.set(FIELD_MAP.episode, String(Number(episode) || 1));
+        if (lastAirDate) query.set(FIELD_MAP.latestDate, String(lastAirDate));
+      }
 
-  if (dubCode) {
-    query.set('dubCode', dubCode);
-    query.set('dubType', dubType !== '' ? String(dubType) : '0');
-  }
+      if (imdbId) query.set(FIELD_MAP.imdbId, imdbId);
 
-  const sourceRes = await fetch(
-    `https://zxcstream.cc/backend_/sources/${encodeURIComponent(targetServer)}?${query.toString()}`,
-    {
-      headers: {
-        ...COMMON_HEADERS,
-        Referer: `https://zxcstream.cc/player/${mediaType}/${tmdbId}${mediaType === 'tv' ? `/${season}/${episode}` : ''}`,
-      },
+      if (dubCode) {
+        query.set('dubCode', dubCode);
+        query.set('dubType', dubType !== '' ? String(dubType) : '0');
+      }
+
+      const sourceRes = await fetch(
+        `https://zxcstream.cc/backend_/sources/${encodeURIComponent(targetServer)}?${query.toString()}`,
+        {
+          headers: {
+            ...COMMON_HEADERS,
+            Referer: refererUrl,
+          },
+        }
+      );
+
+      if (!sourceRes.ok) {
+        lastError = `HTTP ${sourceRes.status}`;
+        if (attempt === 0 && (sourceRes.status >= 500 || sourceRes.status === 429)) {
+          await new Promise((r) => setTimeout(r, 300));
+          continue;
+        }
+        return { success: false, server: targetServer, error: lastError, links: [] };
+      }
+
+      sourceData = await sourceRes.json();
+      break;
+    } catch (err: any) {
+      lastError = err?.message || 'Network error';
+      if (attempt === 0) {
+        await new Promise((r) => setTimeout(r, 250));
+        continue;
+      }
+      return { success: false, server: targetServer, error: lastError, links: [] };
     }
-  );
-
-  if (!sourceRes.ok) {
-    return { success: false, server: targetServer, error: `HTTP ${sourceRes.status}`, links: [] };
   }
 
-  const sourceData = await sourceRes.json();
+  if (!sourceData) {
+    return { success: false, server: targetServer, error: lastError, links: [] };
+  }
+
   const rawLinks = (sourceData.links || []).map((item: any) => ({
     ...item,
     link: decryptCryptoJS(item.link, DECRYPTION_KEY),
   }));
 
-  // Verify DASH links
+  // Verify DASH links and cache valid MPD manifests
   const verifiedLinks: any[] = [];
   for (const item of rawLinks) {
     if (!item.link || !item.link.startsWith('http')) continue;
-    const isDash = item.type === 'dash' || item.link.includes('andromeda') || item.link.includes('.mpd');
+    const isDash =
+      item.type === 'dash' || item.link.includes('andromeda') || item.link.includes('.mpd');
     if (isDash) {
       try {
         const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), 4500);
+        const timer = setTimeout(() => controller.abort(), 5500);
         const mpdRes = await fetch(item.link, {
-          headers: { Referer: 'https://zxcstream.cc/', Origin: 'https://zxcstream.cc' },
+          headers: {
+            'User-Agent': COMMON_HEADERS['User-Agent'],
+            Referer: 'https://zxcstream.cc/',
+            Origin: 'https://zxcstream.cc',
+          },
           signal: controller.signal,
         });
         clearTimeout(timer);
         if (!mpdRes.ok) continue;
         const mpdText = await mpdRes.text();
         if (!mpdText.includes('<MPD') || !mpdText.includes('video')) continue;
+        const hasAudio =
+          mpdText.includes('contentType="audio"') ||
+          mpdText.includes("contentType='audio'") ||
+          mpdText.includes('audio/mp4') ||
+          mpdText.includes('mp4a');
+        cacheMpdXml(item.link, mpdText);
         const codecs = mpdText.match(/codecs="([^"]+)"/g) || [];
-        const videoCodecs = codecs.filter((c) => !c.includes('mp4a') && !c.includes('ac-3') && !c.includes('ec-3'));
+        const videoCodecs = codecs.filter(
+          (c) => !c.includes('mp4a') && !c.includes('ac-3') && !c.includes('ec-3')
+        );
         const onlyHevc =
           videoCodecs.length > 0 &&
           videoCodecs.every((c) => c.includes('hev1') || c.includes('hvc1'));
-        verifiedLinks.push({ ...item, onlyHevc });
+        verifiedLinks.push({ ...item, onlyHevc, hasAudio });
       } catch {
         // Skip broken DASH manifest
       }
+    } else if (targetServer === 'orion' || item.link.includes('workers.dev')) {
+      try {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 3500);
+        const probeRes = await fetch(item.link, {
+          headers: {
+            'User-Agent': COMMON_HEADERS['User-Agent'],
+            Referer: 'https://zxcstream.cc/',
+            Origin: 'https://zxcstream.cc',
+          },
+          signal: controller.signal,
+        });
+        clearTimeout(timer);
+        if (!probeRes.ok) continue;
+        verifiedLinks.push({ ...item, onlyHevc: false, hasAudio: true });
+      } catch {
+        // Skip broken worker link
+      }
     } else {
-      verifiedLinks.push({ ...item, onlyHevc: false });
+      verifiedLinks.push({ ...item, onlyHevc: false, hasAudio: true });
     }
   }
+
+  const verifiedAudioLink =
+    verifiedLinks.find((l) => l.hasAudio !== false)?.link || verifiedLinks[0]?.link || null;
 
   return {
     ...sourceData,
     success: verifiedLinks.length > 0,
     links: verifiedLinks,
-    dubAudioUrl: verifiedLinks[0]?.link || rawLinks[0]?.link || null,
+    dubAudioUrl: verifiedAudioLink,
     server: targetServer,
   };
 }
@@ -256,9 +361,10 @@ const handleTmdbDetails = async (req: express.Request, res: express.Response) =>
 apiRouter.get('/tmdb/details/:mediaType/:tmdbId', handleTmdbDetails);
 apiRouter.get('/tmdb/:mediaType/:tmdbId', handleTmdbDetails);
 
-// TMDB TV Season Episodes Proxy Route
+// TMDB TV Season Episodes Proxy Route (enriched with per-episode intro/outro/next-episode timing metadata)
 apiRouter.get('/tmdb/season/:tmdbId/season/:seasonNumber', async (req, res) => {
   const { tmdbId, seasonNumber } = req.params;
+  const seasonNum = Number(seasonNumber) || 1;
   try {
     const response = await fetch(
       `https://zxcstream.cc/backend/tmdb/season/${encodeURIComponent(tmdbId)}/season/${encodeURIComponent(seasonNumber)}`,
@@ -270,12 +376,50 @@ apiRouter.get('/tmdb/season/:tmdbId/season/:seasonNumber', async (req, res) => {
       }
     );
     if (!response.ok) {
-      return res.status(response.status).json({ episodes: [] });
+      const fallbackEps = getCatalogSeasonEpisodes(tmdbId, seasonNum);
+      return res.json({ episodes: fallbackEps });
     }
     const data = await response.json();
-    return res.json(data);
+    const rawEpisodes = Array.isArray(data?.data?.episodes)
+      ? data.data.episodes
+      : Array.isArray(data?.episodes)
+      ? data.episodes
+      : [];
+
+    if (rawEpisodes.length === 0) {
+      const fallbackEps = getCatalogSeasonEpisodes(tmdbId, seasonNum);
+      return res.json({ ...data, episodes: fallbackEps });
+    }
+
+    const enrichedEpisodes = rawEpisodes.map((ep: any) => {
+      const epNum = Number(ep?.episode_number) || 1;
+      const timing = getEpisodeTimingMetadata(tmdbId, seasonNum, epNum, 'tv');
+      if (!timing) return ep;
+      return {
+        ...ep,
+        introStart: ep.introStart ?? timing.introStart,
+        introEnd: ep.introEnd ?? timing.introEnd,
+        outroStart: ep.outroStart ?? timing.outroStart,
+        outroEnd: ep.outroEnd ?? timing.outroEnd,
+        nextEpisodeTriggerTime:
+          ep.nextEpisodeTriggerTime !== undefined
+            ? ep.nextEpisodeTriggerTime
+            : timing.nextEpisodeTriggerTime,
+        nextEpisodeId:
+          ep.nextEpisodeId !== undefined ? ep.nextEpisodeId : timing.nextEpisodeId,
+      };
+    });
+
+    if (data?.data?.episodes) {
+      return res.json({
+        ...data,
+        data: { ...data.data, episodes: enrichedEpisodes },
+      });
+    }
+    return res.json({ ...data, episodes: enrichedEpisodes });
   } catch {
-    return res.json({ episodes: [] });
+    const fallbackEps = getCatalogSeasonEpisodes(tmdbId, seasonNum);
+    return res.json({ episodes: fallbackEps });
   }
 });
 
@@ -565,22 +709,39 @@ apiRouter.get('/stream/mpd-audio', async (req, res) => {
   }
 
   try {
-    const upstream = await fetch(targetUrl, {
-      headers: {
-        'User-Agent': COMMON_HEADERS['User-Agent'],
-        Referer: 'https://zxcstream.cc/',
-        Origin: 'https://zxcstream.cc',
-      },
-    });
-    if (!upstream.ok) {
-      return res.status(upstream.status).send('Failed to fetch upstream MPD');
+    let mpdText = '';
+    const cached = mpdManifestCache.get(targetUrl);
+    if (cached && cached.expiresAt > Date.now()) {
+      mpdText = cached.xml;
+    } else {
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const upstream = await fetch(targetUrl, {
+          headers: {
+            'User-Agent': COMMON_HEADERS['User-Agent'],
+            Referer: 'https://zxcstream.cc/',
+            Origin: 'https://zxcstream.cc',
+          },
+        });
+        if (upstream.ok) {
+          mpdText = await upstream.text();
+          if (mpdText.includes('<MPD')) {
+            cacheMpdXml(targetUrl, mpdText);
+            break;
+          }
+        }
+        if (attempt === 0) {
+          await new Promise((r) => setTimeout(r, 200));
+        }
+      }
     }
-    const mpdText = await upstream.text();
-    const audioOnlyMpd = mpdText.replace(
-      /<AdaptationSet[^>]*contentType="video"[\s\S]*?<\/AdaptationSet>/g,
-      ''
-    );
+
+    if (!mpdText || !mpdText.includes('<MPD')) {
+      return res.status(502).send('Failed to fetch valid upstream MPD');
+    }
+
+    const audioOnlyMpd = stripVideoFromMpd(mpdText);
     res.setHeader('Content-Type', 'application/dash+xml');
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
     res.setHeader('Access-Control-Allow-Origin', '*');
     return res.send(audioOnlyMpd);
   } catch (err: any) {
@@ -599,9 +760,487 @@ apiRouter.get('/embed/sentinel', (req, res) => {
   return res.json({ embed: path });
 });
 
-// Intro Outro Skip timestamps endpoint
-apiRouter.get('/intro', (_req, res) => {
-  return res.json({});
+// In-memory cache for TheIntroDB v4 and upstream responses
+interface TheIntroDbSegmentResult {
+  introStart: number | null;
+  introEnd: number | null;
+  recapStart: number | null;
+  recapEnd: number | null;
+  outroStart: number | null;
+  outroEnd: number | null;
+  tvdbId: number | null;
+  durationMs: number | null;
+  fetchedAt: number;
+}
+
+const theIntroDbCache = new Map<string, TheIntroDbSegmentResult>();
+const upstreamIntroCache = new Map<
+  string,
+  {
+    introStart: number | null;
+    introEnd: number | null;
+    outroStart: number | null;
+    outroEnd: number | null;
+    fetchedAt: number;
+  }
+>();
+
+const manualEpisodeTimingOverrides = new Map<
+  string,
+  {
+    introStart: number | null;
+    introEnd: number | null;
+    recapStart?: number | null;
+    recapEnd?: number | null;
+    outroStart: number | null;
+    outroEnd: number | null;
+    nextEpisodeTriggerTime: number | null;
+  }
+>();
+
+/**
+ * Queries TheIntroDB official v4 media API (https://api.theintrodb.org/v4/media)
+ * Returns community-verified intro, recap, and credits timestamps.
+ */
+async function queryTheIntroDb(params: {
+  mediaType: 'movie' | 'tv';
+  tvdbId?: number | null;
+  tmdbId?: string | number | null;
+  imdbId?: string | null;
+  season?: number;
+  episode?: number;
+  durationMs?: number;
+}): Promise<TheIntroDbSegmentResult | null> {
+  const query = new URLSearchParams();
+  if (params.tvdbId != null && params.tvdbId > 0) {
+    query.set('tvdb_id', String(params.tvdbId));
+  } else if (params.tmdbId != null && String(params.tmdbId).trim() !== '') {
+    query.set('tmdb_id', String(params.tmdbId).trim());
+  } else if (params.imdbId != null && String(params.imdbId).trim() !== '') {
+    query.set('imdb_id', String(params.imdbId).trim());
+  } else {
+    return null;
+  }
+
+  if (params.mediaType === 'tv') {
+    if (params.season != null) query.set('season', String(params.season));
+    if (params.episode != null) query.set('episode', String(params.episode));
+  }
+
+  const durationMs =
+    params.durationMs && params.durationMs >= 300000 ? params.durationMs : undefined;
+  if (durationMs) {
+    query.set('duration_ms', String(durationMs));
+    query.set('merge_unknown', 'true');
+  }
+
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 4500);
+    const apiUrl = `https://api.theintrodb.org/v4/media?${query.toString()}`;
+
+    const res = await fetch(apiUrl, {
+      headers: {
+        Accept: 'application/json',
+        'User-Agent': 'ZXCStream-TheIntroDB-Integration/1.0',
+      },
+      signal: controller.signal,
+    });
+    clearTimeout(timer);
+
+    if (!res.ok) {
+      return null;
+    }
+
+    const data = await res.json();
+    if (!data || typeof data !== 'object') return null;
+
+    // 1. Intro segment (start_ms: null means 0)
+    let introStart: number | null = null;
+    let introEnd: number | null = null;
+    if (Array.isArray(data.intro) && data.intro.length > 0) {
+      const seg = data.intro[0];
+      const norm = normalizeIntervalSeconds({
+        startMs: seg?.start_ms ?? null,
+        endMs: seg?.end_ms ?? null,
+        allowStartNullAsZero: true,
+      });
+      introStart = norm.start;
+      introEnd = norm.end;
+    }
+
+    // 2. Recap segment
+    let recapStart: number | null = null;
+    let recapEnd: number | null = null;
+    if (Array.isArray(data.recap) && data.recap.length > 0) {
+      const seg = data.recap[0];
+      const norm = normalizeIntervalSeconds({
+        startMs: seg?.start_ms ?? null,
+        endMs: seg?.end_ms ?? null,
+        allowStartNullAsZero: true,
+      });
+      recapStart = norm.start;
+      recapEnd = norm.end;
+    }
+
+    // 3. Credits / Outro segment (end_ms: null means continues to media end)
+    let outroStart: number | null = null;
+    let outroEnd: number | null = null;
+    if (Array.isArray(data.credits) && data.credits.length > 0) {
+      const seg = data.credits[0];
+      const norm = normalizeIntervalSeconds({
+        startMs: seg?.start_ms ?? null,
+        endMs: seg?.end_ms ?? null,
+        allowStartNullAsZero: true,
+      });
+      outroStart = norm.start;
+      outroEnd = norm.end ?? (durationMs ? Number((durationMs / 1000).toFixed(3)) : null);
+    }
+
+    if (introStart !== null || recapStart !== null || outroStart !== null) {
+      return {
+        introStart,
+        introEnd,
+        recapStart,
+        recapEnd,
+        outroStart,
+        outroEnd,
+        tvdbId: data.tvdb_id ?? params.tvdbId ?? null,
+        durationMs: durationMs ?? null,
+        fetchedAt: Date.now(),
+      };
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+// Owner/Admin endpoint to configure or override exact episode timestamps deterministically
+apiRouter.post('/intro', (req, res) => {
+  const tmdbId = String(req.body?.tmdbId || '').trim();
+  const season = Number(req.body?.season) || 1;
+  const episode = Number(req.body?.episode) || 1;
+  if (!tmdbId || season < 1 || episode < 1) {
+    return res.status(400).json({ error: 'Valid tmdbId, season, and episode are required' });
+  }
+  const episodeKey = `${tmdbId}:${season}:${episode}`;
+  const introNorm = normalizeIntervalSeconds({
+    startSec: req.body?.introStart ?? req.body?.intro?.start_sec ?? null,
+    endSec: req.body?.introEnd ?? req.body?.intro?.end_sec ?? null,
+    startMs: req.body?.intro?.start_ms ?? null,
+    endMs: req.body?.intro?.end_ms ?? null,
+  });
+  const recapNorm = normalizeIntervalSeconds({
+    startSec: req.body?.recapStart ?? req.body?.recap?.start_sec ?? null,
+    endSec: req.body?.recapEnd ?? req.body?.recap?.end_sec ?? null,
+    startMs: req.body?.recap?.start_ms ?? null,
+    endMs: req.body?.recap?.end_ms ?? null,
+  });
+  const outroNorm = normalizeIntervalSeconds({
+    startSec: req.body?.outroStart ?? req.body?.outro?.start_sec ?? null,
+    endSec: req.body?.outroEnd ?? req.body?.outro?.end_sec ?? null,
+    startMs: req.body?.outro?.start_ms ?? null,
+    endMs: req.body?.outro?.end_ms ?? null,
+  });
+  const triggerRaw = req.body?.nextEpisodeTriggerTime;
+  const nextEpisodeTriggerTime =
+    triggerRaw !== null && triggerRaw !== undefined && Number.isFinite(Number(triggerRaw))
+      ? Number(triggerRaw)
+      : null;
+
+  const entry = {
+    introStart: introNorm.start,
+    introEnd: introNorm.end,
+    recapStart: recapNorm.start,
+    recapEnd: recapNorm.end,
+    outroStart: outroNorm.start,
+    outroEnd: outroNorm.end,
+    nextEpisodeTriggerTime,
+  };
+  manualEpisodeTimingOverrides.set(episodeKey, entry);
+  return res.json({ episodeKey, tmdbId, season, episode, ...entry, source: 'manual' });
+});
+
+// Intro & Outro Skip timestamps endpoint (TheIntroDB v4 API + upstream /backend/intro + verified catalog fallback)
+apiRouter.get('/intro', async (req, res) => {
+  const tmdbId = String(req.query.tmdbId || '').trim();
+  const mediaType = (String(req.query.mediaType || 'tv').trim() === 'movie' ? 'movie' : 'tv') as
+    | 'movie'
+    | 'tv';
+  const season = Number(req.query.season) || 1;
+  const episode = Number(req.query.episode) || 1;
+
+  if (!tmdbId || (mediaType === 'tv' && (season < 1 || episode < 1))) {
+    return res.json({});
+  }
+
+  const episodeKey = mediaType === 'tv' ? `${tmdbId}:${season}:${episode}` : `movie:${tmdbId}`;
+  const durationMsRaw = Number(req.query.durationMs);
+  const durationSecRaw = Number(req.query.durationSec);
+  const durationMs =
+    Number.isFinite(durationMsRaw) && durationMsRaw > 0
+      ? durationMsRaw
+      : Number.isFinite(durationSecRaw) && durationSecRaw > 0
+      ? Math.round(durationSecRaw * 1000)
+      : 0;
+
+  const fallbackTiming =
+    mediaType === 'tv' ? getEpisodeTimingMetadata(tmdbId, season, episode, mediaType) : null;
+
+  // 1. Check manual owner/admin override first
+  const manualOverride = manualEpisodeTimingOverrides.get(episodeKey);
+  if (manualOverride) {
+    return res.json({
+      episodeKey,
+      tmdbId,
+      season,
+      episode,
+      introStart: manualOverride.introStart,
+      introEnd: manualOverride.introEnd,
+      recapStart: manualOverride.recapStart ?? null,
+      recapEnd: manualOverride.recapEnd ?? null,
+      outroStart: manualOverride.outroStart,
+      outroEnd: manualOverride.outroEnd,
+      nextEpisodeTriggerTime:
+        manualOverride.nextEpisodeTriggerTime ??
+        (fallbackTiming?.nextEpisodeId === null ? null : manualOverride.outroEnd),
+      nextEpisodeId: fallbackTiming?.nextEpisodeId ?? null,
+      intro:
+        manualOverride.introStart !== null && manualOverride.introEnd !== null
+          ? { start_sec: manualOverride.introStart, end_sec: manualOverride.introEnd }
+          : null,
+      recap:
+        manualOverride.recapStart !== null && manualOverride.recapEnd !== null
+          ? { start_sec: manualOverride.recapStart, end_sec: manualOverride.recapEnd }
+          : null,
+      credits:
+        manualOverride.outroStart !== null && manualOverride.outroEnd !== null
+          ? { start_sec: manualOverride.outroStart, end_sec: manualOverride.outroEnd }
+          : null,
+      outro:
+        manualOverride.outroStart !== null && manualOverride.outroEnd !== null
+          ? { start_sec: manualOverride.outroStart, end_sec: manualOverride.outroEnd }
+          : null,
+      source: 'manual',
+    });
+  }
+
+  // 2. Resolve TVDB ID and IMDb ID for TheIntroDB
+  let tvdbId =
+    Number(req.query.tvdbId) ||
+    getSeriesTvdbId(tmdbId) ||
+    null;
+
+  let imdbId =
+    String(req.query.imdbId || '').trim() ||
+    tmdbImdbCache.get(tmdbId) ||
+    getSeriesImdbId(tmdbId) ||
+    '';
+
+  if (!tvdbId || !imdbId) {
+    try {
+      const details = await fetchTmdbDetailsWithFallback(mediaType, tmdbId);
+      if (details) {
+        if (!imdbId && details.imdb_id) {
+          imdbId = String(details.imdb_id).trim();
+          tmdbImdbCache.set(tmdbId, imdbId);
+        }
+        if (!tvdbId && (details.tvdb_id || details.external_ids?.tvdb_id)) {
+          tvdbId = Number(details.tvdb_id || details.external_ids?.tvdb_id);
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  // 3. Check TheIntroDB cache (cluster key by duration in 30s buckets so minor drift reuses cache)
+  const durationCluster = durationMs ? Math.round(durationMs / 30000) * 30000 : 0;
+  const cacheKey = `${episodeKey}:${durationCluster}`;
+  let theIntroDbEntry = theIntroDbCache.get(cacheKey) || null;
+  if (theIntroDbEntry && Date.now() - theIntroDbEntry.fetchedAt > 60 * 60 * 1000) {
+    theIntroDbEntry = null;
+  }
+
+  // 4. Query TheIntroDB official v4 media API if not cached
+  if (!theIntroDbEntry) {
+    theIntroDbEntry = await queryTheIntroDb({
+      mediaType,
+      tvdbId,
+      tmdbId,
+      imdbId,
+      season,
+      episode,
+      durationMs,
+    });
+    if (theIntroDbEntry) {
+      theIntroDbCache.set(cacheKey, theIntroDbEntry);
+    }
+  }
+
+  // 5. Query upstream /backend/intro if TheIntroDB has no records and mediaType is TV
+  let upstreamEntry = upstreamIntroCache.get(episodeKey) || null;
+  if (upstreamEntry && Date.now() - upstreamEntry.fetchedAt > 30 * 60 * 1000) {
+    upstreamEntry = null;
+  }
+
+  if (!theIntroDbEntry && !upstreamEntry && mediaType === 'tv' && imdbId) {
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 4500);
+      const upstreamUrl = `https://zxcstream.cc/backend/intro?imdbId=${encodeURIComponent(
+        imdbId
+      )}&season=${encodeURIComponent(String(season))}&episode=${encodeURIComponent(
+        String(episode)
+      )}&tmdbId=${encodeURIComponent(tmdbId)}`;
+
+      const upstreamRes = await fetch(upstreamUrl, {
+        headers: {
+          ...COMMON_HEADERS,
+          Referer: `https://zxcstream.cc/player/tv/${tmdbId}/${season}/${episode}`,
+        },
+        signal: controller.signal,
+      });
+      clearTimeout(timer);
+
+      if (upstreamRes.ok) {
+        const rawData = await upstreamRes.json();
+        const matchesEpisode =
+          (rawData?.season === undefined || Number(rawData.season) === season) &&
+          (rawData?.episode === undefined || Number(rawData.episode) === episode);
+
+        if (matchesEpisode && rawData && (rawData.intro || rawData.outro)) {
+          const normIntro = normalizeIntervalSeconds({
+            startSec: rawData.intro?.start_sec ?? null,
+            endSec: rawData.intro?.end_sec ?? null,
+            startMs: rawData.intro?.start_ms ?? null,
+            endMs: rawData.intro?.end_ms ?? null,
+          });
+          const normOutro = normalizeIntervalSeconds({
+            startSec: rawData.outro?.start_sec ?? null,
+            endSec: rawData.outro?.end_sec ?? null,
+            startMs: rawData.outro?.start_ms ?? null,
+            endMs: rawData.outro?.end_ms ?? null,
+          });
+
+          let introStart = normIntro.start;
+          let introEnd = normIntro.end;
+          let outroStart = normOutro.start;
+          let outroEnd = normOutro.end;
+
+          if (
+            introStart !== null &&
+            introEnd !== null &&
+            outroStart !== null &&
+            outroEnd !== null &&
+            outroEnd <= introStart &&
+            introStart >= 900
+          ) {
+            outroStart = introStart;
+            outroEnd = introEnd;
+            introStart = null;
+            introEnd = null;
+          }
+
+          upstreamEntry = {
+            introStart,
+            introEnd,
+            outroStart,
+            outroEnd,
+            fetchedAt: Date.now(),
+          };
+          upstreamIntroCache.set(episodeKey, upstreamEntry);
+        }
+      }
+    } catch {
+      // Fallback below
+    }
+  }
+
+  // 6. Gracefully merge TheIntroDB with upstream and verified catalog timing
+  const resolvedSource = theIntroDbEntry
+    ? 'theintrodb'
+    : upstreamEntry
+    ? 'upstream'
+    : fallbackTiming
+    ? 'catalog'
+    : 'none';
+
+  const finalIntroStart =
+    theIntroDbEntry?.introStart ?? upstreamEntry?.introStart ?? fallbackTiming?.introStart ?? null;
+  const finalIntroEnd =
+    theIntroDbEntry?.introEnd ?? upstreamEntry?.introEnd ?? fallbackTiming?.introEnd ?? null;
+
+  const finalRecapStart = theIntroDbEntry?.recapStart ?? null;
+  const finalRecapEnd = theIntroDbEntry?.recapEnd ?? null;
+
+  const finalOutroStart =
+    theIntroDbEntry?.outroStart ?? upstreamEntry?.outroStart ?? fallbackTiming?.outroStart ?? null;
+  const finalOutroEnd =
+    theIntroDbEntry?.outroEnd ?? upstreamEntry?.outroEnd ?? fallbackTiming?.outroEnd ?? null;
+
+  const isSeriesFinale = fallbackTiming?.nextEpisodeId === null;
+  // Trigger Next Episode when the scene finishes and outro begins
+  const resolvedTrigger =
+    isSeriesFinale || mediaType !== 'tv'
+      ? null
+      : (finalOutroStart ?? finalOutroEnd ?? fallbackTiming?.nextEpisodeTriggerTime ?? null);
+
+  return res.json({
+    episodeKey,
+    mediaType,
+    tmdbId,
+    tvdbId: tvdbId ?? theIntroDbEntry?.tvdbId ?? null,
+    season: mediaType === 'tv' ? season : undefined,
+    episode: mediaType === 'tv' ? episode : undefined,
+    durationMs: durationMs || undefined,
+    introStart: finalIntroStart,
+    introEnd: finalIntroEnd,
+    recapStart: finalRecapStart,
+    recapEnd: finalRecapEnd,
+    outroStart: finalOutroStart,
+    outroEnd: finalOutroEnd,
+    nextEpisodeTriggerTime: resolvedTrigger,
+    nextEpisodeId: fallbackTiming?.nextEpisodeId ?? null,
+    intro:
+      finalIntroStart !== null && finalIntroEnd !== null
+        ? {
+            start_sec: finalIntroStart,
+            end_sec: finalIntroEnd,
+            start_ms: Math.round(finalIntroStart * 1000),
+            end_ms: Math.round(finalIntroEnd * 1000),
+          }
+        : null,
+    recap:
+      finalRecapStart !== null && finalRecapEnd !== null
+        ? {
+            start_sec: finalRecapStart,
+            end_sec: finalRecapEnd,
+            start_ms: Math.round(finalRecapStart * 1000),
+            end_ms: Math.round(finalRecapEnd * 1000),
+          }
+        : null,
+    credits:
+      finalOutroStart !== null && finalOutroEnd !== null
+        ? {
+            start_sec: finalOutroStart,
+            end_sec: finalOutroEnd,
+            start_ms: Math.round(finalOutroStart * 1000),
+            end_ms: Math.round(finalOutroEnd * 1000),
+          }
+        : null,
+    outro:
+      finalOutroStart !== null && finalOutroEnd !== null
+        ? {
+            start_sec: finalOutroStart,
+            end_sec: finalOutroEnd,
+            start_ms: Math.round(finalOutroStart * 1000),
+            end_ms: Math.round(finalOutroEnd * 1000),
+          }
+        : null,
+    source: resolvedSource,
+  });
 });
 
 // Mount on /api, /api/index, and also root / so any routing setup (Vercel rewrite, direct path, etc.) succeeds!
