@@ -6,14 +6,27 @@ import {
   getEpisodeTimingMetadata,
   getSeriesImdbId,
   getSeriesTvdbId,
+  getMediaByTmdbId,
 } from './src/data/tmdbCatalog';
-import { normalizeIntervalSeconds } from './src/utils/urlBuilder';
+import { normalizeIntervalSeconds, MediaType } from './src/utils/urlBuilder';
 
 const app = express();
 
 // Enable CORS for all origins (especially useful for Vercel deployments and custom domains)
 app.use(cors({ origin: true, credentials: true }));
 app.use(express.json());
+
+// Normalize Vercel rewritten paths so /api routes work seamlessly on Vercel deployments
+app.use((req, _res, next) => {
+  const matchedPath = req.headers['x-matched-path'] as string | undefined;
+  const originalUri = (req.headers['x-forwarded-uri'] || req.headers['x-original-uri']) as string | undefined;
+  if (matchedPath && matchedPath.startsWith('/api')) {
+    req.url = matchedPath;
+  } else if (originalUri && originalUri.startsWith('/api')) {
+    req.url = originalUri;
+  }
+  next();
+});
 
 const FIELD_MAP: Record<string, string> = {
   id: 'a7f39c821d604e5b91e547b',
@@ -346,15 +359,59 @@ apiRouter.get('/stream/status', (_req, res) => {
 const handleTmdbDetails = async (req: express.Request, res: express.Response) => {
   const { mediaType, tmdbId } = req.params;
   const language = (req.query.language as string) || 'en-US';
+  const cleanId = String(tmdbId || '').trim();
+  const safeMediaType: MediaType = mediaType === 'tv' ? 'tv' : 'movie';
 
   try {
-    const data = await fetchTmdbDetailsWithFallback(mediaType, tmdbId, language);
-    if (!data) {
-      return res.status(404).json({ error: 'TMDB Details not found' });
+    const data = await fetchTmdbDetailsWithFallback(mediaType, cleanId, language);
+    if (data && (data.title || data.name || data.id)) {
+      return res.json(data);
     }
-    return res.json(data);
+
+    // Graceful fallback: retrieve catalog metadata or synthetic entry so valid IDs never 404
+    const fallback = getMediaByTmdbId(safeMediaType, cleanId);
+    return res.json({
+      id: Number(cleanId.replace(/\D/g, '')) || Number(fallback.tmdbId) || 128,
+      title: fallback.title,
+      name: fallback.title,
+      overview: fallback.overview,
+      tagline: fallback.tagline,
+      poster_path: fallback.posterUrl ? fallback.posterUrl.replace('https://image.tmdb.org/t/p/w500', '') : null,
+      backdrop_path: fallback.backdropUrl ? fallback.backdropUrl.replace('https://image.tmdb.org/t/p/original', '') : null,
+      backdrop_paths: fallback.backdropUrl ? [fallback.backdropUrl] : [],
+      logo_paths: fallback.logoUrl ? [fallback.logoUrl] : [],
+      genres: fallback.genres.map((g, i) => ({ id: i + 1, name: g })),
+      rating: fallback.voteAverage,
+      vote_average: fallback.voteAverage,
+      runtime: fallback.runtimeMinutes,
+      status: fallback.status,
+      release_date: `${fallback.releaseYear}-01-01`,
+      first_air_date: `${fallback.releaseYear}-01-01`,
+      imdb_id: getSeriesImdbId(cleanId) || null,
+      seasons: fallback.seasons?.map((s) => ({
+        season_number: s.seasonNumber,
+        episode_count: s.episodeCount,
+        name: s.name,
+      })) || [],
+      cast: fallback.cast?.map((c) => ({
+        id: c.id,
+        name: c.name,
+        character: c.character,
+        profile_path: c.profileUrl?.replace('https://image.tmdb.org/t/p/w300', ''),
+      })) || [],
+      resolvedMediaType: safeMediaType,
+      fallback: true,
+    });
   } catch (err: any) {
-    return res.status(500).json({ error: err.message || 'Internal server error' });
+    const fallback = getMediaByTmdbId(safeMediaType, cleanId);
+    return res.json({
+      id: Number(cleanId.replace(/\D/g, '')) || 128,
+      title: fallback.title,
+      name: fallback.title,
+      overview: fallback.overview,
+      resolvedMediaType: safeMediaType,
+      fallback: true,
+    });
   }
 };
 

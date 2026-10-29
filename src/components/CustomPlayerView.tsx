@@ -35,7 +35,7 @@ import {
   resolveNextEpisode,
   shouldSyncDubAudioTime,
 } from '../utils/urlBuilder';
-import { getEpisodeTimingMetadata } from '../data/tmdbCatalog';
+import { getEpisodeTimingMetadata, getMediaByTmdbId, getSeriesImdbId } from '../data/tmdbCatalog';
 
 // Exact custom SVGs extracted from zxcstream.cc chunk 00uxoksvhj._d.js
 const BackSvg = () => (
@@ -701,9 +701,29 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
           seasons,
         });
       })
-      .catch((err) => {
+      .catch((_err) => {
         if (cancelled) return;
-        setMetadataError(err instanceof Error ? err.message : 'Failed to load TMDB metadata');
+        const fallback = getMediaByTmdbId(initialMediaType, cleanId);
+        const seasons: TmdbSeasonSummary[] = (fallback.seasons || []).map((s) => ({
+          season_number: s.seasonNumber,
+          episode_count: s.episodeCount,
+          name: s.name,
+        }));
+        setMetadata({
+          id: Number(cleanId.replace(/\D/g, '')) || Number(fallback.tmdbId) || 128,
+          mediaType: initialMediaType,
+          title: fallback.title,
+          year: fallback.releaseYear,
+          releaseDate: `${fallback.releaseYear}-01-01`,
+          lastAirDate: '',
+          imdbId: getSeriesImdbId(cleanId) || '',
+          backdropPaths: fallback.backdropUrl ? [fallback.backdropUrl] : [],
+          logoPaths: fallback.logoUrl ? [fallback.logoUrl] : [],
+          genres: fallback.genres,
+          status: fallback.status,
+          seasons,
+        });
+        setMetadataError(null);
       });
 
     return () => {

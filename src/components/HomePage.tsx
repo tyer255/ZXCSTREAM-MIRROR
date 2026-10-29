@@ -49,6 +49,27 @@ export const HomePage: React.FC<HomePageProps> = ({
   const [copied, setCopied] = useState<boolean>(false);
   const [copiedIframe, setCopiedIframe] = useState<boolean>(false);
 
+  const handleTmdbIdChange = (raw: string) => {
+    let val = raw.trim();
+    if (val.includes('themoviedb.org/tv/') || val.includes('/tv/')) {
+      setMediaType('tv');
+    } else if (val.includes('themoviedb.org/movie/') || val.includes('/movie/')) {
+      setMediaType('movie');
+    }
+    const tmdbMatch = val.match(/(?:movie|tv)\/(\d+)/i);
+    if (tmdbMatch) {
+      val = tmdbMatch[1];
+    } else {
+      const imdbMatch = val.match(/(tt\d+)/i);
+      if (imdbMatch) {
+        val = imdbMatch[1];
+      } else {
+        val = val.replace(/^[#\s]+/, '');
+      }
+    }
+    setTmdbId(val);
+  };
+
   const currentOrigin = getDefaultOrigin();
 
   const generatedUrl = buildPlayerUrl({
@@ -282,7 +303,7 @@ export const HomePage: React.FC<HomePageProps> = ({
                   aria-label="TMDB ID"
                   data-testid="tmdb-id-input"
                   value={tmdbId}
-                  onChange={(e) => setTmdbId(e.target.value)}
+                  onChange={(e) => handleTmdbIdChange(e.target.value)}
                   className="h-9 w-full max-w-xs rounded-md border border-zinc-700 bg-zinc-800/80 px-3 py-1 text-center text-sm text-zinc-50 placeholder:text-zinc-400 shadow-xs outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/30 transition"
                 />
               ) : (
@@ -293,7 +314,7 @@ export const HomePage: React.FC<HomePageProps> = ({
                     aria-label="TMDB ID"
                     data-testid="tmdb-id-input"
                     value={tmdbId}
-                    onChange={(e) => setTmdbId(e.target.value)}
+                    onChange={(e) => handleTmdbIdChange(e.target.value)}
                     className="h-9 w-full rounded-md border border-zinc-700 bg-zinc-800/80 px-3 py-1 text-center text-sm text-zinc-50 placeholder:text-zinc-400 shadow-xs outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/30 transition"
                   />
                   <input
