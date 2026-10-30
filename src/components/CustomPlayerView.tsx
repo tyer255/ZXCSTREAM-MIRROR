@@ -1,366 +1,40 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import Hls from 'hls.js';
 import * as dashjs from 'dashjs';
+import { Loader, RotateCcw, RotateCw } from 'lucide-react';
 import {
-  Check,
-  ChevronLeft,
-  ChevronRight,
-  FastForward,
-  Loader,
-  LoaderCircle,
-  Minus,
-  Play,
-  RotateCcw,
-  RotateCw,
-  Search,
-  SkipForward,
-  Volume1,
-  Volume2,
-  X,
-} from 'lucide-react';
-import {
-  DUB_LANGUAGES,
   EpisodeTimingMetadata,
   MediaType,
   PLAYER_HINTS,
   PLAYER_SERVERS,
-  PlayerMode,
   RawOrionDub,
   evaluatePlaybackSkipState,
   filterAudioDubTracks,
-  formatPlayerTime,
   parsePlayerQueryParams,
   resolveEffectiveDubSelection,
   resolveEpisodeTiming,
   resolveNextEpisode,
   shouldSyncDubAudioTime,
-} from '../utils/urlBuilder';
-import { getEpisodeTimingMetadata, getMediaByTmdbId, getSeriesImdbId } from '../data/tmdbCatalog';
+} from '../utils/urlBuilder.js';
+import { getEpisodeTimingMetadata, getMediaByTmdbId, getSeriesImdbId } from '../data/tmdbCatalog.js';
+import {
+  CustomPlayerViewProps,
+  EpisodeItem,
+  PlayerEpisodeDrawer,
+  PlayerLoadingScreen,
+  PlayerServerCarousel,
+  PlayerSubtitleSettingsModal,
+  ServerItemState,
+  ServerProbeStatus,
+  SubtitleTrack,
+  TailspinLoader,
+  TmdbMetadata,
+  TmdbSeasonSummary,
+  canPlayHevcInBrowser,
+} from './PlayerIconsAndTypes.js';
+import { PlayerControlsOverlay, SmartPlaybackControls } from './PlayerControlsOverlay.js';
 
-// Exact custom SVGs extracted from zxcstream.cc chunk 00uxoksvhj._d.js
-const BackSvg = () => (
-  <svg width="32" height="32" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-    <path
-      d="M15 6L9 12L15 18"
-      stroke="white"
-      strokeWidth="3"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    />
-  </svg>
-);
-
-const FullscreenEnterSvg = () => (
-  <svg width="32" height="32" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-    <path
-      d="M4 9V6C4 4.89543 4.89543 4 6 4H9"
-      stroke="white"
-      strokeWidth="2.4"
-      strokeLinecap="round"
-    />
-    <path
-      d="M20 9V6C20 4.89543 19.1046 4 18 4H15"
-      stroke="white"
-      strokeWidth="2.4"
-      strokeLinecap="round"
-    />
-    <path
-      d="M4 15V18C4 19.1046 4.89543 20 6 20H9"
-      stroke="white"
-      strokeWidth="2.4"
-      strokeLinecap="round"
-    />
-    <path
-      d="M20 15V18C20 19.1046 19.1046 20 18 20H15"
-      stroke="white"
-      strokeWidth="2.4"
-      strokeLinecap="round"
-    />
-  </svg>
-);
-
-const FullscreenExitSvg = () => (
-  <svg width="32" height="32" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-    <path
-      d="M9 4V7C9 8.10457 8.10457 9 7 9H4"
-      stroke="white"
-      strokeWidth="2.4"
-      strokeLinecap="round"
-    />
-    <path
-      d="M15 4V7C15 8.10457 15.8954 9 17 9H20"
-      stroke="white"
-      strokeWidth="2.4"
-      strokeLinecap="round"
-    />
-    <path
-      d="M9 20V17C9 15.8954 8.10457 15 7 15H4"
-      stroke="white"
-      strokeWidth="2.4"
-      strokeLinecap="round"
-    />
-    <path
-      d="M15 20V17C15 15.8954 15.8954 15 17 15H20"
-      stroke="white"
-      strokeWidth="2.4"
-      strokeLinecap="round"
-    />
-  </svg>
-);
-
-const PlaySvg = () => (
-  <svg width="32" height="32" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-    <path
-      d="M7 5.5V18.5C7 19.6 8.2 20.3 9.2 19.7L19 13.2C19.9 12.6 19.9 11.4 19 10.8L9.2 4.3C8.2 3.7 7 4.4 7 5.5Z"
-      fill="white"
-    />
-  </svg>
-);
-
-const PauseSvg = () => (
-  <svg width="32" height="32" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-    <rect x="6" y="4" width="4" height="16" rx="1.8" fill="white" />
-    <rect x="14" y="4" width="4" height="16" rx="1.8" fill="white" />
-  </svg>
-);
-
-const VolumeMutedSvg = () => (
-  <svg width="32" height="32" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-    <path
-      d="M5 9V15H9L14 19V5L9 9H5Z"
-      stroke="white"
-      strokeWidth="2.2"
-      strokeLinejoin="round"
-    />
-    <path d="M17 9L21 15" stroke="white" strokeWidth="2.2" strokeLinecap="round" />
-    <path d="M21 9L17 15" stroke="white" strokeWidth="2.2" strokeLinecap="round" />
-  </svg>
-);
-
-const VolumeHighSvg = () => (
-  <svg width="32" height="32" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-    <path
-      d="M5 9V15H9L14 19V5L9 9H5Z"
-      stroke="white"
-      strokeWidth="2.2"
-      strokeLinejoin="round"
-    />
-    <path
-      d="M17 9C18.5 10.5 18.5 13.5 17 15"
-      stroke="white"
-      strokeWidth="2.2"
-      strokeLinecap="round"
-    />
-    <path
-      d="M19.5 6.5C22 9 22 15 19.5 17.5"
-      stroke="white"
-      strokeWidth="2.2"
-      strokeLinecap="round"
-    />
-  </svg>
-);
-
-const SettingsGearSvg = () => (
-  <svg
-    className="w-6 h-6 lg:w-7 lg:h-7"
-    viewBox="0 0 24 24"
-    fill="none"
-    xmlns="http://www.w3.org/2000/svg"
-  >
-    <circle cx="12" cy="12" r="3.2" stroke="white" strokeWidth="2.2" />
-    <path
-      d="M19.4 15A7.8 7.8 0 0 0 19.6 12A7.8 7.8 0 0 0 19.4 9L21.2 7.6C21.4 7.4 21.5 7.1 21.3 6.8L19.6 3.8C19.4 3.5 19.1 3.4 18.8 3.5L16.7 4.4A7.6 7.6 0 0 0 14.2 3L13.9 0.8C13.8 0.5 13.5 0.3 13.2 0.3H10.8C10.5 0.3 10.2 0.5 10.1 0.8L9.8 3A7.6 7.6 0 0 0 7.3 4.4L5.2 3.5C4.9 3.4 4.6 3.5 4.4 3.8L2.7 6.8C2.5 7.1 2.6 7.4 2.8 7.6L4.6 9A7.8 7.8 0 0 0 4.4 12A7.8 7.8 0 0 0 4.6 15L2.8 16.4C2.6 16.6 2.5 16.9 2.7 17.2L4.4 20.2C4.6 20.5 4.9 20.6 5.2 20.5L7.3 19.6A7.6 7.6 0 0 0 9.8 21L10.1 23.2C10.2 23.5 10.5 23.7 10.8 23.7H13.2C13.5 23.7 13.8 23.5 13.9 23.2L14.2 21A7.6 7.6 0 0 0 16.7 19.6L18.8 20.5C19.1 20.6 19.4 20.5 19.6 20.2L21.3 17.2C21.5 16.9 21.4 16.6 21.2 16.4L19.4 15Z"
-      stroke="white"
-      strokeWidth="2.2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    />
-  </svg>
-);
-
-const ServerInboxSvg = () => (
-  <svg
-    xmlns="http://www.w3.org/2000/svg"
-    width="24"
-    height="24"
-    viewBox="0 0 24 24"
-    fill="none"
-    stroke="currentColor"
-    strokeWidth="3"
-    strokeLinecap="round"
-    strokeLinejoin="round"
-    className="lucide lucide-inbox"
-    aria-hidden="true"
-  >
-    <polyline points="22 12 16 12 14 15 10 15 8 12 2 12" />
-    <path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z" />
-  </svg>
-);
-
-const EpisodesToggleSvg = () => (
-  <svg width="32" height="32" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-    <rect
-      x="3"
-      y="4"
-      width="14"
-      height="10"
-      rx="2"
-      stroke="white"
-      strokeWidth="2.2"
-      strokeLinejoin="round"
-    />
-    <path
-      d="M7 18H19C20.1 18 21 17.1 21 16V8"
-      stroke="white"
-      strokeWidth="2.2"
-      strokeLinecap="round"
-    />
-  </svg>
-);
-
-const CastConnectedSvg = () => (
-  <svg
-    xmlns="http://www.w3.org/2000/svg"
-    width="24"
-    height="24"
-    viewBox="0 0 24 24"
-    fill="none"
-    stroke="currentColor"
-    strokeWidth="2"
-    strokeLinecap="round"
-    strokeLinejoin="round"
-    className="lucide lucide-cast text-green-500 size-3.5 lg:size-4"
-    aria-hidden="true"
-  >
-    <path d="M2 8V6a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-6" />
-    <path d="M2 12a9 9 0 0 1 8 8" />
-    <path d="M2 16a5 5 0 0 1 4 4" />
-    <line x1="2" x2="2.01" y1="20" y2="20" />
-  </svg>
-);
-
-// Exact Tailspin SVG component from 00uxoksvhj._d.js
-const TailspinLoader: React.FC<{ size?: number; stroke?: number; color?: string }> = ({
-  size = 60,
-  stroke = 8,
-  color = 'white',
-}) => {
-  const r = Math.max(0, 20 - stroke * 0.5);
-  const d = `M 20 ${20 - r} A ${r} ${r} 0 0 1 ${20 + r} 20`;
-  return (
-    <div
-      className="container_2e2e0b"
-      style={{
-        '--uib-size': `${size}px`,
-        '--uib-color': color,
-        '--uib-speed': '0.9s',
-        '--uib-stroke': `${stroke}px`,
-      } as React.CSSProperties}
-    >
-      <div className="inner_010d1a" />
-      <svg height="0" width="0" className="svg_f2edf9">
-        <defs>
-          <mask id="uib-tailspin-mask" maskUnits="objectBoundingBox">
-            <svg width="40" height="40" viewBox="0 0 40 40">
-              <path
-                fill="none"
-                stroke="white"
-                strokeWidth={stroke}
-                strokeLinecap="round"
-                d={d}
-              />
-              <circle cx="20" cy="20" r="20" fill="url(#uib-tailspin-grad)" />
-            </svg>
-          </mask>
-          <radialGradient id="uib-tailspin-grad">
-            <stop offset="0%" stopColor="white" />
-            <stop offset="100%" stopColor="black" />
-          </radialGradient>
-        </defs>
-      </svg>
-    </div>
-  );
-};
-
-export interface CustomPlayerViewProps {
-  playerMode: PlayerMode;
-  mediaType: MediaType;
-  tmdbId: string;
-  season: number;
-  episode: number;
-  dubLang?: string;
-  initialServer?: number;
-  accentColor?: string;
-  autoplay?: boolean;
-  showBackButton?: boolean;
-  isStandalonePage?: boolean;
-  onBack?: () => void;
-  onEpisodeChange?: (season: number, episode: number) => void;
-  onMediaTypeResolved?: (resolvedType: MediaType) => void;
-}
-
-type ServerProbeStatus = 'queue' | 'checking' | 'connecting' | 'available' | 'failed';
-
-interface ServerItemState {
-  index: number;
-  code: string;
-  name: string;
-  status: ServerProbeStatus;
-}
-
-interface TmdbSeasonSummary {
-  season_number: number;
-  episode_count: number;
-  name?: string;
-}
-
-interface TmdbMetadata {
-  id: number;
-  mediaType: MediaType;
-  title: string;
-  year: string;
-  releaseDate: string;
-  lastAirDate: string;
-  imdbId: string;
-  backdropPaths: string[];
-  logoPaths: string[];
-  genres: string[];
-  status: string;
-  seasons: TmdbSeasonSummary[];
-}
-
-interface EpisodeItem {
-  id: number;
-  episode_number: number;
-  name: string;
-  overview: string;
-  still_path: string | null;
-  runtime?: number | null;
-  introStart?: number | null;
-  introEnd?: number | null;
-  outroStart?: number | null;
-  outroEnd?: number | null;
-  nextEpisodeTriggerTime?: number | null;
-  nextEpisodeId?: string | null;
-}
-
-interface SubtitleTrack {
-  language: string;
-  url: string;
-  flagUrl?: string;
-}
-
-function canPlayHevcInBrowser(): boolean {
-  if (typeof window === 'undefined' || typeof MediaSource === 'undefined') return false;
-  try {
-    return (
-      MediaSource.isTypeSupported('video/mp4; codecs="hev1.1.6.L120.90"') ||
-      MediaSource.isTypeSupported('video/mp4; codecs="hvc1.1.6.L120.90"')
-    );
-  } catch {
-    return false;
-  }
-}
+export type { CustomPlayerViewProps };
 
 export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
   playerMode,
@@ -575,6 +249,7 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
   const dubRequestIdRef = useRef<number>(0);
   const lastDriftSyncTimeRef = useRef<number>(0);
   const dubFallbackTimerRef = useRef<number | null>(null);
+  const connectWatchdogTimerRef = useRef<number | null>(null);
 
   const showDubFallbackBanner = useCallback((message: string) => {
     setDubFallbackNotice(message);
@@ -606,6 +281,10 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
   }, []);
 
   const cleanupMediaEngines = useCallback(() => {
+    if (connectWatchdogTimerRef.current) {
+      window.clearTimeout(connectWatchdogTimerRef.current);
+      connectWatchdogTimerRef.current = null;
+    }
     cleanupDubAudioEngine();
     if (hlsRef.current) {
       try {
@@ -1019,6 +698,14 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
         const videoEl = videoRef.current;
         if (!videoEl) return;
 
+        // Guard against stalled edge streams that accept manifest requests but hang on initial segments
+        connectWatchdogTimerRef.current = window.setTimeout(() => {
+          if (probeRunIdRef.current !== runId) return;
+          if (!videoRef.current || videoRef.current.readyState < 2) {
+            advanceToNextServer();
+          }
+        }, 14000);
+
         const streamUrl: string = data.link;
         const streamType: string = data.type || 'hls';
 
@@ -1068,6 +755,9 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
             const hls = new Hls({
               enableWorker: true,
               maxBufferLength: 30,
+              fragLoadingMaxRetry: 2,
+              levelLoadingMaxRetry: 2,
+              manifestLoadingMaxRetry: 2,
             });
             hlsRef.current = hls;
             hls.loadSource(streamUrl);
@@ -1101,7 +791,15 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
 
             hls.on(Hls.Events.ERROR, (_e, errData) => {
               if (probeRunIdRef.current !== runId) return;
-              if (errData.fatal) {
+              const isPrePlayNetworkError =
+                videoEl.readyState < 3 &&
+                (errData.details === Hls.ErrorDetails.FRAG_LOAD_ERROR ||
+                  errData.details === Hls.ErrorDetails.FRAG_LOAD_TIMEOUT ||
+                  errData.details === Hls.ErrorDetails.LEVEL_LOAD_ERROR ||
+                  errData.details === Hls.ErrorDetails.LEVEL_LOAD_TIMEOUT ||
+                  errData.details === Hls.ErrorDetails.MANIFEST_LOAD_ERROR ||
+                  errData.details === Hls.ErrorDetails.MANIFEST_LOAD_TIMEOUT);
+              if (errData.fatal || isPrePlayNetworkError) {
                 advanceToNextServer();
               }
             });
@@ -1909,19 +1607,14 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
     skippedOutro,
   });
 
-  // Reset Next Episode countdown if user seeks back out of the Next Episode window
   useEffect(() => {
     if (!skipState.inNextEpisodeWindow) {
-      if (countdownCancelled) {
-        setCountdownCancelled(false);
-      }
-      if (nextCountdown !== null) {
-        setNextCountdown(null);
-      }
+      if (countdownCancelled) setCountdownCancelled(false);
+      if (nextCountdown !== null) setNextCountdown(null);
     }
   }, [skipState.inNextEpisodeWindow, countdownCancelled, nextCountdown]);
 
-  const handleTriggerNextEpisode = useCallback(() => {
+  const handleNextEpisode = useCallback(() => {
     if (!nextEpisodeInfo || hasTriggeredNextRef.current) return;
     hasTriggeredNextRef.current = true;
     if (seekCleanupRef.current) {
@@ -1940,37 +1633,33 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
     onEpisodeChange?.(nextEpisodeInfo.season, nextEpisodeInfo.episode);
   }, [nextEpisodeInfo, onEpisodeChange]);
 
-  // Start countdown when entering Next Episode window with autoplay enabled
   useEffect(() => {
     if (!skipState.showNextEpisode || !nextEpisodeInfo || !autoPlayNext || countdownCancelled) {
       setNextCountdown(null);
-      return;
+    } else {
+      setNextCountdown((prev) => (prev === null ? 5 : prev));
     }
-    setNextCountdown((prev) => (prev === null ? 5 : prev));
   }, [skipState.showNextEpisode, nextEpisodeInfo, autoPlayNext, countdownCancelled]);
 
-  // Tick down the Next Episode autoplay countdown every 1s while playing or when video has ended
   useEffect(() => {
     if (
       !skipState.showNextEpisode ||
       !nextEpisodeInfo ||
       !autoPlayNext ||
       countdownCancelled ||
-      nextCountdown === null
+      nextCountdown === null ||
+      (!playing && !videoEnded)
     ) {
       return;
     }
-    if (!playing && !videoEnded) {
-      return;
-    }
     if (nextCountdown <= 0) {
-      handleTriggerNextEpisode();
+      handleNextEpisode();
       return;
     }
-    const timerId = window.setTimeout(() => {
-      setNextCountdown((prev) => (prev !== null ? Math.max(0, prev - 1) : null));
+    const timer = window.setTimeout(() => {
+      setNextCountdown((prev) => (prev === null ? null : Math.max(0, prev - 1)));
     }, 1000);
-    return () => window.clearTimeout(timerId);
+    return () => window.clearTimeout(timer);
   }, [
     skipState.showNextEpisode,
     nextEpisodeInfo,
@@ -1979,29 +1668,28 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
     nextCountdown,
     playing,
     videoEnded,
-    handleTriggerNextEpisode,
+    handleNextEpisode,
   ]);
 
-  // Exact, async-safe seek execution for Skip Intro, Skip Recap & Skip Outro
-  const executePlayerSeek = useCallback(
+  const performSkipSeek = useCallback(
     (targetTime: number | null, kind: 'intro' | 'recap' | 'outro') => {
       const v = videoRef.current;
-      if (!v || targetTime === null || !Number.isFinite(targetTime) || targetTime < 0) {
+      if (
+        !v ||
+        targetTime === null ||
+        !Number.isFinite(targetTime) ||
+        targetTime < 0 ||
+        pendingSkipSeekRef.current
+      ) {
         return;
       }
-      if (pendingSkipSeekRef.current) {
-        return;
-      }
-
-      const liveDuration =
+      const effectiveDur =
         Number.isFinite(v.duration) && v.duration > 0 ? v.duration : duration;
-      if (liveDuration > 0 && targetTime > liveDuration) {
-        return;
-      }
+      if (effectiveDur > 0 && targetTime > effectiveDur) return;
 
-      const seekEpisodeKey = activeEpisodeKeyRef.current;
-      const seekRunId = probeRunIdRef.current;
-      const shouldResume = !v.paused || playing;
+      const startEpKey = activeEpisodeKeyRef.current;
+      const startRunId = probeRunIdRef.current;
+      const wasPlaying = !v.paused || playing;
 
       if (seekCleanupRef.current) {
         seekCleanupRef.current();
@@ -2010,74 +1698,59 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
 
       pendingSkipSeekRef.current = true;
       isProgrammaticSkipRef.current = true;
-
-      if (kind === 'intro') {
-        setSkippedIntro(true);
-      } else if (kind === 'recap') {
-        setSkippedRecap(true);
-      } else {
-        setSkippedOutro(true);
-      }
+      if (kind === 'intro') setSkippedIntro(true);
+      else if (kind === 'recap') setSkippedRecap(true);
+      else setSkippedOutro(true);
 
       lastReportedTimeRef.current = targetTime;
       lastDriftSyncTimeRef.current = performance.now();
       setCurrentTime(targetTime);
 
-      let finished = false;
-      const finalizeSeek = () => {
-        if (finished) return;
-        finished = true;
-        v.removeEventListener('seeked', onSeekedComplete);
+      let settled = false;
+      const finishSeek = () => {
+        if (settled) return;
+        settled = true;
+        v.removeEventListener('seeked', onSeekedOnce);
         window.clearTimeout(fallbackTimer);
         seekCleanupRef.current = null;
-
-        // Guard against stale async callbacks if the episode or stream changed during seek
         if (
-          activeEpisodeKeyRef.current !== seekEpisodeKey ||
-          probeRunIdRef.current !== seekRunId
+          activeEpisodeKeyRef.current !== startEpKey ||
+          probeRunIdRef.current !== startRunId
         ) {
           return;
         }
-
         pendingSkipSeekRef.current = false;
         isProgrammaticSkipRef.current = false;
-
-        const settledTime =
+        const finalTime =
           Number.isFinite(v.currentTime) && Math.abs(v.currentTime - targetTime) <= 2
             ? v.currentTime
             : targetTime;
-        lastReportedTimeRef.current = settledTime;
-        setCurrentTime(settledTime);
-
+        lastReportedTimeRef.current = finalTime;
+        setCurrentTime(finalTime);
         if (usingExternalDubRef.current && dubAudioRef.current) {
           lastDriftSyncTimeRef.current = performance.now();
-          dubAudioRef.current.currentTime = settledTime;
+          dubAudioRef.current.currentTime = finalTime;
         }
-
-        if (shouldResume && v.paused && !v.ended) {
+        if (wasPlaying && v.paused && !v.ended) {
           v.play().catch(() => {});
         }
       };
 
-      const onSeekedComplete = () => {
-        finalizeSeek();
-      };
-
-      const fallbackTimer = window.setTimeout(finalizeSeek, 300);
-      v.addEventListener('seeked', onSeekedComplete, { once: true });
+      const onSeekedOnce = () => finishSeek();
+      const fallbackTimer = window.setTimeout(finishSeek, 300);
+      v.addEventListener('seeked', onSeekedOnce, { once: true });
       seekCleanupRef.current = () => {
-        finished = true;
-        v.removeEventListener('seeked', onSeekedComplete);
+        settled = true;
+        v.removeEventListener('seeked', onSeekedOnce);
         window.clearTimeout(fallbackTimer);
       };
 
       try {
         v.currentTime = targetTime;
       } catch {
-        finalizeSeek();
+        finishSeek();
         return;
       }
-
       if (dubAudioRef.current) {
         try {
           dubAudioRef.current.currentTime = targetTime;
@@ -2085,7 +1758,6 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
           // ignore
         }
       }
-
       if (v.paused && !v.ended) {
         v.play().catch(() => {});
       }
@@ -2096,49 +1768,46 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
   const handleSkipRecap = () => {
     if (resolvedTiming.recapEnd === null) return;
     const target = Math.min((duration || Infinity) - 0.5, resolvedTiming.recapEnd + 0.4);
-    executePlayerSeek(target, 'recap');
+    performSkipSeek(target, 'recap');
   };
 
   const handleSkipIntro = () => {
     if (resolvedTiming.introEnd === null) return;
     const target = Math.min((duration || Infinity) - 0.5, resolvedTiming.introEnd + 0.4);
-    executePlayerSeek(target, 'intro');
+    performSkipSeek(target, 'intro');
   };
 
   const handleSkipOutro = () => {
     if (resolvedTiming.outroEnd !== null) {
       const target = Math.min((duration || Infinity) - 0.5, resolvedTiming.outroEnd + 0.4);
-      executePlayerSeek(target, 'outro');
+      performSkipSeek(target, 'outro');
     } else if (nextEpisodeInfo) {
-      handleTriggerNextEpisode();
+      handleNextEpisode();
     }
   };
 
-  const handleCancelNextCountdown = (e: React.MouseEvent) => {
+  const handleCancelCountdown = (e: React.MouseEvent) => {
     e.stopPropagation();
     setCountdownCancelled(true);
     setNextCountdown(null);
   };
 
   const handleSelectEpisodeFromDrawer = (epNum: number) => {
-    if (
-      selectedSeasonForDrawer === currentSeason &&
-      epNum === currentEpisode
-    ) {
+    if (selectedSeasonForDrawer === currentSeason && epNum === currentEpisode) {
       setShowEpisodeDrawer(false);
-      return;
+    } else {
+      hasTriggeredNextRef.current = true;
+      setCurrentSeason(selectedSeasonForDrawer);
+      setCurrentEpisode(epNum);
+      setShowEpisodeDrawer(false);
+      onEpisodeChange?.(selectedSeasonForDrawer, epNum);
     }
-    hasTriggeredNextRef.current = true;
-    setCurrentSeason(selectedSeasonForDrawer);
-    setCurrentEpisode(epNum);
-    setShowEpisodeDrawer(false);
-    onEpisodeChange?.(selectedSeasonForDrawer, epNum);
   };
 
   const progressPercent = duration > 0 ? Math.min(100, (currentTime / duration) * 100) : 0;
-  const bufferPercent = duration > 0 ? Math.min(100, (bufferedEnd / duration) * 100) : 0;
-  const validAudioDubTracks = filterAudioDubTracks(availableDubs);
-  const effectiveDubDisplay = resolveEffectiveDubSelection(selectedDub, availableDubs);
+  const bufferedPercent = duration > 0 ? Math.min(100, (bufferedEnd / duration) * 100) : 0;
+  const filteredDubs = filterAudioDubTracks(availableDubs);
+  const effectiveDub = resolveEffectiveDubSelection(selectedDub, availableDubs);
 
   return (
     <div
@@ -2163,7 +1832,6 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
         isFullscreen && isPortrait ? 'player-fullscreen-landscape-force' : ''
       } ${isStandalonePage ? 'w-screen h-screen' : 'w-full h-full'}`}
     >
-      {/* Underlying HTML5 Video Element */}
       <video
         ref={videoRef}
         data-testid="zxc-video-element"
@@ -2171,31 +1839,18 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
         crossOrigin="anonymous"
         onClick={(e) => {
           e.stopPropagation();
-          if (settingsOpen) {
-            setSettingsOpen(false);
-            return;
-          }
-          if (showServersOverlay) {
-            setShowServersOverlay(false);
-            return;
-          }
-          if (showEpisodeDrawer) {
-            setShowEpisodeDrawer(false);
-            return;
-          }
-          togglePlay();
+          if (settingsOpen) setSettingsOpen(false);
+          else if (showServersOverlay) setShowServersOverlay(false);
+          else if (showEpisodeDrawer) setShowEpisodeDrawer(false);
+          else togglePlay();
         }}
         onDoubleClick={(e) => {
           e.stopPropagation();
           const rect = e.currentTarget.getBoundingClientRect();
-          const clickX = e.clientX - rect.left;
-          if (clickX < rect.width * 0.35) {
-            handleSkip(-10);
-          } else if (clickX > rect.width * 0.65) {
-            handleSkip(10);
-          } else {
-            toggleFullscreen();
-          }
+          const x = e.clientX - rect.left;
+          if (x < rect.width * 0.35) handleSkip(-10);
+          else if (x > rect.width * 0.65) handleSkip(10);
+          else toggleFullscreen();
         }}
         onCanPlay={(e) => {
           const v = e.currentTarget;
@@ -2240,15 +1895,11 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
         }}
         onPause={() => {
           setPlaying(false);
-          if (dubAudioRef.current) {
-            dubAudioRef.current.pause();
-          }
+          if (dubAudioRef.current) dubAudioRef.current.pause();
         }}
         onWaiting={() => {
           setWaiting(true);
-          if (dubAudioRef.current) {
-            dubAudioRef.current.pause();
-          }
+          if (dubAudioRef.current) dubAudioRef.current.pause();
         }}
         onLoadedMetadata={(e) => {
           const v = e.currentTarget;
@@ -2264,66 +1915,44 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
           const v = e.currentTarget;
           if (v.duration && Number.isFinite(v.duration) && v.duration > 0) {
             setDuration(v.duration);
-            setCanPlay(true);
+            if (v.readyState >= 1) setCanPlay(true);
           }
         }}
         onSeeking={(e) => {
           const v = e.currentTarget;
           const t = v.currentTime;
           if (!isProgrammaticSkipRef.current) {
-            if (
-              resolvedTiming.recapStart !== null &&
-              t < resolvedTiming.recapStart - 2
-            ) {
+            if (resolvedTiming.recapStart !== null && t < resolvedTiming.recapStart - 2) {
               setSkippedRecap(false);
             }
-            if (
-              resolvedTiming.introStart !== null &&
-              t < resolvedTiming.introStart - 2
-            ) {
+            if (resolvedTiming.introStart !== null && t < resolvedTiming.introStart - 2) {
               setSkippedIntro(false);
             }
-            if (
-              resolvedTiming.outroStart !== null &&
-              t < resolvedTiming.outroStart - 2
-            ) {
+            if (resolvedTiming.outroStart !== null && t < resolvedTiming.outroStart - 2) {
               setSkippedOutro(false);
             }
           }
           lastReportedTimeRef.current = t;
           setCurrentTime(t);
-          if (v.duration && t < v.duration - 1) {
-            setVideoEnded(false);
-          }
+          if (v.duration && t < v.duration - 1) setVideoEnded(false);
         }}
         onSeeked={(e) => {
           const v = e.currentTarget;
           const t = v.currentTime;
           if (!isProgrammaticSkipRef.current) {
-            if (
-              resolvedTiming.recapStart !== null &&
-              t < resolvedTiming.recapStart - 2
-            ) {
+            if (resolvedTiming.recapStart !== null && t < resolvedTiming.recapStart - 2) {
               setSkippedRecap(false);
             }
-            if (
-              resolvedTiming.introStart !== null &&
-              t < resolvedTiming.introStart - 2
-            ) {
+            if (resolvedTiming.introStart !== null && t < resolvedTiming.introStart - 2) {
               setSkippedIntro(false);
             }
-            if (
-              resolvedTiming.outroStart !== null &&
-              t < resolvedTiming.outroStart - 2
-            ) {
+            if (resolvedTiming.outroStart !== null && t < resolvedTiming.outroStart - 2) {
               setSkippedOutro(false);
             }
           }
           lastReportedTimeRef.current = t;
           setCurrentTime(t);
-          if (v.duration && t < v.duration - 1) {
-            setVideoEnded(false);
-          }
+          if (v.duration && t < v.duration - 1) setVideoEnded(false);
           if (usingExternalDubRef.current && dubAudioRef.current) {
             lastDriftSyncTimeRef.current = performance.now();
             dubAudioRef.current.currentTime = t;
@@ -2334,111 +1963,74 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
           if (v.duration && Number.isFinite(v.duration) && v.duration > 0 && duration <= 0) {
             setDuration(v.duration);
           }
-          if (!canPlay && v.duration && Number.isFinite(v.duration) && v.duration > 0) {
+          if (!canPlay && v.duration && Number.isFinite(v.duration) && v.duration > 0 && v.readyState >= 2) {
             setCanPlay(true);
           }
-          if (isProgrammaticSkipRef.current || pendingSkipSeekRef.current) {
-            return;
-          }
+          if (isProgrammaticSkipRef.current || pendingSkipSeekRef.current) return;
           const t = v.currentTime;
-          const prevT = lastReportedTimeRef.current;
-
-          // Detect manual backward scrub > 3s to reset skip state
-          if (t < prevT - 3) {
-            if (
-              resolvedTiming.introStart !== null &&
-              t < resolvedTiming.introStart - 2
-            ) {
+          const prev = lastReportedTimeRef.current;
+          if (t < prev - 3) {
+            if (resolvedTiming.introStart !== null && t < resolvedTiming.introStart - 2) {
               setSkippedIntro(false);
             }
-            if (
-              resolvedTiming.outroStart !== null &&
-              t < resolvedTiming.outroStart - 2
-            ) {
+            if (resolvedTiming.outroStart !== null && t < resolvedTiming.outroStart - 2) {
               setSkippedOutro(false);
             }
           }
-
-          // Avoid unnecessary React state updates on every fractional timeupdate unless crossing a boundary or >=0.2s elapsed
           const crossedBoundary = [
             resolvedTiming.introStart,
             resolvedTiming.introEnd,
             resolvedTiming.outroStart,
             resolvedTiming.outroEnd,
             resolvedTiming.nextEpisodeTriggerTime,
-          ].some(
-            (b) =>
-              b !== null &&
-              ((prevT < b && t >= b) || (prevT >= b && t < b))
-          );
-
-          if (
-            crossedBoundary ||
-            Math.abs(t - prevT) >= 0.2 ||
-            Math.floor(t) !== Math.floor(prevT)
-          ) {
+          ].some((b) => b !== null && ((prev < b && t >= b) || (prev >= b && t < b)));
+          if (crossedBoundary || Math.abs(t - prev) >= 0.2 || Math.floor(t) !== Math.floor(prev)) {
             lastReportedTimeRef.current = t;
             setCurrentTime(t);
           }
-
           if (v.duration && t < v.duration - 1 && videoEnded) {
             setVideoEnded(false);
           }
           if (v.buffered.length > 0) {
-            const newBuf = v.buffered.end(v.buffered.length - 1);
-            if (Math.abs(newBuf - bufferedEnd) >= 0.5) {
-              setBufferedEnd(newBuf);
-            }
+            const bEnd = v.buffered.end(v.buffered.length - 1);
+            if (Math.abs(bEnd - bufferedEnd) >= 0.5) setBufferedEnd(bEnd);
           }
-          const audioEl = dubAudioRef.current;
-          if (usingExternalDubRef.current && audioEl) {
+          const dubEl = dubAudioRef.current;
+          if (usingExternalDubRef.current && dubEl) {
             if (!v.muted) v.muted = true;
-            if (audioEl.muted !== mutedRef.current) {
-              audioEl.muted = mutedRef.current;
+            if (dubEl.muted !== mutedRef.current) dubEl.muted = mutedRef.current;
+            if (Math.abs(dubEl.volume - volumeRef.current) > 0.01) dubEl.volume = volumeRef.current;
+            if (!v.paused && !waiting && dubEl.paused && !dubEl.seeking && dubEl.readyState >= 2) {
+              dubEl.play().catch(() => {});
             }
-            if (Math.abs(audioEl.volume - volumeRef.current) > 0.01) {
-              audioEl.volume = volumeRef.current;
-            }
-            if (
-              !v.paused &&
-              !waiting &&
-              audioEl.paused &&
-              !audioEl.seeking &&
-              audioEl.readyState >= 2
-            ) {
-              audioEl.play().catch(() => {});
-            }
-            const now = performance.now();
+            const nowMs = performance.now();
             if (
               shouldSyncDubAudioTime({
                 videoTime: t,
-                audioTime: audioEl.currentTime,
-                isAudioSeeking: audioEl.seeking,
-                audioReadyState: audioEl.readyState,
+                audioTime: dubEl.currentTime,
+                isAudioSeeking: dubEl.seeking,
+                audioReadyState: dubEl.readyState,
                 lastSyncTimestampMs: lastDriftSyncTimeRef.current,
-                nowMs: now,
+                nowMs,
               })
             ) {
-              lastDriftSyncTimeRef.current = now;
-              audioEl.currentTime = t;
+              lastDriftSyncTimeRef.current = nowMs;
+              dubEl.currentTime = t;
             }
           }
         }}
         onEnded={() => {
           setPlaying(false);
           setVideoEnded(true);
-          if (dubAudioRef.current) {
-            dubAudioRef.current.pause();
-          }
+          if (dubAudioRef.current) dubAudioRef.current.pause();
         }}
         onError={() => {
-          // If native video error happens before playback, mark server failed and advance
           if (!canPlay && metadata) {
-            const runId = ++probeRunIdRef.current;
+            const nextRunId = ++probeRunIdRef.current;
             updateServerStatus(currentServerIndex, 'failed');
             const nextIdx = (currentServerIndex + 1) % PLAYER_SERVERS.length;
             if (servers[nextIdx]?.status === 'queue') {
-              probeServerAtIndex(nextIdx, runId, metadata, selectedDub);
+              probeServerAtIndex(nextIdx, nextRunId, metadata, selectedDub);
             }
           }
         }}
@@ -2451,11 +2043,8 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
           canPlay ? 'opacity-100' : 'opacity-0 pointer-events-none'
         }`}
       />
-
-      {/* Auxiliary Synchronized Audio Element for Orion Multi-Language Dubs */}
       <audio ref={dubAudioRef} crossOrigin="anonymous" className="hidden" />
 
-      {/* Dub Audio Status / Fallback Toast Banner */}
       {(dubFallbackNotice || loadingDub) && canPlay && (
         <div
           data-testid="dub-status-banner"
@@ -2472,14 +2061,9 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
         </div>
       )}
 
-      {/* Custom Subtitle Overlay — automatically lifts above seekbar when bottom controls are visible */}
       {canPlay && activeCueText && (
         <div
-          style={{
-            top: `${
-              controlsVisible || !playing ? Math.min(subPosition, 75) : subPosition
-            }%`,
-          }}
+          style={{ top: `${controlsVisible || !playing ? Math.min(subPosition, 75) : subPosition}%` }}
           className="absolute inset-x-0 z-20 flex justify-center pointer-events-none px-6 -translate-y-1/2 transition-all duration-200"
         >
           <div
@@ -2495,7 +2079,6 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
         </div>
       )}
 
-      {/* Double-Tap / Button Skip Visual Feedback Overlay */}
       {skipFeedback && (
         <div
           className={`absolute inset-y-0 z-20 flex items-center justify-center pointer-events-none w-1/3 ${
@@ -2515,280 +2098,53 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
         </div>
       )}
 
-      {/* Center Buffering Tailspin Loader when mid-stream buffering (waiting && canPlay) */}
       {waiting && canPlay && (
         <div className="absolute inset-0 z-20 flex items-center justify-center pointer-events-none">
           <TailspinLoader size={60} stroke={8} color="white" />
         </div>
       )}
 
-      {/* =====================================================================
-          UNIFIED SMART PLAYBACK OVERLAY (TheIntroDB Integration)
-          Renders Skip Recap, Skip Intro, Skip Outro/Credits & Next Episode
-          in a single, non-overlapping vertically stacked container.
-         ===================================================================== */}
-      {canPlay &&
-        !settingsOpen &&
-        !showServersOverlay &&
-        !showEpisodeDrawer &&
-        (skipState.showSkipRecap ||
-          skipState.showSkipIntro ||
-          skipState.showSkipOutro ||
-          (skipState.showNextEpisode && nextEpisodeInfo)) && (
-          <div
-            data-testid="smart-playback-controls"
-            onClick={(e) => e.stopPropagation()}
-            className={`absolute right-4 sm:right-6 lg:right-8 z-30 flex flex-col items-end gap-2.5 transition-all duration-300 pointer-events-auto ${
-              controlsVisible || !playing
-                ? 'bottom-24 sm:bottom-28 lg:bottom-32'
-                : activeCueText
-                ? 'bottom-16 sm:bottom-20'
-                : 'bottom-8 sm:bottom-10'
-            }`}
-          >
-            {/* Skip Recap Button */}
-            {skipState.showSkipRecap && (
-              <button
-                type="button"
-                data-testid="skip-recap-button"
-                aria-label="Skip Recap"
-                onClick={handleSkipRecap}
-                className="group flex items-center gap-2 px-4 py-2 sm:px-5 sm:py-2.5 rounded-lg bg-zinc-900/90 hover:bg-white text-white hover:text-zinc-950 font-semibold text-xs sm:text-sm tracking-wide backdrop-blur-md border border-white/25 hover:border-white shadow-[0_8px_28px_rgba(0,0,0,0.75)] transition-all duration-200 active:scale-95 cursor-pointer"
-              >
-                <FastForward className="w-3.5 h-3.5 sm:w-4 sm:h-4 fill-current transition-transform group-hover:translate-x-0.5" />
-                <span>Skip Recap</span>
-              </button>
-            )}
+      <SmartPlaybackControls
+        canPlay={canPlay}
+        settingsOpen={settingsOpen}
+        showServersOverlay={showServersOverlay}
+        showEpisodeDrawer={showEpisodeDrawer}
+        controlsVisible={controlsVisible}
+        playing={playing}
+        activeCueText={activeCueText}
+        skipState={skipState}
+        nextEpisodeInfo={nextEpisodeInfo}
+        autoPlayNext={autoPlayNext}
+        countdownCancelled={countdownCancelled}
+        nextCountdown={nextCountdown}
+        onSkipRecap={handleSkipRecap}
+        onSkipIntro={handleSkipIntro}
+        onSkipOutro={handleSkipOutro}
+        onNextEpisode={handleNextEpisode}
+        onCancelCountdown={handleCancelCountdown}
+      />
 
-            {/* Skip Intro Button */}
-            {skipState.showSkipIntro && (
-              <button
-                type="button"
-                data-testid="skip-intro-button"
-                aria-label="Skip Intro"
-                onClick={handleSkipIntro}
-                className="group flex items-center gap-2 px-4 py-2 sm:px-5 sm:py-2.5 rounded-lg bg-zinc-900/90 hover:bg-white text-white hover:text-zinc-950 font-semibold text-xs sm:text-sm tracking-wide backdrop-blur-md border border-white/25 hover:border-white shadow-[0_8px_28px_rgba(0,0,0,0.75)] transition-all duration-200 active:scale-95 cursor-pointer"
-              >
-                <FastForward className="w-3.5 h-3.5 sm:w-4 sm:h-4 fill-current transition-transform group-hover:translate-x-0.5" />
-                <span>Skip Intro</span>
-              </button>
-            )}
-
-            {/* Skip Outro / Credits Button */}
-            {skipState.showSkipOutro && (
-              <button
-                type="button"
-                data-testid="skip-outro-button"
-                aria-label="Skip Outro"
-                onClick={handleSkipOutro}
-                className="group flex items-center gap-2 px-4 py-2 sm:px-5 sm:py-2.5 rounded-lg bg-zinc-900/90 hover:bg-white text-white hover:text-zinc-950 font-semibold text-xs sm:text-sm tracking-wide backdrop-blur-md border border-white/25 hover:border-white shadow-[0_8px_28px_rgba(0,0,0,0.75)] transition-all duration-200 active:scale-95 cursor-pointer"
-              >
-                <SkipForward className="w-3.5 h-3.5 sm:w-4 sm:h-4 fill-current transition-transform group-hover:translate-x-0.5" />
-                <span>Skip Outro</span>
-              </button>
-            )}
-
-            {/* Next Episode Card */}
-            {skipState.showNextEpisode && nextEpisodeInfo && (
-              <div
-                data-testid="next-episode-container"
-                className="flex flex-col gap-1.5 rounded-xl bg-zinc-950/90 backdrop-blur-xl border border-white/15 p-2.5 sm:p-3.5 shadow-[0_12px_36px_rgba(0,0,0,0.85)] w-64 sm:w-72"
-              >
-                <div className="w-full flex items-center justify-between gap-2 px-0.5">
-                  <span className="text-[10px] sm:text-[11px] font-semibold uppercase tracking-wider text-zinc-400">
-                    Up Next • S{nextEpisodeInfo.season}E{nextEpisodeInfo.episode}
-                  </span>
-                  {autoPlayNext && !countdownCancelled && nextCountdown !== null && (
-                    <span
-                      data-testid="next-episode-countdown"
-                      className="text-[10px] sm:text-[11px] font-mono font-bold text-amber-400 tabular-nums"
-                    >
-                      Playing in {nextCountdown}s
-                    </span>
-                  )}
-                </div>
-
-                <div className="w-full text-xs sm:text-sm font-semibold text-white truncate px-0.5 mb-0.5">
-                  {nextEpisodeInfo.title}
-                </div>
-
-                <div className="flex items-center gap-2 w-full">
-                  <button
-                    type="button"
-                    data-testid="next-episode-button"
-                    aria-label="Next Episode"
-                    onClick={handleTriggerNextEpisode}
-                    className="relative flex-1 overflow-hidden flex items-center justify-center gap-1.5 px-3.5 py-2 rounded-lg bg-white hover:bg-zinc-100 text-zinc-950 font-bold text-xs sm:text-sm transition-all active:scale-95 cursor-pointer"
-                  >
-                    <Play className="w-3.5 h-3.5 fill-zinc-950 text-zinc-950 shrink-0" />
-                    <span>
-                      Next Episode
-                      {autoPlayNext && !countdownCancelled && nextCountdown !== null
-                        ? ` (${nextCountdown}s)`
-                        : ''}
-                    </span>
-                  </button>
-
-                  {autoPlayNext && !countdownCancelled && nextCountdown !== null && (
-                    <button
-                      type="button"
-                      data-testid="cancel-next-episode-countdown"
-                      aria-label="Cancel autoplay countdown"
-                      onClick={handleCancelNextCountdown}
-                      className="px-2.5 py-2 rounded-lg bg-white/10 hover:bg-white/20 text-zinc-200 hover:text-white font-semibold text-xs transition-colors cursor-pointer shrink-0"
-                    >
-                      Cancel
-                    </button>
-                  )}
-                </div>
-              </div>
-            )}
-          </div>
-        )}
-
-      {/* =====================================================================
-          EXACT ZXCSTREAM.CC SERVER LOADING SCREEN (!canPlay)
-          Matches chunk 00uxoksvhj._d.js: Backdrop grayscale->color + dn + dr + u2
-         ===================================================================== */}
       {!canPlay && (
-        <div
-          data-testid="zxc-loading-screen"
-          className="absolute inset-0 z-20 overflow-hidden bg-black"
-        >
-          {/* Fullscreen TMDB Backdrop with grayscale(1) contrast(1.3) brightness(0.75) when checking/queue, transitioning to color when connecting */}
-          {backdropPath && (
-            <img
-              src={`https://image.tmdb.org/t/p/w1280${backdropPath}`}
-              alt={metadata?.title || 'Backdrop'}
-              style={{
-                filter:
-                  activeServerStatus === 'checking' || activeServerStatus === 'queue'
-                    ? 'grayscale(1) contrast(1.3) brightness(0.75)'
-                    : 'grayscale(0)',
-              }}
-              className="w-full h-full object-cover object-center transition-all duration-700"
-            />
-          )}
-
-          {/* dn component: Dark radial/linear vignette + Bottom-Left Pulsing Official Movie/Show Logo */}
-          <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,rgba(0,0,0,0.45)_0%,rgba(0,0,0,0.85)_100%)]">
-            <div className="absolute inset-0 bg-gradient-to-r from-black/80 via-black/40 to-transparent" />
-            {logoPath ? (
-              <img
-                src={`https://image.tmdb.org/t/p/w780${logoPath}`}
-                alt={metadata?.title || 'Logo'}
-                className="absolute bottom-12 left-12 max-h-14 max-w-xs lg:max-h-40 lg:max-w-md w-auto h-auto object-contain animate-pulse drop-shadow-[0_10px_25px_rgba(0,0,0,0.6)]"
-              />
-            ) : (
-              metadata?.title && (
-                <div className="absolute bottom-12 left-12 max-w-md animate-pulse drop-shadow-[0_10px_25px_rgba(0,0,0,0.6)]">
-                  <h2 className="text-2xl lg:text-5xl font-black tracking-tight text-white uppercase">
-                    {metadata.title}
-                  </h2>
-                </div>
-              )
-            )}
-          </div>
-
-          {/* Metadata Error Display if invalid TMDB ID */}
-          {metadataError && (
-            <div className="absolute inset-0 flex items-center justify-center z-30 bg-black/80 p-6">
-              <div className="text-center max-w-md space-y-2">
-                <p className="text-red-400 font-semibold text-base">{metadataError}</p>
-                <p className="text-zinc-400 text-xs">
-                  Check the TMDB ID and try another movie or series ID.
-                </p>
-              </div>
-            </div>
-          )}
-
-          {/* dr component: Plain text rotating hint at bottom center */}
-          <div className="text-center text-white text-xs lg:text-sm absolute bottom-4 left-1/2 -translate-x-1/2 transition-opacity duration-500 whitespace-nowrap z-20">
-            {PLAYER_HINTS[hintIndex]}
-          </div>
-        </div>
+        <PlayerLoadingScreen
+          backdropPath={backdropPath}
+          logoPath={logoPath}
+          title={metadata?.title}
+          activeServerStatus={activeServerStatus}
+          metadataError={metadataError}
+          hintIndex={hintIndex}
+        />
       )}
 
-      {/* =====================================================================
-          u2 COMPONENT: Right-Side Vertically Centered Server Carousel
-          Visible during loading (!canPlay) OR when user clicks top-right Inbox icon (showServersOverlay)
-         ===================================================================== */}
       {(!canPlay || showServersOverlay) && (
-        <div
-          data-testid="zxc-server-carousel"
-          onClick={() => {
-            if (canPlay) setShowServersOverlay(false);
-          }}
-          className={`absolute inset-0 flex justify-end overflow-hidden z-30 ${
-            canPlay ? 'bg-black/75' : 'pointer-events-none'
-          }`}
-        >
-          <div
-            onClick={(e) => e.stopPropagation()}
-            className="relative h-full w-full pointer-events-auto"
-          >
-            {servers.map((srv, idx) => {
-              const offset = idx - currentServerIndex;
-              const isCurrent = offset === 0;
-              const isAdjacent = Math.abs(offset) === 1;
-              return (
-                <div
-                  key={srv.code}
-                  data-testid={`server-carousel-item-${srv.index}`}
-                  onClick={() => handleManualServerSelect(idx)}
-                  style={{
-                    top: `calc(50% + ${offset * 65}px)`,
-                  }}
-                  className={`absolute right-0 -translate-y-1/2 transition-all duration-500 flex items-center gap-3 cursor-pointer ${
-                    isCurrent
-                      ? 'lg:-translate-x-18 -translate-x-8 scale-115 opacity-100 font-semibold text-white'
-                      : isAdjacent
-                      ? 'lg:-translate-x-10 -translate-x-4 scale-95 opacity-80 text-white'
-                      : 'scale-90 lg:opacity-30 opacity-10 text-white'
-                  } ${srv.status === 'connecting' ? 'animate-pulse' : ''}`}
-                >
-                  {/* Server Status Icon */}
-                  <div className="flex items-center justify-center rounded-full bg-white/10 p-2 backdrop-blur-sm">
-                    {srv.status === 'checking' ? (
-                      <Loader className="size-3.5 lg:size-4 animate-spin text-white" />
-                    ) : srv.status === 'connecting' ? (
-                      <LoaderCircle className="size-3.5 lg:size-4 animate-spin text-white" />
-                    ) : srv.status === 'available' ? (
-                      <CastConnectedSvg />
-                    ) : srv.status === 'failed' ? (
-                      <X className="text-red-600 size-3.5 lg:size-4" />
-                    ) : (
-                      <Minus className="size-3.5 lg:size-4 text-white" />
-                    )}
-                  </div>
-
-                  {/* Server Name & Status Subtitle */}
-                  <div>
-                    <div
-                      className={`text-base lg:text-2xl leading-tight ${
-                        srv.status === 'failed' ? 'line-through text-zinc-400' : ''
-                      }`}
-                    >
-                      {srv.name}
-                    </div>
-                    <div className="text-xs lg:text-sm text-zinc-400">
-                      {srv.status === 'checking' && 'checking...'}
-                      {srv.status === 'connecting' && 'connecting...'}
-                      {srv.status === 'available' && 'connected'}
-                      {srv.status === 'failed' && 'No video found'}
-                      {srv.status === 'queue' && 'queue'}
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
+        <PlayerServerCarousel
+          canPlay={canPlay}
+          servers={servers}
+          currentServerIndex={currentServerIndex}
+          onClose={() => setShowServersOverlay(false)}
+          onSelectServer={handleManualServerSelect}
+        />
       )}
 
-      {/* =====================================================================
-          u7 COMPONENT: Paused Cinematic Info Screen (when paused & idle)
-         ===================================================================== */}
       {canPlay && !playing && pausedIdleOverlay && metadata && (
         <div
           onClick={wakeControls}
@@ -2818,910 +2174,111 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
         </div>
       )}
 
-      {/* =====================================================================
-          uq COMPONENT: Right-Side TV Episode Cards Drawer
-         ===================================================================== */}
       {canPlay && activeMediaType === 'tv' && showEpisodeDrawer && (
-        <div
-          data-testid="zxc-episode-drawer"
-          onClick={() => setShowEpisodeDrawer(false)}
-          className="absolute inset-0 z-30 bg-black/60 flex justify-end"
-        >
-          <div
-            onClick={(e) => e.stopPropagation()}
-            className="w-80 lg:w-96 h-full bg-zinc-950/90 backdrop-blur-md border-l border-white/10 pt-16 pb-6 px-4 overflow-y-auto space-y-3"
-          >
-            {loadingEpisodes ? (
-              <div className="flex items-center justify-center h-40">
-                <Loader className="w-6 h-6 animate-spin text-zinc-400" />
-              </div>
-            ) : seasonEpisodes.length === 0 ? (
-              <p className="text-xs text-zinc-400 text-center py-8">No episodes found.</p>
-            ) : (
-              seasonEpisodes.map((ep) => {
-                const isActiveEp =
-                  selectedSeasonForDrawer === currentSeason &&
-                  ep.episode_number === currentEpisode;
-                return (
-                  <button
-                    key={ep.id || ep.episode_number}
-                    type="button"
-                    onClick={() => handleSelectEpisodeFromDrawer(ep.episode_number)}
-                    className={`w-full text-left rounded-lg overflow-hidden border transition cursor-pointer flex gap-3 p-2 ${
-                      isActiveEp
-                        ? 'bg-white/15 border-white/40'
-                        : 'bg-zinc-900/70 border-white/5 hover:bg-white/10'
-                    }`}
-                  >
-                    <div className="relative w-28 aspect-video rounded overflow-hidden bg-zinc-800 shrink-0">
-                      {ep.still_path ? (
-                        <img
-                          src={`https://image.tmdb.org/t/p/w300${ep.still_path}`}
-                          alt={ep.name}
-                          className="w-full h-full object-cover"
-                        />
-                      ) : (
-                        <div className="w-full h-full flex items-center justify-center text-xs text-zinc-500">
-                          EP {ep.episode_number}
-                        </div>
-                      )}
-                      <span className="absolute bottom-1 left-1 bg-black/80 px-1.5 py-0.5 rounded text-[10px] font-bold">
-                        E{ep.episode_number}
-                      </span>
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="text-xs lg:text-sm font-semibold text-white truncate">
-                        {ep.episode_number}. {ep.name || `Episode ${ep.episode_number}`}
-                      </div>
-                      <p className="text-[11px] text-zinc-400 line-clamp-2 mt-0.5">
-                        {ep.overview || 'Click to play this episode.'}
-                      </p>
-                    </div>
-                  </button>
-                );
-              })
-            )}
-          </div>
-        </div>
+        <PlayerEpisodeDrawer
+          loadingEpisodes={loadingEpisodes}
+          seasonEpisodes={seasonEpisodes}
+          selectedSeasonForDrawer={selectedSeasonForDrawer}
+          currentSeason={currentSeason}
+          currentEpisode={currentEpisode}
+          onClose={() => setShowEpisodeDrawer(false)}
+          onSelectEpisode={handleSelectEpisodeFromDrawer}
+        />
       )}
 
-      {/* =====================================================================
-          uQ COMPONENT: Top Bar & Bottom Controls Overlay
-         ===================================================================== */}
-      <div
-        className={`absolute inset-0 z-25 flex flex-col justify-between p-4 lg:p-6 pointer-events-none transition-opacity duration-300 ${
-          canPlay && (controlsVisible || !playing) ? 'opacity-100' : 'opacity-0'
-        }`}
-      >
-        {/* Top Controls Row: Back Button (left) + Season selector / Server Inbox Toggle (right) */}
-        <div className="flex items-center justify-between pointer-events-auto">
-          <div>
-            {showBackButton && (
-              <button
-                type="button"
-                aria-label="Back"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  if (onBack) onBack();
-                }}
-                className="cursor-pointer hover:scale-110 transition-transform"
-              >
-                <BackSvg />
-              </button>
-            )}
-          </div>
+      <PlayerControlsOverlay
+        canPlay={canPlay}
+        controlsVisible={controlsVisible}
+        playing={playing}
+        showBackButton={showBackButton}
+        onBack={onBack}
+        showEpisodeDrawer={showEpisodeDrawer}
+        activeMediaType={activeMediaType}
+        selectedSeasonForDrawer={selectedSeasonForDrawer}
+        setSelectedSeasonForDrawer={setSelectedSeasonForDrawer}
+        metadata={metadata}
+        playerMode={playerMode}
+        setShowServersOverlay={setShowServersOverlay}
+        setShowEpisodeDrawer={setShowEpisodeDrawer}
+        setSettingsOpen={setSettingsOpen}
+        normalizedColor={normalizedColor}
+        currentSeason={currentSeason}
+        currentEpisode={currentEpisode}
+        genreLabel={genreLabel}
+        statusLabel={statusLabel}
+        seekBarRef={seekBarRef}
+        onSeekBarMouseMove={handleSeekBarMouseMove}
+        onSeekBarLeave={() => setHoverTime(null)}
+        onSeekBarClick={handleSeekBarClick}
+        hoverTime={hoverTime}
+        hoverPercent={hoverPercent}
+        bufferedPercent={bufferedPercent}
+        progressPercent={progressPercent}
+        duration={duration}
+        currentTime={currentTime}
+        resolvedTiming={resolvedTiming}
+        onTogglePlay={togglePlay}
+        onSkip={handleSkip}
+        muted={muted}
+        volume={volume}
+        onToggleMute={toggleMute}
+        onVolumeChange={handleVolumeChange}
+        settingsOpen={settingsOpen}
+        settingsTab={settingsTab}
+        setSettingsTab={setSettingsTab}
+        loadingDub={loadingDub}
+        effectiveDub={effectiveDub}
+        audioTracks={audioTracks}
+        selectedAudioTrack={selectedAudioTrack}
+        onSelectAudioTrack={handleSelectAudioTrack}
+        selectedSubtitle={selectedSubtitle}
+        setSelectedSubtitle={setSelectedSubtitle}
+        dualSubtitle={dualSubtitle}
+        setDualSubtitle={setDualSubtitle}
+        subtitles={subtitles}
+        subtitleSearch={subtitleSearch}
+        setSubtitleSearch={setSubtitleSearch}
+        setSubtitleModalOpen={setSubtitleModalOpen}
+        selectedQuality={selectedQuality}
+        qualities={qualities}
+        onSelectQuality={handleSelectQuality}
+        playbackRate={playbackRate}
+        onSelectSpeed={handleSelectSpeed}
+        brightness={brightness}
+        setBrightness={setBrightness}
+        aspectMode={aspectMode}
+        setAspectMode={setAspectMode}
+        rotation={rotation}
+        setRotation={setRotation}
+        mirrored={mirrored}
+        setMirrored={setMirrored}
+        autoPlayNext={autoPlayNext}
+        setAutoPlayNext={setAutoPlayNext}
+        setCountdownCancelled={setCountdownCancelled}
+        sleepTimer={sleepTimer}
+        setSleepTimer={setSleepTimer}
+        filteredDubs={filteredDubs}
+        selectedDub={selectedDub}
+        selectedDubType={selectedDubType}
+        onSelectDub={handleSelectDub}
+        isFullscreen={isFullscreen}
+        onToggleFullscreen={toggleFullscreen}
+      />
 
-          <div className="flex items-center gap-3">
-            {/* Season Selector Dropdown when Episode Drawer is open */}
-            {showEpisodeDrawer && activeMediaType === 'tv' && (
-              <select
-                aria-label="Select Season"
-                value={selectedSeasonForDrawer}
-                onChange={(e) => setSelectedSeasonForDrawer(Number(e.target.value))}
-                className="bg-zinc-900/90 text-white text-xs lg:text-sm px-3 py-1.5 rounded-md border border-white/15 outline-none cursor-pointer"
-              >
-                {(metadata?.seasons?.length
-                  ? metadata.seasons
-                  : [{ season_number: 1, episode_count: 24 }]
-                ).map((s) => (
-                  <option key={s.season_number} value={s.season_number}>
-                    Season {s.season_number} ({s.episode_count})
-                  </option>
-                ))}
-              </select>
-            )}
-
-            {/* Server Switcher Toggle Button (uY Inbox SVG) */}
-            {playerMode === 'custom' && (
-              <button
-                type="button"
-                aria-label="Toggle Servers"
-                data-testid="toggle-servers-button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setShowServersOverlay((prev) => !prev);
-                  setShowEpisodeDrawer(false);
-                  setSettingsOpen(false);
-                }}
-                className="cursor-pointer hover:scale-110 transition-transform text-white"
-              >
-                <ServerInboxSvg />
-              </button>
-            )}
-          </div>
-        </div>
-
-        {/* Bottom Controls Stack: Metadata Header + Seekbar (oX) + Control Buttons Row */}
-        <div
-          onClick={(e) => e.stopPropagation()}
-          className="space-y-3 pointer-events-auto bg-gradient-to-t from-black/90 via-black/50 to-transparent -mx-4 -mb-4 p-4 lg:-mx-6 lg:-mb-6 lg:p-6 pt-12"
-        >
-          {/* Above-Seekbar "You're Watching" Metadata Block (shown on desktop/tablet Custom Player, hidden on compact mobile to prevent overlap) */}
-          {playerMode === 'custom' && metadata && (
-            <div className="hidden md:block space-y-0.5 mb-2 max-w-[55%] pointer-events-none">
-              <div className="flex items-center gap-2">
-                <div
-                  style={{ backgroundColor: normalizedColor }}
-                  className="w-1 h-4 rounded-full"
-                />
-                <span className="text-xs text-zinc-300 font-medium">You&apos;re Watching</span>
-              </div>
-              <div className="text-sm lg:text-base font-bold text-white leading-snug truncate">
-                {metadata.title}{' '}
-                {activeMediaType === 'tv' ? `S${currentSeason}E${currentEpisode}` : ''}{' '}
-                {metadata.year ? `(${metadata.year})` : ''}
-              </div>
-              <div className="text-[11px] lg:text-xs text-zinc-300">
-                {activeMediaType === 'tv' ? 'TV Show' : 'Movie'} / {genreLabel} / {statusLabel}
-              </div>
-            </div>
-          )}
-
-          {/* Seekbar (oX component) */}
-          <div
-            ref={seekBarRef}
-            onMouseMove={handleSeekBarMouseMove}
-            onMouseLeave={() => setHoverTime(null)}
-            onClick={handleSeekBarClick}
-            className="relative h-4 flex items-center cursor-pointer group"
-          >
-            {/* Hover Time Tooltip */}
-            {hoverTime !== null && (
-              <div
-                style={{ left: `${hoverPercent}%` }}
-                className="absolute -top-8 -translate-x-1/2 bg-black/90 text-white text-xs font-mono px-2 py-0.5 rounded border border-white/10 pointer-events-none"
-              >
-                {formatPlayerTime(hoverTime)}
-              </div>
-            )}
-
-            {/* Track Background */}
-            <div className="w-full h-1.5 group-hover:h-2 bg-white/25 rounded-full overflow-hidden relative transition-all">
-              {/* Buffered Bar */}
-              <div
-                style={{ width: `${bufferPercent}%` }}
-                className="absolute inset-y-0 left-0 bg-white/40 rounded-full"
-              />
-              {/* Intro Segment Marker on Seekbar */}
-              {duration > 0 &&
-                resolvedTiming.introStart !== null &&
-                resolvedTiming.introEnd !== null && (
-                  <div
-                    data-testid="seekbar-intro-marker"
-                    style={{
-                      left: `${(resolvedTiming.introStart / duration) * 100}%`,
-                      width: `${Math.max(
-                        0.5,
-                        ((resolvedTiming.introEnd - resolvedTiming.introStart) / duration) * 100
-                      )}%`,
-                    }}
-                    className="absolute inset-y-0 bg-amber-400/60 pointer-events-none z-10"
-                  />
-                )}
-              {/* Outro Segment Marker on Seekbar */}
-              {duration > 0 &&
-                resolvedTiming.outroStart !== null &&
-                resolvedTiming.outroEnd !== null && (
-                  <div
-                    data-testid="seekbar-outro-marker"
-                    style={{
-                      left: `${(resolvedTiming.outroStart / duration) * 100}%`,
-                      width: `${Math.max(
-                        0.5,
-                        ((resolvedTiming.outroEnd - resolvedTiming.outroStart) / duration) * 100
-                      )}%`,
-                    }}
-                    className="absolute inset-y-0 bg-amber-400/60 pointer-events-none z-10"
-                  />
-                )}
-              {/* Active Progress Bar */}
-              <div
-                style={{
-                  width: `${progressPercent}%`,
-                  backgroundColor: normalizedColor,
-                }}
-                className="absolute inset-y-0 left-0 rounded-full"
-              />
-            </div>
-
-            {/* White Vertical Pill Thumb matching oX */}
-            <div
-              style={{ left: `${progressPercent}%` }}
-              className="absolute -translate-x-1/2 h-4 w-1.5 lg:h-5 lg:w-2 bg-white rounded-full shadow-md transition-transform group-hover:scale-110 z-20"
-            />
-          </div>
-
-          {/* Bottom Control Buttons Row */}
-          <div className="flex items-center justify-between gap-2">
-            {/* Left Cluster: Play/Pause, -10s/+10s, Volume, Time, Next Episode */}
-            <div className="flex items-center gap-3 lg:gap-4">
-              {/* Play / Pause */}
-              <button
-                type="button"
-                aria-label={playing ? 'Pause' : 'Play'}
-                data-testid="player-play-pause"
-                onClick={togglePlay}
-                className="cursor-pointer hover:scale-110 transition-transform"
-              >
-                {playing ? <PauseSvg /> : <PlaySvg />}
-              </button>
-
-              {/* -10s Rewind Button */}
-              <button
-                type="button"
-                aria-label="Rewind 10 seconds"
-                data-testid="player-rewind-10"
-                onClick={() => handleSkip(-10)}
-                className="cursor-pointer hover:scale-110 transition-transform flex items-center gap-0.5 text-white/90 hover:text-white"
-                title="Rewind 10 seconds"
-              >
-                <RotateCcw className="w-5 h-5 lg:w-6 lg:h-6" />
-                <span className="text-[10px] lg:text-xs font-bold">10</span>
-              </button>
-
-              {/* +10s Forward Button */}
-              <button
-                type="button"
-                aria-label="Forward 10 seconds"
-                data-testid="player-forward-10"
-                onClick={() => handleSkip(10)}
-                className="cursor-pointer hover:scale-110 transition-transform flex items-center gap-0.5 text-white/90 hover:text-white"
-                title="Forward 10 seconds"
-              >
-                <span className="text-[10px] lg:text-xs font-bold">10</span>
-                <RotateCw className="w-5 h-5 lg:w-6 lg:h-6" />
-              </button>
-
-              {/* Volume Button + Expanding Slider */}
-              <div className="flex items-center gap-2 group/vol">
-                <button
-                  type="button"
-                  aria-label={muted ? 'Unmute' : 'Mute'}
-                  onClick={toggleMute}
-                  className="cursor-pointer hover:scale-110 transition-transform"
-                >
-                  {muted || volume === 0 ? <VolumeMutedSvg /> : <VolumeHighSvg />}
-                </button>
-                <input
-                  type="range"
-                  aria-label="Volume"
-                  min={0}
-                  max={1}
-                  step={0.05}
-                  value={muted ? 0 : volume}
-                  onChange={(e) => handleVolumeChange(Number.parseFloat(e.target.value))}
-                  className="w-0 group-hover/vol:w-20 focus:w-20 transition-all duration-300 accent-white cursor-pointer h-1 bg-white/30 rounded-lg overflow-hidden"
-                />
-              </div>
-
-              {/* Formatted Time Display (H:MM:SS / H:MM:SS) */}
-              <div
-                data-testid="player-time-display"
-                className="text-xs lg:text-sm font-medium text-zinc-200 tabular-nums whitespace-nowrap"
-              >
-                {formatPlayerTime(currentTime)} / {formatPlayerTime(duration)}
-              </div>
-            </div>
-
-            {/* Right Cluster: [ ⚙ Settings > ] Pill Button (lK), TV Episode Selector (uX), Fullscreen (os/oo) */}
-            <div className="flex items-center gap-3 lg:gap-4 relative">
-              {/* Settings Popover Menu (lK) - Viewport-Aware Positioning, No Visible Scrollbar, Premium Glassmorphism */}
-              {settingsOpen && (
-                <div
-                  data-testid="player-settings-menu"
-                  onClick={(e) => e.stopPropagation()}
-                  className="absolute bottom-full mb-2.5 right-0 w-72 sm:w-80 max-w-[calc(100vw-2rem)] max-h-[min(320px,calc(100vh-6rem))] landscape:max-h-[min(250px,calc(100vh-4.5rem))] overflow-y-auto no-scrollbar rounded-2xl bg-zinc-950/75 backdrop-blur-2xl backdrop-saturate-150 border border-white/[0.12] shadow-[0_16px_40px_rgba(0,0,0,0.65),0_0_0_1px_rgba(255,255,255,0.06),inset_0_1px_0_0_rgba(255,255,255,0.12)] p-3 text-xs lg:text-sm space-y-1 z-40"
-                >
-                  {settingsTab === 'main' && (
-                    <>
-                      {/* Audio Dub (Server 0) */}
-                      <button
-                        type="button"
-                        data-testid="settings-open-dub-tab"
-                        onClick={() => setSettingsTab('dub')}
-                        className="w-full flex items-center justify-between px-3 py-2 rounded-xl hover:bg-white/[0.08] active:bg-white/[0.12] transition-colors cursor-pointer"
-                      >
-                        <span className="text-zinc-300 font-medium">Audio Dub</span>
-                        <span
-                          data-testid="settings-current-dub-label"
-                          className="flex items-center gap-1 font-semibold text-white"
-                        >
-                          {loadingDub
-                            ? 'Switching...'
-                            : effectiveDubDisplay.isOriginal
-                            ? 'Original'
-                            : (effectiveDubDisplay.displayLabel || 'Original').replace(/\s+dub$/i, '')}
-                          <ChevronRight className="w-4 h-4 text-zinc-400" />
-                        </span>
-                      </button>
-
-                      {/* Audio Track */}
-                      {audioTracks.length > 1 && (
-                        <button
-                          type="button"
-                          onClick={() => setSettingsTab('audio')}
-                          className="w-full flex items-center justify-between px-3 py-2 rounded-xl hover:bg-white/[0.08] active:bg-white/[0.12] transition-colors cursor-pointer"
-                        >
-                          <span className="text-zinc-300 font-medium">Audio track</span>
-                          <span className="flex items-center gap-1 font-semibold text-white">
-                            {audioTracks[selectedAudioTrack]?.label || 'Default'}
-                            <ChevronRight className="w-4 h-4 text-zinc-400" />
-                          </span>
-                        </button>
-                      )}
-
-                      {/* Subtitles */}
-                      <button
-                        type="button"
-                        onClick={() => setSettingsTab('subtitles')}
-                        className="w-full flex items-center justify-between px-3 py-2 rounded-xl hover:bg-white/[0.08] active:bg-white/[0.12] transition-colors cursor-pointer"
-                      >
-                        <span className="text-zinc-300 font-medium">Subtitles</span>
-                        <span className="flex items-center gap-1 font-semibold text-white">
-                          {selectedSubtitle || 'Off'}
-                          <ChevronRight className="w-4 h-4 text-zinc-400" />
-                        </span>
-                      </button>
-
-                      {/* Dual Subtitles */}
-                      <button
-                        type="button"
-                        onClick={() => setSettingsTab('dualsubtitles')}
-                        className="w-full flex items-center justify-between px-3 py-2 rounded-xl hover:bg-white/[0.08] active:bg-white/[0.12] transition-colors cursor-pointer"
-                      >
-                        <span className="text-zinc-300 font-medium">Dual subtitles</span>
-                        <span className="flex items-center gap-1 font-semibold text-white">
-                          {dualSubtitle || 'Off'}
-                          <ChevronRight className="w-4 h-4 text-zinc-400" />
-                        </span>
-                      </button>
-
-                      {/* Subtitle Settings Modal Trigger */}
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setSettingsOpen(false);
-                          setSubtitleModalOpen(true);
-                        }}
-                        className="w-full flex items-center justify-between px-3 py-2 rounded-xl hover:bg-white/[0.08] active:bg-white/[0.12] transition-colors cursor-pointer"
-                      >
-                        <span className="text-zinc-300 font-medium">Subtitle settings</span>
-                        <ChevronRight className="w-4 h-4 text-zinc-400" />
-                      </button>
-
-                      {/* Quality */}
-                      <button
-                        type="button"
-                        onClick={() => setSettingsTab('quality')}
-                        className="w-full flex items-center justify-between px-3 py-2 rounded-xl hover:bg-white/[0.08] active:bg-white/[0.12] transition-colors cursor-pointer"
-                      >
-                        <span className="text-zinc-300 font-medium">Quality</span>
-                        <span className="flex items-center gap-1 font-semibold text-white">
-                          {selectedQuality === -1
-                            ? 'Auto'
-                            : `${qualities.find((q) => q.index === selectedQuality)?.height || 1080}p`}
-                          <ChevronRight className="w-4 h-4 text-zinc-400" />
-                        </span>
-                      </button>
-
-                      {/* Playback Speed */}
-                      <button
-                        type="button"
-                        onClick={() => setSettingsTab('speed')}
-                        className="w-full flex items-center justify-between px-3 py-2 rounded-xl hover:bg-white/[0.08] active:bg-white/[0.12] transition-colors cursor-pointer"
-                      >
-                        <span className="text-zinc-300 font-medium">Playback speed</span>
-                        <span className="flex items-center gap-1 font-semibold text-white">
-                          {playbackRate === 1 ? 'Normal' : `${playbackRate}x`}
-                          <ChevronRight className="w-4 h-4 text-zinc-400" />
-                        </span>
-                      </button>
-
-                      {/* Brightness */}
-                      <button
-                        type="button"
-                        onClick={() => setSettingsTab('brightness')}
-                        className="w-full flex items-center justify-between px-3 py-2 rounded-xl hover:bg-white/[0.08] active:bg-white/[0.12] transition-colors cursor-pointer"
-                      >
-                        <span className="text-zinc-300 font-medium">Brightness</span>
-                        <span className="flex items-center gap-1 font-semibold text-white">
-                          {brightness}%
-                          <ChevronRight className="w-4 h-4 text-zinc-400" />
-                        </span>
-                      </button>
-
-                      {/* Aspect Ratio */}
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setAspectMode((prev) =>
-                            prev === 'contain' ? 'cover' : prev === 'cover' ? 'fill' : 'contain'
-                          )
-                        }
-                        className="w-full flex items-center justify-between px-3 py-2 rounded-xl hover:bg-white/[0.08] active:bg-white/[0.12] transition-colors cursor-pointer"
-                      >
-                        <span className="text-zinc-300 font-medium">Aspect ratio</span>
-                        <span className="font-semibold text-white uppercase">{aspectMode}</span>
-                      </button>
-
-                      {/* Rotate / Mirror */}
-                      <div className="flex items-center justify-between px-3 py-2">
-                        <span className="text-zinc-300 font-medium">Transform</span>
-                        <div className="flex items-center gap-2">
-                          <button
-                            type="button"
-                            onClick={() => setRotation((r) => (r + 90) % 360)}
-                            className="px-2.5 py-1 rounded-lg bg-white/10 hover:bg-white/20 text-xs font-medium cursor-pointer transition-colors"
-                          >
-                            Rotate {rotation}°
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setMirrored((m) => !m)}
-                            className="px-2.5 py-1 rounded-lg bg-white/10 hover:bg-white/20 text-xs font-medium cursor-pointer transition-colors"
-                          >
-                            {mirrored ? 'Mirrored' : 'Mirror'}
-                          </button>
-                        </div>
-                      </div>
-
-                      {/* Autoplay Next Episode Toggle (for TV Series) */}
-                      {activeMediaType === 'tv' && (
-                        <button
-                          type="button"
-                          data-testid="settings-toggle-autoplay-next"
-                          onClick={() => {
-                            setAutoPlayNext((prev) => !prev);
-                            setCountdownCancelled(false);
-                          }}
-                          className="w-full flex items-center justify-between px-3 py-2 rounded-xl hover:bg-white/[0.08] active:bg-white/[0.12] transition-colors cursor-pointer"
-                        >
-                          <span className="text-zinc-300 font-medium">Autoplay next</span>
-                          <span
-                            data-testid="settings-autoplay-next-status"
-                            className="font-semibold text-white"
-                          >
-                            {autoPlayNext ? 'On' : 'Off'}
-                          </span>
-                        </button>
-                      )}
-
-                      {/* Sleep Timer */}
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setSleepTimer((s) => (s === 0 ? 15 : s === 15 ? 30 : s === 30 ? 60 : 0))
-                        }
-                        className="w-full flex items-center justify-between px-3 py-2 rounded-xl hover:bg-white/[0.08] active:bg-white/[0.12] transition-colors cursor-pointer"
-                      >
-                        <span className="text-zinc-300 font-medium">Sleep timer</span>
-                        <span className="font-semibold text-white">
-                          {sleepTimer === 0 ? 'Off' : `${sleepTimer}m`}
-                        </span>
-                      </button>
-                    </>
-                  )}
-
-                  {/* Dub Language Submenu */}
-                  {settingsTab === 'dub' && (
-                    <div className="space-y-1" data-testid="settings-dub-submenu">
-                      <button
-                        type="button"
-                        onClick={() => setSettingsTab('main')}
-                        className="flex items-center gap-1 text-zinc-400 hover:text-white px-2 py-1.5 text-xs font-semibold rounded-lg hover:bg-white/[0.08] transition-colors cursor-pointer"
-                      >
-                        <ChevronLeft className="w-4 h-4" />
-                        <span>Audio Dub</span>
-                      </button>
-                      <button
-                        type="button"
-                        data-testid="dub-option-original"
-                        onClick={() => handleSelectDub('', 0)}
-                        className="w-full flex items-center justify-between px-3 py-1.5 rounded-xl hover:bg-white/[0.08] active:bg-white/[0.12] transition-colors cursor-pointer"
-                      >
-                        <span>Original Audio</span>
-                        {effectiveDubDisplay.isOriginal && (
-                          <Check className="w-4 h-4 text-green-400" />
-                        )}
-                      </button>
-                      {validAudioDubTracks.filter((d) => !d.original).length > 0
-                        ? validAudioDubTracks
-                            .filter((d) => !d.original)
-                            .map((dub, idx) => {
-                              const code = (dub.lang || '').toLowerCase();
-                              const isSelected =
-                                !effectiveDubDisplay.isOriginal &&
-                                effectiveDubDisplay.dubCode === code &&
-                                String(selectedDubType) === String(dub.type ?? 0);
-                              return (
-                                <button
-                                  key={`${code}-${dub.type ?? 0}-${idx}`}
-                                  type="button"
-                                  data-testid={`dub-option-${code}`}
-                                  onClick={() => handleSelectDub(code, dub.type ?? 0)}
-                                  className="w-full flex items-center justify-between px-3 py-1.5 rounded-xl hover:bg-white/[0.08] active:bg-white/[0.12] transition-colors cursor-pointer"
-                                >
-                                  <span>
-                                    {dub.name || code.toUpperCase()} ({code.toUpperCase()})
-                                  </span>
-                                  {isSelected && <Check className="w-4 h-4 text-green-400" />}
-                                </button>
-                              );
-                            })
-                        : DUB_LANGUAGES.map((lang) => (
-                            <button
-                              key={lang.code}
-                              type="button"
-                              data-testid={`dub-option-${lang.code}`}
-                              onClick={() => handleSelectDub(lang.code, 0)}
-                              className="w-full flex items-center justify-between px-3 py-1.5 rounded-xl hover:bg-white/[0.08] active:bg-white/[0.12] transition-colors cursor-pointer"
-                            >
-                              <span>
-                                {lang.label} ({lang.code.toUpperCase()})
-                              </span>
-                              {selectedDub === lang.code && (
-                                <Check className="w-4 h-4 text-green-400" />
-                              )}
-                            </button>
-                          ))}
-                    </div>
-                  )}
-
-                  {/* Embedded Audio Track Submenu */}
-                  {settingsTab === 'audio' && (
-                    <div className="space-y-1">
-                      <button
-                        type="button"
-                        onClick={() => setSettingsTab('main')}
-                        className="flex items-center gap-1 text-zinc-400 hover:text-white px-2 py-1.5 text-xs font-semibold rounded-lg hover:bg-white/[0.08] transition-colors cursor-pointer"
-                      >
-                        <ChevronLeft className="w-4 h-4" />
-                        <span>Audio Track</span>
-                      </button>
-                      {audioTracks.map((track) => (
-                        <button
-                          key={track.id}
-                          type="button"
-                          onClick={() => handleSelectAudioTrack(track.id)}
-                          className="w-full flex items-center justify-between px-3 py-1.5 rounded-xl hover:bg-white/[0.08] active:bg-white/[0.12] transition-colors cursor-pointer"
-                        >
-                          <span>{track.label}</span>
-                          {selectedAudioTrack === track.id && (
-                            <Check className="w-4 h-4 text-green-400" />
-                          )}
-                        </button>
-                      ))}
-                    </div>
-                  )}
-
-                  {/* Subtitles Submenu */}
-                  {(settingsTab === 'subtitles' || settingsTab === 'dualsubtitles') && (
-                    <div className="space-y-1.5">
-                      <button
-                        type="button"
-                        onClick={() => setSettingsTab('main')}
-                        className="flex items-center gap-1 text-zinc-400 hover:text-white px-2 py-1 text-xs font-semibold rounded-lg hover:bg-white/[0.08] transition-colors cursor-pointer"
-                      >
-                        <ChevronLeft className="w-4 h-4" />
-                        <span>
-                          {settingsTab === 'subtitles' ? 'Subtitles' : 'Dual Subtitles'}
-                        </span>
-                      </button>
-                      <div className="relative px-2">
-                        <Search className="w-3.5 h-3.5 text-zinc-400 absolute left-4 top-1/2 -translate-y-1/2" />
-                        <input
-                          type="text"
-                          placeholder="Search language..."
-                          value={subtitleSearch}
-                          onChange={(e) => setSubtitleSearch(e.target.value)}
-                          className="w-full bg-white/[0.08] border border-white/10 rounded-xl pl-7 pr-2 py-1.5 text-xs text-white placeholder:text-zinc-400 outline-none focus:bg-white/[0.12] focus:border-white/20 transition-all"
-                        />
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          if (settingsTab === 'subtitles') setSelectedSubtitle(null);
-                          else setDualSubtitle(null);
-                          setSettingsTab('main');
-                        }}
-                        className="w-full flex items-center justify-between px-3 py-1.5 rounded-xl hover:bg-white/[0.08] active:bg-white/[0.12] transition-colors cursor-pointer"
-                      >
-                        <span>Off</span>
-                        {(settingsTab === 'subtitles' ? !selectedSubtitle : !dualSubtitle) && (
-                          <Check className="w-4 h-4 text-green-400" />
-                        )}
-                      </button>
-                      {subtitles
-                        .filter((s) =>
-                          s.language.toLowerCase().includes(subtitleSearch.toLowerCase())
-                        )
-                        .map((sub, i) => (
-                          <button
-                            key={`${sub.language}-${i}`}
-                            type="button"
-                            onClick={() => {
-                              if (settingsTab === 'subtitles') setSelectedSubtitle(sub.language);
-                              else setDualSubtitle(sub.language);
-                              setSettingsTab('main');
-                            }}
-                            className="w-full flex items-center justify-between px-3 py-1.5 rounded-xl hover:bg-white/[0.08] active:bg-white/[0.12] transition-colors cursor-pointer"
-                          >
-                            <span>{sub.language}</span>
-                            {(settingsTab === 'subtitles'
-                              ? selectedSubtitle === sub.language
-                              : dualSubtitle === sub.language) && (
-                              <Check className="w-4 h-4 text-green-400" />
-                            )}
-                          </button>
-                        ))}
-                    </div>
-                  )}
-
-                  {/* Quality Submenu */}
-                  {settingsTab === 'quality' && (
-                    <div className="space-y-1">
-                      <button
-                        type="button"
-                        onClick={() => setSettingsTab('main')}
-                        className="flex items-center gap-1 text-zinc-400 hover:text-white px-2 py-1.5 text-xs font-semibold rounded-lg hover:bg-white/[0.08] transition-colors cursor-pointer"
-                      >
-                        <ChevronLeft className="w-4 h-4" />
-                        <span>Quality</span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleSelectQuality(-1)}
-                        className="w-full flex items-center justify-between px-3 py-1.5 rounded-xl hover:bg-white/[0.08] active:bg-white/[0.12] transition-colors cursor-pointer"
-                      >
-                        <span>Auto</span>
-                        {selectedQuality === -1 && <Check className="w-4 h-4 text-green-400" />}
-                      </button>
-                      {qualities.map((q) => (
-                        <button
-                          key={q.index}
-                          type="button"
-                          onClick={() => handleSelectQuality(q.index)}
-                          className="w-full flex items-center justify-between px-3 py-1.5 rounded-xl hover:bg-white/[0.08] active:bg-white/[0.12] transition-colors cursor-pointer"
-                        >
-                          <span>{q.height}p</span>
-                          {selectedQuality === q.index && (
-                            <Check className="w-4 h-4 text-green-400" />
-                          )}
-                        </button>
-                      ))}
-                    </div>
-                  )}
-
-                  {/* Playback Speed Submenu */}
-                  {settingsTab === 'speed' && (
-                    <div className="space-y-1">
-                      <button
-                        type="button"
-                        onClick={() => setSettingsTab('main')}
-                        className="flex items-center gap-1 text-zinc-400 hover:text-white px-2 py-1.5 text-xs font-semibold rounded-lg hover:bg-white/[0.08] transition-colors cursor-pointer"
-                      >
-                        <ChevronLeft className="w-4 h-4" />
-                        <span>Playback speed</span>
-                      </button>
-                      {[0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2].map((rate) => (
-                        <button
-                          key={rate}
-                          type="button"
-                          onClick={() => handleSelectSpeed(rate)}
-                          className="w-full flex items-center justify-between px-3 py-1.5 rounded-xl hover:bg-white/[0.08] active:bg-white/[0.12] transition-colors cursor-pointer"
-                        >
-                          <span>{rate === 1 ? 'Normal (1x)' : `${rate}x`}</span>
-                          {playbackRate === rate && <Check className="w-4 h-4 text-green-400" />}
-                        </button>
-                      ))}
-                    </div>
-                  )}
-
-                  {/* Brightness Submenu */}
-                  {settingsTab === 'brightness' && (
-                    <div className="space-y-3 p-2">
-                      <button
-                        type="button"
-                        onClick={() => setSettingsTab('main')}
-                        className="flex items-center gap-1 text-zinc-400 hover:text-white text-xs font-semibold rounded-lg hover:bg-white/[0.08] transition-colors cursor-pointer"
-                      >
-                        <ChevronLeft className="w-4 h-4" />
-                        <span>Brightness ({brightness}%)</span>
-                      </button>
-                      <div className="flex items-center gap-2">
-                        <Volume1 className="w-4 h-4 text-zinc-400" />
-                        <input
-                          type="range"
-                          min={30}
-                          max={150}
-                          value={brightness}
-                          onChange={(e) => setBrightness(Number(e.target.value))}
-                          className="flex-1 accent-white cursor-pointer"
-                        />
-                        <Volume2 className="w-4 h-4 text-white" />
-                      </div>
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {/* Exact [ ⚙ Settings > ] Pill Button from lK component */}
-              <button
-                type="button"
-                aria-label="Settings"
-                data-testid="player-settings-button"
-                onClick={() => {
-                  setSettingsOpen((prev) => !prev);
-                  setSettingsTab('main');
-                  setShowServersOverlay(false);
-                }}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-white/15 hover:bg-white/25 backdrop-blur-xs text-xs lg:text-sm font-medium text-white transition cursor-pointer"
-              >
-                <SettingsGearSvg />
-                <span className="hidden sm:inline">Settings</span>
-                <ChevronRight className="w-4 h-4 opacity-80" />
-              </button>
-
-              {/* TV Series Episode Selector Button (uX SVG) */}
-              {activeMediaType === 'tv' && (
-                <button
-                  type="button"
-                  aria-label="Episodes"
-                  data-testid="player-episodes-button"
-                  onClick={() => {
-                    setShowEpisodeDrawer((prev) => !prev);
-                    setShowServersOverlay(false);
-                    setSettingsOpen(false);
-                  }}
-                  className="cursor-pointer hover:scale-110 transition-transform"
-                >
-                  <EpisodesToggleSvg />
-                </button>
-              )}
-
-              {/* Fullscreen Toggle Button (os / oo SVG) */}
-              <button
-                type="button"
-                aria-label={isFullscreen ? 'Exit Fullscreen' : 'Enter Fullscreen'}
-                data-testid="player-fullscreen-button"
-                onClick={toggleFullscreen}
-                className="cursor-pointer hover:scale-110 transition-transform"
-              >
-                {isFullscreen ? <FullscreenExitSvg /> : <FullscreenEnterSvg />}
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* =====================================================================
-          lz COMPONENT: Subtitle Appearance & Time Offset Settings Modal
-         ===================================================================== */}
       {subtitleModalOpen && (
-        <div
-          onClick={() => setSubtitleModalOpen(false)}
-          className="absolute inset-0 z-40 bg-black/75 flex items-center justify-center p-4"
-        >
-          <div
-            onClick={(e) => e.stopPropagation()}
-            className="w-full max-w-md rounded-xl bg-zinc-950 border border-white/15 p-5 space-y-4 text-xs lg:text-sm"
-          >
-            <div className="flex items-center justify-between border-b border-white/10 pb-2">
-              <h3 className="font-bold text-white text-sm lg:text-base">Subtitle Settings</h3>
-              <button
-                type="button"
-                onClick={() => setSubtitleModalOpen(false)}
-                className="text-zinc-400 hover:text-white cursor-pointer"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <div className="space-y-3">
-              <div className="flex items-center justify-between">
-                <span className="text-zinc-300">Font Size ({subFontSize}px)</span>
-                <input
-                  type="range"
-                  min={14}
-                  max={42}
-                  value={subFontSize}
-                  onChange={(e) => setSubFontSize(Number(e.target.value))}
-                  className="w-40 accent-white"
-                />
-              </div>
-
-              <div className="flex items-center justify-between">
-                <span className="text-zinc-300">Background Opacity ({subBgOpacity}%)</span>
-                <input
-                  type="range"
-                  min={0}
-                  max={100}
-                  value={subBgOpacity}
-                  onChange={(e) => setSubBgOpacity(Number(e.target.value))}
-                  className="w-40 accent-white"
-                />
-              </div>
-
-              <div className="flex items-center justify-between">
-                <span className="text-zinc-300">Vertical Position ({subPosition}%)</span>
-                <input
-                  type="range"
-                  min={15}
-                  max={95}
-                  value={subPosition}
-                  onChange={(e) => setSubPosition(Number(e.target.value))}
-                  className="w-40 accent-white"
-                />
-              </div>
-
-              <div className="flex items-center justify-between">
-                <span className="text-zinc-300">Text Color</span>
-                <div className="flex items-center gap-2">
-                  {['#ffffff', '#facc15', '#38bdf8', '#4ade80'].map((c) => (
-                    <button
-                      key={c}
-                      type="button"
-                      onClick={() => setSubTextColor(c)}
-                      style={{ backgroundColor: c }}
-                      className={`w-5 h-5 rounded-full border cursor-pointer ${
-                        subTextColor === c ? 'border-white scale-110' : 'border-transparent'
-                      }`}
-                    />
-                  ))}
-                </div>
-              </div>
-
-              <div className="flex items-center justify-between pt-2 border-t border-white/10">
-                <span className="text-zinc-300">
-                  Sync Offset ({subTimeOffset >= 0 ? `+${subTimeOffset.toFixed(1)}s` : `${subTimeOffset.toFixed(1)}s`})
-                </span>
-                <div className="flex items-center gap-1.5">
-                  <button
-                    type="button"
-                    onClick={() => setSubTimeOffset((t) => Math.max(-10, t - 0.5))}
-                    className="px-2 py-1 rounded bg-white/10 hover:bg-white/20 cursor-pointer"
-                  >
-                    -0.5s
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setSubTimeOffset(0)}
-                    className="px-2 py-1 rounded bg-white/10 hover:bg-white/20 cursor-pointer"
-                  >
-                    Reset
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setSubTimeOffset((t) => Math.min(10, t + 0.5))}
-                    className="px-2 py-1 rounded bg-white/10 hover:bg-white/20 cursor-pointer"
-                  >
-                    +0.5s
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
+        <PlayerSubtitleSettingsModal
+          subFontSize={subFontSize}
+          setSubFontSize={setSubFontSize}
+          subBgOpacity={subBgOpacity}
+          setSubBgOpacity={setSubBgOpacity}
+          subPosition={subPosition}
+          setSubPosition={setSubPosition}
+          subTextColor={subTextColor}
+          setSubTextColor={setSubTextColor}
+          subTimeOffset={subTimeOffset}
+          setSubTimeOffset={setSubTimeOffset}
+          onClose={() => setSubtitleModalOpen(false)}
+        />
       )}
     </div>
   );

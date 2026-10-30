@@ -7,8 +7,8 @@ import {
   getSeriesImdbId,
   getSeriesTvdbId,
   getMediaByTmdbId,
-} from './src/data/tmdbCatalog';
-import { normalizeIntervalSeconds, MediaType } from './src/utils/urlBuilder';
+} from './src/data/tmdbCatalog.js';
+import { normalizeIntervalSeconds, MediaType } from './src/utils/urlBuilder.js';
 
 const app = express();
 
@@ -18,12 +18,39 @@ app.use(express.json());
 
 // Normalize Vercel rewritten paths so /api routes work seamlessly on Vercel deployments
 app.use((req, _res, next) => {
-  const matchedPath = req.headers['x-matched-path'] as string | undefined;
-  const originalUri = (req.headers['x-forwarded-uri'] || req.headers['x-original-uri']) as string | undefined;
-  if (matchedPath && matchedPath.startsWith('/api')) {
-    req.url = matchedPath;
-  } else if (originalUri && originalUri.startsWith('/api')) {
-    req.url = originalUri;
+  try {
+    const rawUrl = req.url || '/';
+    const parsed = new URL(rawUrl, 'http://localhost');
+    const pathname = parsed.pathname.replace(/\/+$/, '') || '/';
+    const isEntrypointPath =
+      pathname === '/' ||
+      pathname === '/api' ||
+      pathname === '/api/index' ||
+      pathname === '/api/index.js' ||
+      pathname === '/api/index.ts' ||
+      pathname === '/api/[...all]' ||
+      pathname === '/api/%5B...all%5D';
+
+    const rewrittenPath = parsed.searchParams.get('__path');
+    if (rewrittenPath) {
+      parsed.searchParams.delete('__path');
+      const cleanSub = rewrittenPath.replace(/^\/+/, '');
+      const qs = parsed.searchParams.toString();
+      if (isEntrypointPath) {
+        req.url = `/api/${cleanSub}${qs ? `?${qs}` : ''}`;
+      } else {
+        req.url = `${parsed.pathname}${qs ? `?${qs}` : ''}`;
+      }
+    } else if (isEntrypointPath) {
+      const originalUri = (req.headers['x-forwarded-uri'] || req.headers['x-original-uri']) as
+        | string
+        | undefined;
+      if (originalUri && originalUri.startsWith('/api')) {
+        req.url = originalUri;
+      }
+    }
+  } catch {
+    // Keep original req.url on parse failure
   }
   next();
 });
@@ -82,24 +109,39 @@ const COMMON_HEADERS = {
 const tmdbImdbCache = new Map<string, string>();
 
 async function fetchTmdbDetailsWithFallback(mediaType: string, tmdbId: string, language = 'en-US') {
-  const tryType = async (type: string) => {
-    const res = await fetch(
-      `https://zxcstream.cc/backend/tmdb/details/${encodeURIComponent(type)}/${encodeURIComponent(tmdbId)}?language=${encodeURIComponent(language)}`,
-      {
-        headers: {
-          ...COMMON_HEADERS,
-          Referer: `https://zxcstream.cc/player/${type}/${tmdbId}`,
-        },
+  const tryTypeOnHost = async (host: string, type: string) => {
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 4500);
+      const res = await fetch(
+        `${host}/backend/tmdb/details/${encodeURIComponent(type)}/${encodeURIComponent(tmdbId)}?language=${encodeURIComponent(language)}`,
+        {
+          headers: {
+            ...COMMON_HEADERS,
+            Origin: host,
+            Referer: `${host}/player/${type}/${tmdbId}`,
+          },
+          signal: controller.signal,
+        }
+      );
+      clearTimeout(timer);
+      if (!res.ok) return null;
+      const data = await res.json();
+      const raw = data?.data || data;
+      if (!raw || (!raw.title && !raw.name && !raw.id)) return null;
+      if (raw.imdb_id) {
+        tmdbImdbCache.set(String(tmdbId).trim(), String(raw.imdb_id).trim());
       }
-    );
-    if (!res.ok) return null;
-    const data = await res.json();
-    const raw = data?.data || data;
-    if (!raw || (!raw.title && !raw.name && !raw.id)) return null;
-    if (raw.imdb_id) {
-      tmdbImdbCache.set(String(tmdbId).trim(), String(raw.imdb_id).trim());
+      return { ...raw, resolvedMediaType: type };
+    } catch {
+      return null;
     }
-    return { ...raw, resolvedMediaType: type };
+  };
+
+  const tryType = async (type: string) => {
+    const resZxc = await tryTypeOnHost('https://zxcstream.cc', type);
+    if (resZxc) return resZxc;
+    return await tryTypeOnHost('https://vidstuck.cc', type);
   };
 
   const primary = await tryType(mediaType);
@@ -163,185 +205,264 @@ async function resolveForServer(
     dubType = '',
   } = options;
 
-  const refererUrl = `https://zxcstream.cc/player/${mediaType}/${tmdbId}${
-    mediaType === 'tv' ? `/${season}/${episode}` : ''
-  }`;
+  const queryProvider = async (
+    baseHost: string,
+    tokenEndpoint: string,
+    sourcesPrefix: string,
+    serverKey: string
+  ) => {
+    const refererUrl = `${baseHost}/player/${mediaType}/${tmdbId}${
+      mediaType === 'tv' ? `/${season}/${episode}` : ''
+    }`;
 
-  const fuckuBody: Record<string, any> = {
-    [FIELD_MAP.id]: String(tmdbId),
-    [FIELD_MAP.mediaType]: mediaType,
-    [FIELD_MAP.path]: targetServer,
-  };
+    const tokenBody: Record<string, any> = {
+      [FIELD_MAP.id]: String(tmdbId),
+      [FIELD_MAP.mediaType]: mediaType,
+      [FIELD_MAP.path]: serverKey,
+    };
 
-  if (mediaType === 'tv') {
-    fuckuBody[FIELD_MAP.season] = Number(season) || 1;
-    fuckuBody[FIELD_MAP.episode] = Number(episode) || 1;
-  }
+    if (mediaType === 'tv') {
+      tokenBody[FIELD_MAP.season] = Number(season) || 1;
+      tokenBody[FIELD_MAP.episode] = Number(episode) || 1;
+    }
 
-  let sourceData: any = null;
-  let lastError = 'Request failed';
+    let sourceData: any = null;
+    let lastError = 'Request failed';
 
-  for (let attempt = 0; attempt < 2; attempt++) {
-    try {
-      const tokenRes = await fetch('https://zxcstream.cc/backend/fucku', {
-        method: 'POST',
-        headers: {
-          ...COMMON_HEADERS,
-          Referer: refererUrl,
-        },
-        body: JSON.stringify(fuckuBody),
-      });
-
-      if (!tokenRes.ok) {
-        lastError = `Token HTTP ${tokenRes.status}`;
-        if (attempt === 0 && (tokenRes.status >= 500 || tokenRes.status === 429)) {
-          await new Promise((r) => setTimeout(r, 250));
-          continue;
-        }
-        return { success: false, server: targetServer, error: lastError, links: [] };
-      }
-
-      const tokenData = await tokenRes.json();
-      if (!tokenData.token) {
-        return { success: false, server: targetServer, error: 'No token', links: [] };
-      }
-
-      const query = new URLSearchParams({
-        [FIELD_MAP.id]: String(tmdbId),
-        [FIELD_MAP.path]: targetServer,
-        [FIELD_MAP.mediaType]: mediaType,
-        [FIELD_MAP.ts]: String(tokenData.ts),
-        [FIELD_MAP.token]: tokenData.token,
-        [FIELD_MAP.title]: title,
-        [FIELD_MAP.year]: releaseYear,
-        [FIELD_MAP.date]: String(date),
-      });
-
-      if (mediaType === 'tv') {
-        query.set(FIELD_MAP.season, String(Number(season) || 1));
-        query.set(FIELD_MAP.episode, String(Number(episode) || 1));
-        if (lastAirDate) query.set(FIELD_MAP.latestDate, String(lastAirDate));
-      }
-
-      if (imdbId) query.set(FIELD_MAP.imdbId, imdbId);
-
-      if (dubCode) {
-        query.set('dubCode', dubCode);
-        query.set('dubType', dubType !== '' ? String(dubType) : '0');
-      }
-
-      const sourceRes = await fetch(
-        `https://zxcstream.cc/backend_/sources/${encodeURIComponent(targetServer)}?${query.toString()}`,
-        {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const tokenController = new AbortController();
+        const tokenTimer = setTimeout(() => tokenController.abort(), 4500);
+        const tokenRes = await fetch(`${baseHost}${tokenEndpoint}`, {
+          method: 'POST',
           headers: {
             ...COMMON_HEADERS,
+            Origin: baseHost,
             Referer: refererUrl,
           },
-        }
-      );
+          body: JSON.stringify(tokenBody),
+          signal: tokenController.signal,
+        });
+        clearTimeout(tokenTimer);
 
-      if (!sourceRes.ok) {
-        lastError = `HTTP ${sourceRes.status}`;
-        if (attempt === 0 && (sourceRes.status >= 500 || sourceRes.status === 429)) {
-          await new Promise((r) => setTimeout(r, 300));
+        if (!tokenRes.ok) {
+          lastError = `Token HTTP ${tokenRes.status}`;
+          if (attempt === 0 && (tokenRes.status >= 500 || tokenRes.status === 429)) {
+            await new Promise((r) => setTimeout(r, 200));
+            continue;
+          }
+          return { success: false, server: targetServer, error: lastError, links: [], dubs: [] };
+        }
+
+        const tokenData = await tokenRes.json();
+        if (!tokenData.token) {
+          return { success: false, server: targetServer, error: 'No token', links: [], dubs: [] };
+        }
+
+        const query = new URLSearchParams({
+          [FIELD_MAP.id]: String(tmdbId),
+          [FIELD_MAP.path]: serverKey,
+          [FIELD_MAP.mediaType]: mediaType,
+          [FIELD_MAP.ts]: String(tokenData.ts),
+          [FIELD_MAP.token]: tokenData.token,
+          [FIELD_MAP.title]: title,
+          [FIELD_MAP.year]: releaseYear,
+          [FIELD_MAP.date]: String(date),
+        });
+
+        if (mediaType === 'tv') {
+          query.set(FIELD_MAP.season, String(Number(season) || 1));
+          query.set(FIELD_MAP.episode, String(Number(episode) || 1));
+          if (lastAirDate) query.set(FIELD_MAP.latestDate, String(lastAirDate));
+        }
+
+        if (imdbId) query.set(FIELD_MAP.imdbId, imdbId);
+
+        if (dubCode) {
+          query.set('dubCode', dubCode);
+          query.set('dubType', dubType !== '' ? String(dubType) : '0');
+        }
+
+        const srcController = new AbortController();
+        const srcTimer = setTimeout(() => srcController.abort(), 5000);
+        const sourceRes = await fetch(
+          `${baseHost}${sourcesPrefix}/${encodeURIComponent(serverKey)}?${query.toString()}`,
+          {
+            headers: {
+              ...COMMON_HEADERS,
+              Origin: baseHost,
+              Referer: refererUrl,
+            },
+            signal: srcController.signal,
+          }
+        );
+        clearTimeout(srcTimer);
+
+        if (!sourceRes.ok) {
+          lastError = `HTTP ${sourceRes.status}`;
+          if (attempt === 0 && (sourceRes.status >= 500 || sourceRes.status === 429)) {
+            await new Promise((r) => setTimeout(r, 250));
+            continue;
+          }
+          return { success: false, server: targetServer, error: lastError, links: [], dubs: [] };
+        }
+
+        sourceData = await sourceRes.json();
+        break;
+      } catch (err: any) {
+        lastError = err?.message || 'Network error';
+        if (attempt === 0) {
+          await new Promise((r) => setTimeout(r, 200));
           continue;
         }
-        return { success: false, server: targetServer, error: lastError, links: [] };
+        return { success: false, server: targetServer, error: lastError, links: [], dubs: [] };
       }
-
-      sourceData = await sourceRes.json();
-      break;
-    } catch (err: any) {
-      lastError = err?.message || 'Network error';
-      if (attempt === 0) {
-        await new Promise((r) => setTimeout(r, 250));
-        continue;
-      }
-      return { success: false, server: targetServer, error: lastError, links: [] };
     }
-  }
 
-  if (!sourceData) {
-    return { success: false, server: targetServer, error: lastError, links: [] };
-  }
+    if (!sourceData) {
+      return { success: false, server: targetServer, error: lastError, links: [], dubs: [] };
+    }
 
-  const rawLinks = (sourceData.links || []).map((item: any) => ({
-    ...item,
-    link: decryptCryptoJS(item.link, DECRYPTION_KEY),
-  }));
-
-  // Verify DASH links and cache valid MPD manifests
-  const verifiedLinks: any[] = [];
-  for (const item of rawLinks) {
-    if (!item.link || !item.link.startsWith('http')) continue;
-    const isDash =
-      item.type === 'dash' || item.link.includes('andromeda') || item.link.includes('.mpd');
-    if (isDash) {
-      try {
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), 5500);
-        const mpdRes = await fetch(item.link, {
-          headers: {
-            'User-Agent': COMMON_HEADERS['User-Agent'],
-            Referer: 'https://zxcstream.cc/',
-            Origin: 'https://zxcstream.cc',
-          },
-          signal: controller.signal,
-        });
-        clearTimeout(timer);
-        if (!mpdRes.ok) continue;
-        const mpdText = await mpdRes.text();
-        if (!mpdText.includes('<MPD') || !mpdText.includes('video')) continue;
-        const hasAudio =
-          mpdText.includes('contentType="audio"') ||
-          mpdText.includes("contentType='audio'") ||
-          mpdText.includes('audio/mp4') ||
-          mpdText.includes('mp4a');
-        cacheMpdXml(item.link, mpdText);
-        const codecs = mpdText.match(/codecs="([^"]+)"/g) || [];
-        const videoCodecs = codecs.filter(
-          (c) => !c.includes('mp4a') && !c.includes('ac-3') && !c.includes('ec-3')
-        );
-        const onlyHevc =
-          videoCodecs.length > 0 &&
-          videoCodecs.every((c) => c.includes('hev1') || c.includes('hvc1'));
-        verifiedLinks.push({ ...item, onlyHevc, hasAudio });
-      } catch {
-        // Skip broken DASH manifest
+    const rawLinks = (sourceData.links || []).map((item: any) => {
+      let decrypted = decryptCryptoJS(item.link, DECRYPTION_KEY);
+      if (typeof decrypted === 'string' && decrypted.startsWith('/')) {
+        decrypted = `https://vidstuck.cc${decrypted}`;
       }
-    } else if (targetServer === 'orion' || item.link.includes('workers.dev')) {
-      try {
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), 3500);
-        const probeRes = await fetch(item.link, {
-          headers: {
-            'User-Agent': COMMON_HEADERS['User-Agent'],
-            Referer: 'https://zxcstream.cc/',
-            Origin: 'https://zxcstream.cc',
-          },
-          signal: controller.signal,
-        });
-        clearTimeout(timer);
-        if (!probeRes.ok) continue;
+      return {
+        ...item,
+        link: decrypted,
+      };
+    });
+
+    const verifiedLinks: any[] = [];
+    for (const item of rawLinks) {
+      if (!item.link || !item.link.startsWith('http')) continue;
+      const isWorkerUrl = item.link.includes('workers.dev');
+      const isDash =
+        !isWorkerUrl &&
+        (item.type === 'dash' || item.link.includes('andromeda') || item.link.includes('.mpd'));
+
+      if (isDash) {
+        try {
+          const controller = new AbortController();
+          const timer = setTimeout(() => controller.abort(), 4500);
+          const mpdRes = await fetch(item.link, {
+            headers: {
+              'User-Agent': COMMON_HEADERS['User-Agent'],
+              Referer: `${baseHost}/`,
+              Origin: baseHost,
+            },
+            signal: controller.signal,
+          });
+          clearTimeout(timer);
+          if (!mpdRes.ok) continue;
+          const mpdText = await mpdRes.text();
+          if (!mpdText.includes('<MPD') || !mpdText.includes('video')) continue;
+          const hasAudio =
+            mpdText.includes('contentType="audio"') ||
+            mpdText.includes("contentType='audio'") ||
+            mpdText.includes('audio/mp4') ||
+            mpdText.includes('mp4a');
+          cacheMpdXml(item.link, mpdText);
+          const codecs = mpdText.match(/codecs="([^"]+)"/g) || [];
+          const videoCodecs = codecs.filter(
+            (c) => !c.includes('mp4a') && !c.includes('ac-3') && !c.includes('ec-3')
+          );
+          const onlyHevc =
+            videoCodecs.length > 0 &&
+            videoCodecs.every((c) => c.includes('hev1') || c.includes('hvc1'));
+          verifiedLinks.push({ ...item, type: 'dash', onlyHevc, hasAudio });
+        } catch {
+          // Skip broken DASH manifest
+        }
+      } else if (isWorkerUrl) {
+        try {
+          const controller = new AbortController();
+          const timer = setTimeout(() => controller.abort(), 3000);
+          const probeRes = await fetch(item.link, {
+            method: 'HEAD',
+            headers: {
+              'User-Agent': COMMON_HEADERS['User-Agent'],
+              Referer: `${baseHost}/`,
+              Origin: baseHost,
+            },
+            signal: controller.signal,
+          });
+          clearTimeout(timer);
+          if (!probeRes.ok) continue;
+          verifiedLinks.push({ ...item, onlyHevc: false, hasAudio: true });
+        } catch {
+          // Skip broken worker link
+        }
+      } else {
         verifiedLinks.push({ ...item, onlyHevc: false, hasAudio: true });
-      } catch {
-        // Skip broken worker link
       }
-    } else {
-      verifiedLinks.push({ ...item, onlyHevc: false, hasAudio: true });
+    }
+
+    const verifiedAudioLink =
+      verifiedLinks.find((l) => l.hasAudio !== false)?.link || verifiedLinks[0]?.link || null;
+
+    return {
+      ...sourceData,
+      success: verifiedLinks.length > 0,
+      links: verifiedLinks,
+      dubAudioUrl: verifiedAudioLink,
+      server: targetServer,
+    };
+  };
+
+  // For 'atlas' (Atlas III), vidstuck.cc/backend/servers/atlas provides the active H.264 HLS edge stream,
+  // whereas zxcstream.cc/backend_/sources/atlas points to deprecated workers.dev links.
+  if (targetServer === 'atlas') {
+    const vidstuckAtlas = await queryProvider(
+      'https://vidstuck.cc',
+      '/backend/qwerty',
+      '/backend/servers',
+      'atlas'
+    );
+    if (vidstuckAtlas.links && vidstuckAtlas.links.length > 0) {
+      return vidstuckAtlas;
     }
   }
 
-  const verifiedAudioLink =
-    verifiedLinks.find((l) => l.hasAudio !== false)?.link || verifiedLinks[0]?.link || null;
+  const primaryRes = await queryProvider(
+    'https://zxcstream.cc',
+    '/backend/fucku',
+    '/backend_/sources',
+    targetServer
+  );
+  if (primaryRes.links && primaryRes.links.length > 0) {
+    return primaryRes;
+  }
 
-  return {
-    ...sourceData,
-    success: verifiedLinks.length > 0,
-    links: verifiedLinks,
-    dubAudioUrl: verifiedAudioLink,
-    server: targetServer,
+  // Automatic failover to vidstuck.cc mirror backend
+  const vidstuckMap: Record<string, string> = {
+    orion: 'orion',
+    valstrax: 'andromeda',
+    atlas: 'atlas',
+    ursa: 'ursa',
+    alatreon: 'atlas',
+    daedalus: 'daedalus',
   };
+  const mappedKey = vidstuckMap[targetServer] || targetServer;
+  const fallbackRes = await queryProvider(
+    'https://vidstuck.cc',
+    '/backend/qwerty',
+    '/backend/servers',
+    mappedKey
+  );
+  if (fallbackRes.links && fallbackRes.links.length > 0) {
+    return {
+      ...fallbackRes,
+      dubs:
+        Array.isArray(primaryRes.dubs) && primaryRes.dubs.length > 0
+          ? primaryRes.dubs
+          : fallbackRes.dubs,
+      server: targetServer,
+    };
+  }
+
+  return primaryRes;
 }
 
 // Router for all API routes (mounted at /api, /api/index, and /)

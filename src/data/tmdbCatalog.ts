@@ -1,4 +1,4 @@
-import { MediaType } from '../utils/urlBuilder';
+import { MediaType } from '../utils/urlBuilder.js';
 
 export interface CastMember {
   id: number;
