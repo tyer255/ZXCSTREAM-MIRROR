@@ -1,6 +1,7 @@
-import React from 'react';
-import { Loader, LoaderCircle, Minus, X } from 'lucide-react';
+import React, { useEffect, useRef } from 'react';
+import { Loader, LoaderCircle, X } from 'lucide-react';
 import { MediaType, PLAYER_HINTS, PlayerMode } from '../utils/urlBuilder.js';
+import type { NxshaServerState } from '../utils/nxshaDiscovery.js';
 
 export const BackSvg = () => (
   <svg width="32" height="32" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -271,6 +272,7 @@ export interface ServerItemState {
   code: string;
   name: string;
   status: ServerProbeStatus;
+  state?: NxshaServerState;
 }
 
 export interface TmdbSeasonSummary {
@@ -389,70 +391,121 @@ export const PlayerServerCarousel: React.FC<{
   currentServerIndex: number;
   onClose: () => void;
   onSelectServer: (index: number) => void;
-}> = ({ canPlay, servers, currentServerIndex, onClose, onSelectServer }) => (
-  <div
-    data-testid="zxc-server-carousel"
-    onClick={() => {
-      if (canPlay) onClose();
-    }}
-    className={`absolute inset-0 flex justify-end overflow-hidden z-30 ${
-      canPlay ? 'bg-black/75' : 'pointer-events-none'
-    }`}
-  >
-    <div onClick={(e) => e.stopPropagation()} className="relative h-full w-full pointer-events-auto">
-      {servers.map((srv, idx) => {
-        const offset = idx - currentServerIndex;
-        const isCurrent = offset === 0;
-        const isAdjacent = Math.abs(offset) === 1;
-        return (
-          <div
-            key={srv.code}
-            data-testid={`server-carousel-item-${srv.index}`}
-            onClick={() => onSelectServer(idx)}
-            style={{ top: `calc(50% + ${offset * 65}px)` }}
-            className={`absolute right-0 -translate-y-1/2 transition-all duration-500 flex items-center gap-3 cursor-pointer ${
-              isCurrent
-                ? 'lg:-translate-x-18 -translate-x-8 scale-115 opacity-100 font-semibold text-white'
-                : isAdjacent
-                ? 'lg:-translate-x-10 -translate-x-4 scale-95 opacity-80 text-white'
-                : 'scale-90 lg:opacity-30 opacity-10 text-white'
-            } ${srv.status === 'connecting' ? 'animate-pulse' : ''}`}
-          >
-            <div className="flex items-center justify-center rounded-full bg-white/10 p-2 backdrop-blur-sm">
-              {srv.status === 'checking' ? (
-                <Loader className="size-3.5 lg:size-4 animate-spin text-white" />
-              ) : srv.status === 'connecting' ? (
-                <LoaderCircle className="size-3.5 lg:size-4 animate-spin text-white" />
-              ) : srv.status === 'available' ? (
-                <CastConnectedSvg />
-              ) : srv.status === 'failed' ? (
-                <X className="text-red-600 size-3.5 lg:size-4" />
-              ) : (
-                <Minus className="size-3.5 lg:size-4 text-white" />
-              )}
-            </div>
-            <div>
-              <div
-                className={`text-base lg:text-2xl leading-tight ${
-                  srv.status === 'failed' ? 'line-through text-zinc-400' : ''
-                }`}
+}> = ({ canPlay, servers, currentServerIndex, onClose, onSelectServer }) => {
+  const itemRefs = useRef<Map<number, HTMLButtonElement | null>>(new Map());
+
+  // Immediately exclude FAILED servers from the active server list
+  const visibleServers = servers.filter(
+    (srv) => srv.status !== 'failed' && srv.state !== 'FAILED'
+  );
+
+  // Keep the selected server centered smoothly inside the scrollable container when selection changes
+  useEffect(() => {
+    const selectedEl = itemRefs.current.get(currentServerIndex);
+    if (selectedEl && typeof selectedEl.scrollIntoView === 'function') {
+      try {
+        selectedEl.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      } catch {
+        // ignore in headless/older browsers
+      }
+    }
+  }, [currentServerIndex, visibleServers.length]);
+
+  return (
+    <div
+      data-testid="zxc-server-carousel"
+      onClick={() => {
+        if (canPlay) onClose();
+      }}
+      className={`absolute inset-0 flex items-center justify-end z-30 transition-all duration-300 ${
+        canPlay ? 'bg-black/65 backdrop-blur-xs pointer-events-auto' : 'pointer-events-none'
+      }`}
+    >
+      <div
+        data-testid="zxc-server-scroll-container"
+        onClick={(e) => e.stopPropagation()}
+        className="relative max-h-[85vh] w-72 sm:w-80 lg:w-96 overflow-y-auto overscroll-contain scroll-smooth pointer-events-auto px-3 sm:px-4 lg:px-6 py-6 sm:py-10 my-auto mr-4 sm:mr-8 lg:mr-16 flex flex-col no-scrollbar"
+      >
+        <div className="flex flex-col gap-2.5 sm:gap-3 w-full py-4">
+          {visibleServers.map((srv) => {
+            const authoritativeState: NxshaServerState =
+              srv.state ||
+              (srv.index === currentServerIndex &&
+              (srv.status === 'available' || srv.status === 'connecting')
+                ? 'SELECTED'
+                : srv.status === 'available'
+                ? 'AVAILABLE'
+                : 'PROCESSING');
+
+            const isSelected =
+              authoritativeState === 'SELECTED' || srv.index === currentServerIndex;
+            const isAvailable =
+              authoritativeState === 'AVAILABLE' ||
+              (authoritativeState === 'SELECTED' && srv.status === 'available');
+            const isConnecting =
+              srv.status === 'connecting' ||
+              (authoritativeState === 'SELECTED' && srv.status !== 'available');
+
+            const statusLabel =
+              isSelected && isAvailable
+                ? 'connected'
+                : isConnecting
+                ? 'connecting...'
+                : isAvailable
+                ? 'available'
+                : 'processing...';
+
+            return (
+              <button
+                key={srv.code}
+                ref={(el) => {
+                  itemRefs.current.set(srv.index, el);
+                }}
+                type="button"
+                data-testid={`server-carousel-item-${srv.index}`}
+                data-server-code={srv.code}
+                data-server-state={authoritativeState}
+                onClick={() => onSelectServer(srv.index)}
+                className={`w-full text-left transition-all duration-300 ease-out flex items-center gap-3 px-4 py-3 rounded-2xl border backdrop-blur-xl cursor-pointer ${
+                  isSelected
+                    ? 'bg-white/20 border-white/40 scale-[1.03] opacity-100 font-bold text-white shadow-[0_12px_32px_rgba(0,0,0,0.7)] ring-1 ring-white/20 translate-x-[-2px]'
+                    : isAvailable
+                    ? 'bg-zinc-950/80 hover:bg-white/15 border-white/15 opacity-85 hover:opacity-100 hover:scale-[1.01] text-zinc-100 hover:text-white backdrop-blur-md'
+                    : 'bg-zinc-950/60 hover:bg-white/10 border-white/10 opacity-75 hover:opacity-100 text-zinc-300 backdrop-blur-sm'
+                } ${isConnecting ? 'animate-pulse' : ''}`}
               >
-                {srv.name}
-              </div>
-              <div className="text-xs lg:text-sm text-zinc-400">
-                {srv.status === 'checking' && 'checking...'}
-                {srv.status === 'connecting' && 'connecting...'}
-                {srv.status === 'available' && 'connected'}
-                {srv.status === 'failed' && 'No video found'}
-                {srv.status === 'queue' && 'queue'}
-              </div>
-            </div>
-          </div>
-        );
-      })}
+                <div className={`flex items-center justify-center rounded-full p-2 backdrop-blur-sm shrink-0 transition-colors ${
+                  isSelected ? 'bg-white/25 text-white' : 'bg-white/10 text-zinc-300'
+                }`}>
+                  {isAvailable ? (
+                    <CastConnectedSvg />
+                  ) : isConnecting ? (
+                    <LoaderCircle className="size-4 animate-spin text-white" />
+                  ) : (
+                    <Loader className="size-4 animate-spin text-white" />
+                  )}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="text-sm sm:text-base lg:text-lg leading-tight truncate">
+                    {srv.name}
+                  </div>
+                  <div
+                    data-testid={`server-status-label-${srv.index}`}
+                    className={`text-xs lg:text-sm font-medium ${
+                      isAvailable ? 'text-green-400' : 'text-zinc-400'
+                    }`}
+                  >
+                    {statusLabel}
+                  </div>
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      </div>
     </div>
-  </div>
-);
+  );
+};
 
 export const PlayerEpisodeDrawer: React.FC<{
   loadingEpisodes: boolean;

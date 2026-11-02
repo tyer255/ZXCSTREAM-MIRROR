@@ -10,12 +10,17 @@ import {
   parsePlayerQueryParams,
   parseAppRoute,
   filterAudioDubTracks,
+  mergeAvailableDubs,
   resolveEffectiveDubSelection,
   shouldSyncDubAudioTime,
   resolveNextEpisode,
   resolveEpisodeTiming,
   evaluatePlaybackSkipState,
   normalizeIntervalSeconds,
+  detectSingleStreamLanguage,
+  matchNxshaSourceForDub,
+  extractNxshaQualitiesForDub,
+  normalizeSubtitleTracks,
 } from './urlBuilder.ts';
 import { getEpisodeTimingMetadata, getCatalogSeasonEpisodes, getSeriesImdbId } from '../data/tmdbCatalog.ts';
 
@@ -49,6 +54,28 @@ describe('ZXC[STREAM] URL Builder & Route Utilities', () => {
         tmdbId: '1184918',
       }),
       'https://zxcstream.cc/embed/movie/1184918'
+    );
+
+    assert.equal(
+      buildPlayerUrl({
+        baseOrigin: 'https://zxcstream.cc',
+        playerMode: 'nxsha',
+        mediaType: 'movie',
+        tmdbId: '128',
+      }),
+      'https://zxcstream.cc/nxsha/movie/128'
+    );
+
+    assert.equal(
+      buildPlayerUrl({
+        baseOrigin: 'https://zxcstream.cc',
+        playerMode: 'nxsha',
+        mediaType: 'tv',
+        tmdbId: '66732',
+        season: '1',
+        episode: '1',
+      }),
+      'https://zxcstream.cc/nxsha/tv/66732/1/1'
     );
 
     assert.equal(
@@ -132,6 +159,22 @@ describe('ZXC[STREAM] URL Builder & Route Utilities', () => {
       tmdbId: '66732',
       season: 1,
       episode: 2,
+    });
+    assert.deepEqual(parseAppRoute('/nxsha/movie/128'), {
+      page: 'player',
+      playerMode: 'nxsha',
+      mediaType: 'movie',
+      tmdbId: '128',
+      season: 1,
+      episode: 1,
+    });
+    assert.deepEqual(parseAppRoute('/nxsha/tv/66732/2/3'), {
+      page: 'player',
+      playerMode: 'nxsha',
+      mediaType: 'tv',
+      tmdbId: '66732',
+      season: 2,
+      episode: 3,
     });
   });
 
@@ -591,6 +634,98 @@ describe('ZXC[STREAM] URL Builder & Route Utilities', () => {
     assert.equal(stateAfterSkippedRecap.inRecapInterval, true);
     assert.equal(stateAfterSkippedRecap.showSkipRecap, false);
   });
+
+  it('merges NXSHA native dubs and Orion synchronized dubs without duplicate languages or synthetic orig entries', () => {
+    const nxshaDubs = [
+      { type: 0, lang: 'orig', name: 'Original Audio', original: true },
+      { type: 0, lang: 'en', name: 'English dub', original: false },
+      { type: 0, lang: 'ta', name: 'Tamil dub', original: false },
+      { type: 0, lang: 'te', name: 'Telugu dub', original: false },
+    ];
+    const orionDubs = [
+      { type: 0, lang: 'ja', name: 'Japanese', original: true },
+      { type: 0, lang: 'hi', name: 'Hindi dub', original: false },
+      { type: 0, lang: 'es', name: 'Spanish dub', original: false },
+      { type: 0, lang: 'ru', name: 'Russian dub', original: false },
+      { type: 1, lang: 'ar', name: 'Arabic sub', original: false },
+    ];
+
+    const merged = mergeAvailableDubs(nxshaDubs, orionDubs);
+    const langs = merged.map((d) => d.lang);
+    assert.equal(langs.includes('orig'), false);
+    assert.equal(langs.includes('ar'), false); // burned-in sub excluded
+    assert.deepEqual(langs, ['en', 'ta', 'te', 'ja', 'hi', 'es', 'ru']);
+
+    const origRes = resolveEffectiveDubSelection('orig', merged);
+    assert.equal(origRes.isOriginal, true);
+    assert.equal(origRes.dubCode, '');
+
+    const hiRes = resolveEffectiveDubSelection('hi', merged);
+    assert.equal(hiRes.isOriginal, false);
+    assert.equal(hiRes.dubCode, 'hi');
+    assert.equal(hiRes.displayLabel, 'Hindi');
+
+    const taRes = resolveEffectiveDubSelection('ta', merged);
+    assert.equal(taRes.isOriginal, false);
+    assert.equal(taRes.dubCode, 'ta');
+    assert.equal(taRes.displayLabel, 'Tamil');
+  });
+
+  it('accurately detects single-stream NXSHA language without false positives on comma-separated bracket labels', () => {
+    // [English, Hindi, Tamil, Telugu] - 720P is a single-track English stream (first listed language)
+    const multiBracketEn = detectSingleStreamLanguage('[English, Hindi, Tamil, Telugu] - 720P');
+    assert.deepEqual(multiBracketEn, { code: 'en', name: 'English' });
+
+    const multiBracketHi = detectSingleStreamLanguage('[Hindi, English, Tamil, Telugu] - 720P');
+    assert.deepEqual(multiBracketHi, { code: 'hi', name: 'Hindi' });
+
+    const citadelHi = detectSingleStreamLanguage('720p | Hindi');
+    assert.deepEqual(citadelHi, { code: 'hi', name: 'Hindi' });
+
+    const citadelEn = detectSingleStreamLanguage('720p | English');
+    assert.deepEqual(citadelEn, { code: 'en', name: 'English' });
+
+    // Ensure substring false positives do not occur
+    const sources = [
+      { label: '720p | English', quality: '720p | English', lang: 'en', url: 'https://cdn.example/en_720.m3u8' },
+      { label: '480p | English', quality: '480p | English', lang: 'en', url: 'https://cdn.example/en_480.m3u8' },
+      { label: '720p | Hindi', quality: '720p | Hindi', lang: 'hi', url: 'https://cdn.example/hi_720.m3u8' },
+      { label: '480p | Hindi', quality: '480p | Hindi', lang: 'hi', url: 'https://cdn.example/hi_480.m3u8' },
+    ];
+
+    const matchedHiDefault = matchNxshaSourceForDub(sources, 'hi');
+    assert.equal(matchedHiDefault?.url, 'https://cdn.example/hi_720.m3u8');
+
+    const matchedHi480 = matchNxshaSourceForDub(sources, 'hi', 480);
+    assert.equal(matchedHi480?.url, 'https://cdn.example/hi_480.m3u8');
+
+    const matchedOrig = matchNxshaSourceForDub(sources, '');
+    assert.equal(matchedOrig?.url, 'https://cdn.example/en_720.m3u8');
+
+    const matchedMissingTa = matchNxshaSourceForDub(sources, 'ta');
+    assert.equal(matchedMissingTa, null);
+
+    const hiQuals = extractNxshaQualitiesForDub(sources, 'hi');
+    assert.deepEqual(hiQuals, [
+      { index: 1720, height: 720 },
+      { index: 1480, height: 480 },
+    ]);
+
+    const normSubs = normalizeSubtitleTracks(
+      [{ id: '1', language: 'English', url: 'https://sub.example/en.vtt' }],
+      [
+        { id: '550-0', title: 'English', language: 'en', uri: 'https://dl.opensubtitles.org/en' },
+        { id: '550-1', title: 'Hindi', language: 'hi', uri: 'https://dl.opensubtitles.org/hi' },
+        { id: '550-2', language: 'es', uri: 'https://dl.opensubtitles.org/es' },
+      ]
+    );
+    assert.equal(normSubs.length, 3);
+    assert.equal(normSubs[0].language, 'English');
+    assert.equal(normSubs[1].language, 'Hindi');
+    assert.equal(normSubs[1].url, 'https://dl.opensubtitles.org/hi');
+    assert.equal(normSubs[2].language, 'Spanish');
+  });
 });
+
 
 

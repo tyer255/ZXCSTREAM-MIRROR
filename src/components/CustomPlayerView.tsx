@@ -7,15 +7,27 @@ import {
   MediaType,
   PLAYER_HINTS,
   PLAYER_SERVERS,
+  NXSHA_SERVERS,
   RawOrionDub,
+  detectSingleStreamLanguage,
   evaluatePlaybackSkipState,
+  extractNxshaQualitiesForDub,
   filterAudioDubTracks,
+  matchNxshaSourceForDub,
+  mergeAvailableDubs,
+  normalizeSubtitleTracks,
   parsePlayerQueryParams,
   resolveEffectiveDubSelection,
   resolveEpisodeTiming,
   resolveNextEpisode,
   shouldSyncDubAudioTime,
 } from '../utils/urlBuilder.js';
+import {
+  NxshaDiscoveryDiagnostics,
+  NxshaServerStateMachine,
+  ValidatedNxshaSource,
+  validatePlayableNxshaSource,
+} from '../utils/nxshaDiscovery.js';
 import { getEpisodeTimingMetadata, getMediaByTmdbId, getSeriesImdbId } from '../data/tmdbCatalog.js';
 import {
   CustomPlayerViewProps,
@@ -59,6 +71,8 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
   const dashRef = useRef<dashjs.MediaPlayerClass | null>(null);
   const dubDashRef = useRef<dashjs.MediaPlayerClass | null>(null);
   const loadedStreamDubRef = useRef<string>('');
+  const nxshaSourcesRef = useRef<any[]>([]);
+  const nxshaDefaultSourceRef = useRef<any | null>(null);
   const seekBarRef = useRef<HTMLDivElement>(null);
 
   const [activeMediaType, setActiveMediaType] = useState<MediaType>(initialMediaType);
@@ -69,18 +83,32 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
   const [metadataError, setMetadataError] = useState<string | null>(null);
 
   // Server probing state matching zxcstream.cc u2 component
+  const activeServerList = playerMode === 'nxsha' ? NXSHA_SERVERS : PLAYER_SERVERS;
   const [servers, setServers] = useState<ServerItemState[]>(() =>
-    PLAYER_SERVERS.map((s) => ({
+    activeServerList.map((s) => ({
       index: s.index,
       code: s.id,
       name: s.label,
-      status: 'queue',
+      status: 'checking',
+      state: 'PENDING',
     }))
   );
   const [currentServerIndex, setCurrentServerIndex] = useState<number>(
-    Math.max(0, Math.min(PLAYER_SERVERS.length - 1, initialServer))
+    Math.max(0, Math.min(activeServerList.length - 1, initialServer))
   );
   const [showServersOverlay, setShowServersOverlay] = useState<boolean>(false);
+
+  // Strict Anti-Ad & Anti-Popup Interceptor (blocks all window.open popups and ad redirects)
+  useEffect(() => {
+    const originalOpen = window.open;
+    window.open = (..._args: any[]) => {
+      console.warn('[AdBlocker] Blocked ad popup window.open attempt');
+      return null;
+    };
+    return () => {
+      window.open = originalOpen;
+    };
+  }, []);
 
   // Playback state
   const [canPlay, setCanPlay] = useState<boolean>(false);
@@ -141,6 +169,8 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
   const [subTimeOffset, setSubTimeOffset] = useState<number>(0);
   const [activeCueText, setActiveCueText] = useState<string>('');
   const [parsedCues, setParsedCues] = useState<{ start: number; end: number; text: string }[]>([]);
+  const [activeDualCueText, setActiveDualCueText] = useState<string>('');
+  const [dualParsedCues, setDualParsedCues] = useState<{ start: number; end: number; text: string }[]>([]);
 
   // TV Episodes drawer & season episode cache matching uq component
   const [showEpisodeDrawer, setShowEpisodeDrawer] = useState<boolean>(false);
@@ -174,6 +204,21 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
     }, 6000);
     return () => window.clearInterval(id);
   }, []);
+
+  // Sleep timer implementation (pauses playback after sleepTimer minutes)
+  useEffect(() => {
+    if (!sleepTimer || sleepTimer <= 0) return;
+    const id = window.setTimeout(() => {
+      if (videoRef.current && !videoRef.current.paused) {
+        videoRef.current.pause();
+      }
+      if (dubAudioRef.current && !dubAudioRef.current.paused) {
+        dubAudioRef.current.pause();
+      }
+      setSleepTimer(0);
+    }, sleepTimer * 60 * 1000);
+    return () => window.clearTimeout(id);
+  }, [sleepTimer]);
 
   // Sync props when parent changes season/episode/mediaType/autoplay
   useEffect(() => {
@@ -250,6 +295,15 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
   const lastDriftSyncTimeRef = useRef<number>(0);
   const dubFallbackTimerRef = useRef<number | null>(null);
   const connectWatchdogTimerRef = useRef<number | null>(null);
+  const nxshaAbortControllerRef = useRef<AbortController | null>(null);
+  const nxshaProviderControllersRef = useRef<Map<string, AbortController>>(new Map());
+  const nxshaStateMachineRef = useRef<NxshaServerStateMachine>(new NxshaServerStateMachine());
+  const activeSessionIdRef = useRef<string>('');
+  const currentPlayingProviderRef = useRef<string | null>(null);
+  const fallbackTriggeredSessionRef = useRef<Set<string>>(new Set());
+  const failedNxshaProvidersRef = useRef<Set<string>>(new Set());
+  const hasEstablishedPlaybackRef = useRef<boolean>(false);
+  const [nxshaDiagnostics, setNxshaDiagnostics] = useState<NxshaDiscoveryDiagnostics | null>(null);
 
   const showDubFallbackBanner = useCallback((message: string) => {
     setDubFallbackNotice(message);
@@ -311,6 +365,123 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
   useEffect(() => {
     return () => cleanupMediaEngines();
   }, [cleanupMediaEngines]);
+
+  const switchNxshaSourceInPlace = useCallback(
+    (sourceObj: any, targetDubCode: string) => {
+      const videoEl = videoRef.current;
+      if (!videoEl || !sourceObj?.url) return false;
+      const resumeTime = Math.max(0, videoEl.currentTime || 0);
+      const wasPaused = videoEl.paused;
+      cleanupDubAudioEngine();
+      loadedStreamDubRef.current = targetDubCode;
+      videoEl.muted = mutedRef.current;
+      videoEl.volume = volumeRef.current;
+
+      const streamUrl: string = sourceObj.url;
+      const streamType: string =
+        sourceObj.type ||
+        (streamUrl.includes('.m3u8') || streamUrl.includes('/api/nxsha/proxy')
+          ? 'hls'
+          : streamUrl.includes('.mp4')
+          ? 'mp4'
+          : 'hls');
+
+      if (
+        (streamType === 'hls' ||
+          streamUrl.includes('.m3u8') ||
+          streamUrl.includes('/api/nxsha/proxy')) &&
+        Hls.isSupported()
+      ) {
+        if (hlsRef.current) {
+          try {
+            hlsRef.current.destroy();
+          } catch {
+            // ignore
+          }
+        }
+        const hls = new Hls({
+          enableWorker: true,
+          maxBufferLength: 30,
+          fragLoadingMaxRetry: 3,
+          levelLoadingMaxRetry: 3,
+          manifestLoadingMaxRetry: 3,
+        });
+        hlsRef.current = hls;
+        hls.loadSource(streamUrl);
+        hls.attachMedia(videoEl);
+        hls.on(Hls.Events.MANIFEST_PARSED, (_e, manifestData) => {
+          let qList = manifestData.levels
+            .map((lvl, idx) => ({ index: idx, height: lvl.height || 0 }))
+            .filter((q) => q.height > 0);
+          if (qList.length <= 1) {
+            const nxshaQuals = extractNxshaQualitiesForDub(nxshaSourcesRef.current, targetDubCode);
+            if (nxshaQuals.length > 0) qList = nxshaQuals;
+          }
+          setQualities(qList);
+          if (resumeTime > 0.5) {
+            try {
+              videoEl.currentTime = resumeTime;
+            } catch {
+              // ignore
+            }
+          }
+          if (!wasPaused) {
+            videoEl.play().catch(() => {});
+          }
+        });
+        hls.on(Hls.Events.AUDIO_TRACKS_UPDATED, (_e, audioData) => {
+          const mapped = audioData.audioTracks.map((t, idx) => ({
+            id: idx,
+            label: t.name || t.lang || `Track ${idx + 1}`,
+            lang: t.lang,
+          }));
+          setAudioTracks(mapped);
+          if (targetDubCode) {
+            const matchedAudioTrack = mapped.find((t) => {
+              const detected =
+                detectSingleStreamLanguage(t.lang || '') ||
+                detectSingleStreamLanguage(t.label || '');
+              return (
+                (t.lang && t.lang.toLowerCase() === targetDubCode) ||
+                detected?.code === targetDubCode
+              );
+            });
+            if (matchedAudioTrack) {
+              hls.audioTrack = matchedAudioTrack.id;
+              setSelectedAudioTrack(matchedAudioTrack.id);
+            }
+          }
+        });
+        return true;
+      } else {
+        if (hlsRef.current) {
+          try {
+            hlsRef.current.destroy();
+          } catch {
+            // ignore
+          }
+          hlsRef.current = null;
+        }
+        videoEl.src = streamUrl;
+        const onLoadedMeta = () => {
+          videoEl.removeEventListener('loadedmetadata', onLoadedMeta);
+          if (resumeTime > 0.5) {
+            try {
+              videoEl.currentTime = resumeTime;
+            } catch {
+              // ignore
+            }
+          }
+          if (!wasPaused) {
+            videoEl.play().catch(() => {});
+          }
+        };
+        videoEl.addEventListener('loadedmetadata', onLoadedMeta);
+        return true;
+      }
+    },
+    [cleanupDubAudioEngine]
+  );
 
   // 1. Fetch TMDB Metadata from /api/tmdb/details/:mediaType/:tmdbId (with automatic movie<->tv fallback)
   useEffect(() => {
@@ -428,18 +599,52 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
       .then((r) => (r.ok ? r.json() : { subtitles: [] }))
       .then((data) => {
         if (cancelled) return;
-        const list: SubtitleTrack[] = Array.isArray(data?.subtitles) ? data.subtitles : [];
-        setSubtitles(list);
+        const list = Array.isArray(data?.subtitles) ? data.subtitles : [];
+        if (list.length > 0) {
+          setSubtitles((prev) => normalizeSubtitleTracks(prev, list));
+        }
       })
-      .catch(() => {
-        if (!cancelled) setSubtitles([]);
-      });
+      .catch(() => {});
     return () => {
       cancelled = true;
     };
   }, [metadata, currentSeason, currentEpisode]);
 
-  // 3. Load and parse selected subtitle VTT/SRT
+  const parseSubtitleText = useCallback((text: string) => {
+    const cues: { start: number; end: number; text: string }[] = [];
+    const blocks = text.replace(/\r\n/g, '\n').split(/\n\n+/);
+    const parseTime = (t: string) => {
+      const clean = t.trim().replace(',', '.');
+      const parts = clean.split(':');
+      if (parts.length === 3) {
+        return (
+          Number(parts[0]) * 3600 + Number(parts[1]) * 60 + Number.parseFloat(parts[2] || '0')
+        );
+      }
+      if (parts.length === 2) {
+        return Number(parts[0]) * 60 + Number.parseFloat(parts[1] || '0');
+      }
+      return 0;
+    };
+    for (const block of blocks) {
+      const lines = block.trim().split('\n');
+      const timeIdx = lines.findIndex((l) => l.includes('-->'));
+      if (timeIdx !== -1) {
+        const [sStr, eStr] = lines[timeIdx].split('-->');
+        const start = parseTime(sStr);
+        const end = parseTime((eStr || '').split(' ')[0]);
+        const cueText = lines
+          .slice(timeIdx + 1)
+          .join('\n')
+          .replace(/<[^>]+>/g, '')
+          .trim();
+        if (cueText) cues.push({ start, end, text: cueText });
+      }
+    }
+    return cues;
+  }, []);
+
+  // 3. Load and parse selected primary subtitle VTT/SRT
   useEffect(() => {
     if (!selectedSubtitle) {
       setParsedCues([]);
@@ -454,37 +659,7 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
       .then((r) => r.text())
       .then((text) => {
         if (cancelled) return;
-        const cues: { start: number; end: number; text: string }[] = [];
-        const blocks = text.replace(/\r\n/g, '\n').split(/\n\n+/);
-        const parseTime = (t: string) => {
-          const clean = t.trim().replace(',', '.');
-          const parts = clean.split(':');
-          if (parts.length === 3) {
-            return (
-              Number(parts[0]) * 3600 + Number(parts[1]) * 60 + Number.parseFloat(parts[2] || '0')
-            );
-          }
-          if (parts.length === 2) {
-            return Number(parts[0]) * 60 + Number.parseFloat(parts[1] || '0');
-          }
-          return 0;
-        };
-        for (const block of blocks) {
-          const lines = block.trim().split('\n');
-          const timeIdx = lines.findIndex((l) => l.includes('-->'));
-          if (timeIdx !== -1) {
-            const [sStr, eStr] = lines[timeIdx].split('-->');
-            const start = parseTime(sStr);
-            const end = parseTime((eStr || '').split(' ')[0]);
-            const cueText = lines
-              .slice(timeIdx + 1)
-              .join('\n')
-              .replace(/<[^>]+>/g, '')
-              .trim();
-            if (cueText) cues.push({ start, end, text: cueText });
-          }
-        }
-        setParsedCues(cues);
+        setParsedCues(parseSubtitleText(text));
       })
       .catch(() => {
         if (!cancelled) setParsedCues([]);
@@ -492,17 +667,48 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
     return () => {
       cancelled = true;
     };
-  }, [selectedSubtitle, subtitles]);
+  }, [selectedSubtitle, subtitles, parseSubtitleText]);
 
+  // 3b. Load and parse selected Dual Subtitle VTT/SRT
   useEffect(() => {
-    if (!parsedCues.length) {
-      setActiveCueText('');
+    if (!dualSubtitle) {
+      setDualParsedCues([]);
+      setActiveDualCueText('');
       return;
     }
+    const track = subtitles.find((s) => s.language === dualSubtitle);
+    if (!track?.url) return;
+
+    let cancelled = false;
+    fetch(`/api/stream/proxy?url=${encodeURIComponent(track.url)}`)
+      .then((r) => r.text())
+      .then((text) => {
+        if (cancelled) return;
+        setDualParsedCues(parseSubtitleText(text));
+      })
+      .catch(() => {
+        if (!cancelled) setDualParsedCues([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [dualSubtitle, subtitles, parseSubtitleText]);
+
+  useEffect(() => {
     const adjusted = currentTime - subTimeOffset;
-    const hit = parsedCues.find((c) => adjusted >= c.start && adjusted <= c.end);
-    setActiveCueText(hit ? hit.text : '');
-  }, [currentTime, parsedCues, subTimeOffset]);
+    if (!parsedCues.length) {
+      setActiveCueText('');
+    } else {
+      const hit = parsedCues.find((c) => adjusted >= c.start && adjusted <= c.end);
+      setActiveCueText(hit ? hit.text : '');
+    }
+    if (!dualParsedCues.length) {
+      setActiveDualCueText('');
+    } else {
+      const dualHit = dualParsedCues.find((c) => adjusted >= c.start && adjusted <= c.end);
+      setActiveDualCueText(dualHit ? dualHit.text : '');
+    }
+  }, [currentTime, parsedCues, dualParsedCues, subTimeOffset]);
 
   // 4. Fetch TV Season Episodes for active playing season, drawer season, and next season (for season finales)
   useEffect(() => {
@@ -621,22 +827,693 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
     durationCluster,
   ]);
 
-  // 5. Sequential Server Probing & Playback Engine (exact match to zxcstream.cc u2 + dashjs/hlsjs failover)
+  // 5. Authoritative Server State Machine & Parallel Discovery Engine
   const updateServerStatus = useCallback((idx: number, status: ServerProbeStatus) => {
     setServers((prev) =>
-      prev.map((srv, i) => (i === idx ? { ...srv, status } : srv))
+      prev.map((srv, i) => {
+        if (i !== idx) return srv;
+        // Never allow a FAILED server to transition back to checking/connecting/available in the same session
+        if (srv.status === 'failed' || srv.state === 'FAILED') {
+          return srv;
+        }
+        const nextState =
+          status === 'failed'
+            ? 'FAILED'
+            : status === 'available' || status === 'connecting'
+            ? 'SELECTED'
+            : 'PROCESSING';
+        return { ...srv, status, state: nextState };
+      })
     );
   }, []);
 
-  const probeServerAtIndex = useCallback(
-    async (serverIdx: number, runId: number, meta: TmdbMetadata, dubCodeToUse: string) => {
-      if (probeRunIdRef.current !== runId) return;
-      if (serverIdx >= PLAYER_SERVERS.length) return;
+  const syncNxshaStateMachineToUi = useCallback((sessionId?: string) => {
+    const machine = nxshaStateMachineRef.current;
+    if (sessionId && !machine.isCurrentSession(sessionId)) return;
 
-      const serverDef = PLAYER_SERVERS[serverIdx];
+    const allServers = machine.getAllServers();
+    const selectedSrv = machine.getSelectedServer();
+    const failedCodes = machine.getFailedProviderCodes();
+
+    failedNxshaProvidersRef.current = new Set(failedCodes);
+
+    if (selectedSrv) {
+      setCurrentServerIndex(selectedSrv.index);
+    }
+
+    setServers(
+      allServers.map((s) => ({
+        index: s.index,
+        code: s.code,
+        name: s.name,
+        status: s.status,
+        state: s.state,
+      }))
+    );
+
+    if (typeof window !== 'undefined') {
+      (window as any).__NXSHA_SESSION_STATE__ = {
+        sessionId: machine.getSessionId(),
+        selectedProvider: machine.getSelectedProviderCode(),
+        failedProviders: failedCodes,
+        visibleServers: machine.getVisibleServers().map((s) => ({
+          index: s.index,
+          code: s.code,
+          name: s.name,
+          state: s.state,
+          status: s.status,
+        })),
+        allServers: allServers.map((s) => ({
+          index: s.index,
+          code: s.code,
+          name: s.name,
+          state: s.state,
+          status: s.status,
+        })),
+      };
+    }
+  }, []);
+
+  const handleNxshaPlaybackFailureRef = useRef<
+    (
+      sessionId: string,
+      failedProviderCode: string,
+      meta: TmdbMetadata,
+      dubCodeToUse: string,
+      reason?: string
+    ) => void
+  >(() => {});
+
+  const attachNxshaPlayback = useCallback(
+    (
+      sessionId: string,
+      providerCode: string,
+      validSources: ValidatedNxshaSource[],
+      dubCodeToUse: string,
+      meta: TmdbMetadata
+    ) => {
+      const machine = nxshaStateMachineRef.current;
+      if (!machine.isCurrentSession(sessionId)) return;
+      if (machine.getSelectedProviderCode(sessionId) !== providerCode) return;
+      if (machine.isProviderFailed(sessionId, providerCode)) return;
+
+      cleanupMediaEngines();
+      currentPlayingProviderRef.current = providerCode;
+      hasEstablishedPlaybackRef.current = false;
+      setCanPlay(false);
+      setPlaying(false);
+
+      const winnerIdx = NXSHA_SERVERS.findIndex((s) => s.id === providerCode);
+      if (winnerIdx >= 0) {
+        setCurrentServerIndex(winnerIdx);
+      }
+
+      nxshaSourcesRef.current = validSources;
+      nxshaDefaultSourceRef.current =
+        matchNxshaSourceForDub(validSources, '') || validSources[0];
+
+      let chosenSource = nxshaDefaultSourceRef.current || validSources[0];
+      let matchedSpecificDub = false;
+      if (dubCodeToUse && dubCodeToUse !== 'orig') {
+        const matchedSource = matchNxshaSourceForDub(validSources, dubCodeToUse);
+        if (matchedSource) {
+          chosenSource = matchedSource;
+          matchedSpecificDub = true;
+        }
+      }
+
+      loadedStreamDubRef.current = matchedSpecificDub ? dubCodeToUse.toLowerCase() : '';
+      const streamUrl: string = chosenSource.url;
+      const streamType: string =
+        chosenSource.type ||
+        (streamUrl.includes('.m3u8') || streamUrl.includes('/api/nxsha/proxy')
+          ? 'hls'
+          : streamUrl.includes('.mp4')
+          ? 'mp4'
+          : 'hls');
+
+      const videoEl = videoRef.current;
+      if (!videoEl) return;
+
+      connectWatchdogTimerRef.current = window.setTimeout(() => {
+        if (
+          !machine.isCurrentSession(sessionId) ||
+          machine.getSelectedProviderCode(sessionId) !== providerCode
+        ) {
+          return;
+        }
+        if (!videoRef.current || videoRef.current.readyState < 2) {
+          handleNxshaPlaybackFailureRef.current(
+            sessionId,
+            providerCode,
+            meta,
+            dubCodeToUse,
+            'Connection watchdog timeout'
+          );
+        }
+      }, 14000);
+
+      if (streamType === 'dash' || streamType === 'andromeda') {
+        const player = dashjs.MediaPlayer().create();
+        dashRef.current = player;
+        player.updateSettings({
+          streaming: {
+            buffer: { fastSwitchEnabled: true },
+            abr: { autoSwitchBitrate: { video: true, audio: true } },
+          },
+        });
+        player.initialize(videoEl, streamUrl, autoplay);
+        player.on(dashjs.MediaPlayer.events.STREAM_INITIALIZED, () => {
+          if (
+            !machine.isCurrentSession(sessionId) ||
+            machine.getSelectedProviderCode(sessionId) !== providerCode
+          ) {
+            return;
+          }
+          const videoReps = player.getRepresentationsByType('video') || [];
+          if (!videoReps.length) {
+            handleNxshaPlaybackFailureRef.current(
+              sessionId,
+              providerCode,
+              meta,
+              dubCodeToUse,
+              'DASH stream has no playable video representations'
+            );
+            return;
+          }
+          const qList = videoReps
+            .map((rep: { height?: number }, idx: number) => ({
+              index: idx,
+              height: rep.height || 0,
+            }))
+            .filter((q: { height: number }) => q.height > 0);
+          setQualities(qList);
+        });
+        player.on(dashjs.MediaPlayer.events.ERROR, () => {
+          if (
+            !machine.isCurrentSession(sessionId) ||
+            machine.getSelectedProviderCode(sessionId) !== providerCode
+          ) {
+            return;
+          }
+          handleNxshaPlaybackFailureRef.current(
+            sessionId,
+            providerCode,
+            meta,
+            dubCodeToUse,
+            'DASH playback error'
+          );
+        });
+      } else if (
+        streamType === 'hls' ||
+        streamUrl.includes('.m3u8') ||
+        streamUrl.includes('/api/stream/proxy') ||
+        streamUrl.includes('/api/nxsha/proxy')
+      ) {
+        if (Hls.isSupported()) {
+          const hls = new Hls({
+            enableWorker: true,
+            maxBufferLength: 30,
+            fragLoadingMaxRetry: 2,
+            levelLoadingMaxRetry: 2,
+            manifestLoadingMaxRetry: 2,
+          });
+          hlsRef.current = hls;
+          hls.loadSource(streamUrl);
+          hls.attachMedia(videoEl);
+
+          hls.on(Hls.Events.MANIFEST_PARSED, (_e, manifestData) => {
+            if (
+              !machine.isCurrentSession(sessionId) ||
+              machine.getSelectedProviderCode(sessionId) !== providerCode
+            ) {
+              return;
+            }
+            let qList = manifestData.levels
+              .map((lvl, idx) => ({ index: idx, height: lvl.height || 0 }))
+              .filter((q) => q.height > 0);
+            if (qList.length <= 1) {
+              const nxshaQuals = extractNxshaQualitiesForDub(
+                validSources,
+                loadedStreamDubRef.current
+              );
+              if (nxshaQuals.length > 0) qList = nxshaQuals;
+            }
+            setQualities(qList);
+            if (autoplay) {
+              videoEl.play().catch(() => {
+                videoEl.muted = true;
+                setMuted(true);
+                videoEl.play().catch(() => {});
+              });
+            }
+          });
+
+          hls.on(Hls.Events.AUDIO_TRACKS_UPDATED, (_e, audioData) => {
+            if (
+              !machine.isCurrentSession(sessionId) ||
+              machine.getSelectedProviderCode(sessionId) !== providerCode
+            ) {
+              return;
+            }
+            const mapped = audioData.audioTracks.map((t, idx) => ({
+              id: idx,
+              label: t.name || t.lang || `Track ${idx + 1}`,
+              lang: t.lang,
+            }));
+            setAudioTracks(mapped);
+            if (dubCodeToUse && dubCodeToUse !== 'orig') {
+              const matchedAudioTrack = mapped.find((t) => {
+                const detected =
+                  detectSingleStreamLanguage(t.lang || '') ||
+                  detectSingleStreamLanguage(t.label || '');
+                return (
+                  (t.lang && t.lang.toLowerCase() === dubCodeToUse) ||
+                  detected?.code === dubCodeToUse
+                );
+              });
+              if (matchedAudioTrack) {
+                hls.audioTrack = matchedAudioTrack.id;
+                setSelectedAudioTrack(matchedAudioTrack.id);
+                loadedStreamDubRef.current = dubCodeToUse.toLowerCase();
+              }
+            }
+          });
+
+          hls.on(Hls.Events.ERROR, (_e, errData) => {
+            if (
+              !machine.isCurrentSession(sessionId) ||
+              machine.getSelectedProviderCode(sessionId) !== providerCode
+            ) {
+              return;
+            }
+            const isPrePlayNetworkError =
+              videoEl.readyState < 3 &&
+              (errData.details === Hls.ErrorDetails.FRAG_LOAD_ERROR ||
+                errData.details === Hls.ErrorDetails.MANIFEST_LOAD_ERROR);
+            if (errData.fatal || isPrePlayNetworkError) {
+              handleNxshaPlaybackFailureRef.current(
+                sessionId,
+                providerCode,
+                meta,
+                dubCodeToUse,
+                `HLS error: ${errData.details || 'fatal'}`
+              );
+            }
+          });
+        } else if (videoEl.canPlayType('application/vnd.apple.mpegurl')) {
+          videoEl.src = streamUrl;
+          if (autoplay) videoEl.play().catch(() => {});
+        } else {
+          handleNxshaPlaybackFailureRef.current(
+            sessionId,
+            providerCode,
+            meta,
+            dubCodeToUse,
+            'HLS not supported'
+          );
+        }
+      } else {
+        const nxshaQuals = extractNxshaQualitiesForDub(validSources, loadedStreamDubRef.current);
+        setQualities(nxshaQuals);
+        videoEl.src = streamUrl;
+        if (autoplay) videoEl.play().catch(() => {});
+      }
+    },
+    [autoplay, cleanupMediaEngines]
+  );
+
+  const runNxshaVerifiedFallback = useCallback(
+    async (sessionId: string, meta: TmdbMetadata, dubCodeToUse: string) => {
+      const machine = nxshaStateMachineRef.current;
+      if (!machine.isCurrentSession(sessionId)) return;
+      if (fallbackTriggeredSessionRef.current.has(sessionId)) return;
+      fallbackTriggeredSessionRef.current.add(sessionId);
+
+      try {
+        const ctrl = new AbortController();
+        nxshaAbortControllerRef.current = ctrl;
+        const res = await fetch('/api/nxsha/resolve', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          signal: ctrl.signal,
+          body: JSON.stringify({
+            tmdbId: String(meta.id),
+            mediaType: meta.mediaType,
+            season: meta.mediaType === 'tv' ? currentSeason : 1,
+            episode: meta.mediaType === 'tv' ? currentEpisode : 1,
+            strictSingleServer: true,
+            allowFallback: true,
+            excludeServers: machine.getFailedProviderCodes(sessionId),
+            imdbId: meta.imdbId,
+            dubCode: dubCodeToUse,
+            dubLang: dubCodeToUse,
+          }),
+        });
+        if (!machine.isCurrentSession(sessionId) || hasEstablishedPlaybackRef.current) return;
+        const data = await res.json().catch(() => null);
+        if (!machine.isCurrentSession(sessionId) || hasEstablishedPlaybackRef.current) return;
+
+        const validSources = Array.isArray(data?.sources)
+          ? data.sources
+              .map((s: any) => validatePlayableNxshaSource(s))
+              .filter((r: any) => r.valid && r.normalizedSource)
+              .map((r: any) => r.normalizedSource as ValidatedNxshaSource)
+          : [];
+
+        if (res.ok && data?.success && validSources.length > 0) {
+          if (Array.isArray(data.dubs) && data.dubs.length > 0) {
+            setAvailableDubs((prev) => mergeAvailableDubs(prev, data.dubs));
+          }
+          if (Array.isArray(data.subtitles) && data.subtitles.length > 0) {
+            setSubtitles((prev) => normalizeSubtitleTracks(prev, data.subtitles));
+          }
+          // Attach verified fallback stream directly to the video element without re-enabling any FAILED NXSHA provider
+          cleanupMediaEngines();
+          currentPlayingProviderRef.current = 'verified-fallback';
+          nxshaSourcesRef.current = validSources;
+          nxshaDefaultSourceRef.current = validSources[0];
+          const chosenSource = validSources[0];
+          const videoEl = videoRef.current;
+          if (!videoEl) return;
+          if (chosenSource.type === 'dash') {
+            const player = dashjs.MediaPlayer().create();
+            dashRef.current = player;
+            player.initialize(videoEl, chosenSource.url, autoplay);
+          } else if (Hls.isSupported()) {
+            const hls = new Hls({ enableWorker: true, maxBufferLength: 30 });
+            hlsRef.current = hls;
+            hls.loadSource(chosenSource.url);
+            hls.attachMedia(videoEl);
+            hls.on(Hls.Events.MANIFEST_PARSED, () => {
+              if (autoplay) {
+                videoEl.play().catch(() => {
+                  videoEl.muted = true;
+                  setMuted(true);
+                  videoEl.play().catch(() => {});
+                });
+              }
+            });
+          } else {
+            videoEl.src = chosenSource.url;
+            if (autoplay) videoEl.play().catch(() => {});
+          }
+        }
+      } catch {
+        // ignore fallback abort/network errors
+      }
+    },
+    [autoplay, cleanupMediaEngines, currentEpisode, currentSeason]
+  );
+
+  const handleNxshaPlaybackFailure = useCallback(
+    (
+      sessionId: string,
+      failedProviderCode: string,
+      meta: TmdbMetadata,
+      dubCodeToUse: string,
+      reason = 'Playback failed'
+    ) => {
+      const machine = nxshaStateMachineRef.current;
+      if (!machine.isCurrentSession(sessionId)) return;
+
+      if (currentPlayingProviderRef.current === failedProviderCode) {
+        cleanupMediaEngines();
+        currentPlayingProviderRef.current = null;
+        hasEstablishedPlaybackRef.current = false;
+        setCanPlay(false);
+        setPlaying(false);
+      }
+
+      const { nextSelected, waitingForProcessing, allFailed } = machine.failSelectedAndSelectNext(
+        sessionId,
+        failedProviderCode,
+        reason
+      );
+      syncNxshaStateMachineToUi(sessionId);
+
+      if (nextSelected && nextSelected.sources.length > 0) {
+        attachNxshaPlayback(
+          sessionId,
+          nextSelected.code,
+          nextSelected.sources,
+          dubCodeToUse,
+          meta
+        );
+      } else if (!waitingForProcessing && allFailed) {
+        void runNxshaVerifiedFallback(sessionId, meta, dubCodeToUse);
+      }
+    },
+    [attachNxshaPlayback, cleanupMediaEngines, runNxshaVerifiedFallback, syncNxshaStateMachineToUi]
+  );
+
+  handleNxshaPlaybackFailureRef.current = handleNxshaPlaybackFailure;
+
+  const startNxshaParallelDiscovery = useCallback(
+    (meta: TmdbMetadata, dubCodeToUse: string, startServerIdx: number) => {
+      // Cancel all in-flight controllers from any previous search session
+      for (const ctrl of nxshaProviderControllersRef.current.values()) {
+        ctrl.abort();
+      }
+      nxshaProviderControllersRef.current.clear();
+      if (nxshaAbortControllerRef.current) {
+        nxshaAbortControllerRef.current.abort();
+        nxshaAbortControllerRef.current = null;
+      }
+
+      cleanupMediaEngines();
+      currentPlayingProviderRef.current = null;
+      hasEstablishedPlaybackRef.current = false;
+      setCanPlay(false);
+      setPlaying(false);
+
+      const machine = nxshaStateMachineRef.current;
+      const sessionKey = `${meta.mediaType}:${meta.id}:${currentSeason}:${currentEpisode}`;
+      const sessionId = machine.startSession(sessionKey, NXSHA_SERVERS);
+      activeSessionIdRef.current = sessionId;
+
+      const sessionStartMs =
+        typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now();
+      let recordedFirstWinnerTime = false;
+
+      // Order providers so the initial preferred server is launched first, followed by all other eligible servers
+      const clampedStart = Math.max(0, Math.min(NXSHA_SERVERS.length - 1, startServerIdx));
+      const orderedServers = [
+        NXSHA_SERVERS[clampedStart],
+        ...NXSHA_SERVERS.filter((_, idx) => idx !== clampedStart),
+      ];
+
+      const requestIdsByProvider = new Map<string, string>();
+      for (const srv of orderedServers) {
+        const begin = machine.beginProviderDiscovery(sessionId, srv.id);
+        if (begin.started) {
+          requestIdsByProvider.set(srv.id, begin.requestId);
+        }
+      }
+
+      syncNxshaStateMachineToUi(sessionId);
+
+      // Non-blocking background subtitle fetch for the session
+      const subQs = new URLSearchParams({
+        tmdbId: String(meta.id),
+        mediaType: meta.mediaType,
+        season: String(meta.mediaType === 'tv' ? currentSeason : 1),
+        episode: String(meta.mediaType === 'tv' ? currentEpisode : 1),
+        imdbId: meta.imdbId || '',
+      });
+      fetch(`/api/nxsha/subtitles?${subQs.toString()}`)
+        .then((r) => (r.ok ? r.json() : null))
+        .then((subJson) => {
+          if (
+            machine.isCurrentSession(sessionId) &&
+            Array.isArray(subJson?.subtitles) &&
+            subJson.subtitles.length > 0
+          ) {
+            setSubtitles((prev) => normalizeSubtitleTracks(prev, subJson.subtitles));
+          }
+        })
+        .catch(() => {});
+
+      // Launch discovery requests concurrently across all eligible NXSHA providers
+      for (const srv of orderedServers) {
+        const reqId = requestIdsByProvider.get(srv.id);
+        if (!reqId) continue;
+
+        const ctrl = new AbortController();
+        nxshaProviderControllersRef.current.set(srv.id, ctrl);
+
+        void (async () => {
+          try {
+            const res = await fetch('/api/nxsha/resolve', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              signal: ctrl.signal,
+              body: JSON.stringify({
+                tmdbId: String(meta.id),
+                mediaType: meta.mediaType,
+                season: meta.mediaType === 'tv' ? currentSeason : 1,
+                episode: meta.mediaType === 'tv' ? currentEpisode : 1,
+                preferredServer: srv.id,
+                strictSingleServer: true,
+                allowFallback: false,
+                excludeServers: machine.getFailedProviderCodes(sessionId),
+                imdbId: meta.imdbId,
+                dubCode: dubCodeToUse,
+                dubLang: dubCodeToUse,
+              }),
+            });
+
+            if (!machine.isCurrentSession(sessionId)) return;
+            const data = await res.json().catch(() => null);
+            if (!machine.isCurrentSession(sessionId)) return;
+
+            if (Array.isArray(data?.dubs) && data.dubs.length > 0) {
+              setAvailableDubs((prev) => mergeAvailableDubs(prev, data.dubs));
+            }
+            if (Array.isArray(data?.subtitles) && data.subtitles.length > 0) {
+              setSubtitles((prev) => normalizeSubtitleTracks(prev, data.subtitles));
+            }
+
+            const rawSources = Array.isArray(data?.sources) ? data.sources : [];
+            if (!res.ok || !data?.success || rawSources.length === 0) {
+              const failRes = machine.markProviderFailed(
+                sessionId,
+                srv.id,
+                data?.error || 'No valid playable sources',
+                { requestId: reqId }
+              );
+              syncNxshaStateMachineToUi(sessionId);
+
+              if (failRes.wasSelected) {
+                handleNxshaPlaybackFailure(
+                  sessionId,
+                  srv.id,
+                  meta,
+                  dubCodeToUse,
+                  'Selected provider returned no valid sources'
+                );
+              } else if (machine.getVisibleServers(sessionId).length === 0) {
+                void runNxshaVerifiedFallback(sessionId, meta, dubCodeToUse);
+              }
+              return;
+            }
+
+            const successRes = machine.resolveProviderSuccess(
+              sessionId,
+              srv.id,
+              {
+                sources: rawSources,
+                subtitles: data.subtitles,
+                dubs: data.dubs,
+              },
+              { requestId: reqId, autoSelectIfNoWinner: true }
+            );
+            syncNxshaStateMachineToUi(sessionId);
+
+            if (!successRes.applied) return;
+
+            if (successRes.state === 'FAILED') {
+              if (machine.getVisibleServers(sessionId).length === 0) {
+                void runNxshaVerifiedFallback(sessionId, meta, dubCodeToUse);
+              }
+              return;
+            }
+
+            if (
+              successRes.becameSelected &&
+              successRes.state === 'SELECTED' &&
+              currentPlayingProviderRef.current !== srv.id
+            ) {
+              if (!recordedFirstWinnerTime) {
+                recordedFirstWinnerTime = true;
+                const elapsedMs = Number(
+                  Math.max(
+                    0,
+                    (typeof performance !== 'undefined' && performance.now
+                      ? performance.now()
+                      : Date.now()) - sessionStartMs
+                  ).toFixed(2)
+                );
+                const diag: NxshaDiscoveryDiagnostics = {
+                  discoveryStartTimeMs: Number(sessionStartMs.toFixed(2)),
+                  timeToFirstValidSourceMs:
+                    data?.diagnostics?.timeToFirstValidSourceMs ?? elapsedMs,
+                  totalDiscoveryDurationMs: elapsedMs,
+                  winningProvider: srv.id,
+                  totalProvidersQueried: orderedServers.length,
+                  totalFailedProviders: machine.getFailedProviderCodes(sessionId).length,
+                  cancelledProvidersCount: 0,
+                  lateIgnoredCount: 0,
+                  providerTimings: data?.diagnostics?.providerTimings || [],
+                };
+                setNxshaDiagnostics(diag);
+                if (typeof window !== 'undefined') {
+                  (window as any).__NXSHA_LAST_DIAGNOSTICS__ = diag;
+                }
+              }
+
+              attachNxshaPlayback(sessionId, srv.id, successRes.validSources, dubCodeToUse, meta);
+            }
+          } catch {
+            if (!machine.isCurrentSession(sessionId)) return;
+            if (ctrl.signal.aborted) return;
+
+            const failRes = machine.markProviderFailed(
+              sessionId,
+              srv.id,
+              'Network request failed',
+              { requestId: reqId }
+            );
+            syncNxshaStateMachineToUi(sessionId);
+
+            if (failRes.wasSelected) {
+              handleNxshaPlaybackFailure(
+                sessionId,
+                srv.id,
+                meta,
+                dubCodeToUse,
+                'Selected provider network request failed'
+              );
+            } else if (machine.getVisibleServers(sessionId).length === 0) {
+              void runNxshaVerifiedFallback(sessionId, meta, dubCodeToUse);
+            }
+          }
+        })();
+      }
+    },
+    [
+      attachNxshaPlayback,
+      cleanupMediaEngines,
+      currentEpisode,
+      currentSeason,
+      handleNxshaPlaybackFailure,
+      runNxshaVerifiedFallback,
+      syncNxshaStateMachineToUi,
+    ]
+  );
+
+  const probeServerAtIndex = useCallback(
+    async (
+      serverIdx: number,
+      runId: number,
+      meta: TmdbMetadata,
+      dubCodeToUse: string,
+      _isManualServerSelect = false
+    ) => {
+      if (probeRunIdRef.current !== runId) return;
+      if (playerMode === 'nxsha') {
+        startNxshaParallelDiscovery(meta, dubCodeToUse, serverIdx);
+        return;
+      }
+
+      const activeList = PLAYER_SERVERS;
+      if (serverIdx >= activeList.length) return;
+
+      const serverDef = activeList[serverIdx];
       setCurrentServerIndex(serverIdx);
       updateServerStatus(serverIdx, 'checking');
       cleanupMediaEngines();
+      hasEstablishedPlaybackRef.current = false;
       setCanPlay(false);
       setPlaying(false);
 
@@ -644,16 +1521,16 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
 
       const advanceToNextServer = () => {
         if (probeRunIdRef.current !== runId) return;
-        updateServerStatus(serverIdx, 'failed');
         cleanupMediaEngines();
-        // Find next server in queue
-        const nextIdx = (serverIdx + 1) % PLAYER_SERVERS.length;
+        updateServerStatus(serverIdx, 'failed');
         setServers((prev) => {
-          const nextServer = prev[nextIdx];
-          if (nextServer && nextServer.status === 'queue') {
+          const nextCandidate = prev.find(
+            (s, idx) => idx !== serverIdx && s.status !== 'failed' && s.state !== 'FAILED'
+          );
+          if (nextCandidate) {
             window.setTimeout(() => {
-              probeServerAtIndex(nextIdx, runId, meta, dubCodeToUse);
-            }, 350);
+              probeServerAtIndex(nextCandidate.index, runId, meta, dubCodeToUse);
+            }, 250);
           }
           return prev;
         });
@@ -684,21 +1561,19 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
         if (probeRunIdRef.current !== runId) return;
         const data = await res.json();
         if (Array.isArray(data?.dubs) && data.dubs.length > 0) {
-          setAvailableDubs(data.dubs);
+          setAvailableDubs((prev) => mergeAvailableDubs(prev, data.dubs));
         }
         if (!res.ok || !data?.success || !data?.link) {
           advanceToNextServer();
           return;
         }
 
-        // Server found a candidate stream -> transition to 'connecting' (backdrop turns color!)
         updateServerStatus(serverIdx, 'connecting');
         loadedStreamDubRef.current = serverIdx === 0 ? dubCodeToUse.toLowerCase() : '';
 
         const videoEl = videoRef.current;
         if (!videoEl) return;
 
-        // Guard against stalled edge streams that accept manifest requests but hang on initial segments
         connectWatchdogTimerRef.current = window.setTimeout(() => {
           if (probeRunIdRef.current !== runId) return;
           if (!videoRef.current || videoRef.current.readyState < 2) {
@@ -724,7 +1599,6 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
             if (probeRunIdRef.current !== runId) return;
             const videoReps = player.getRepresentationsByType('video') || [];
             if (!videoReps.length) {
-              // Browser MSE cannot decode this codec (e.g., HEVC on Chromium) -> fail over to next server!
               advanceToNextServer();
               return;
             }
@@ -750,7 +1624,11 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
             if (probeRunIdRef.current !== runId) return;
             advanceToNextServer();
           });
-        } else if (streamType === 'hls' || streamUrl.includes('.m3u8') || streamUrl.includes('/api/stream/proxy')) {
+        } else if (
+          streamType === 'hls' ||
+          streamUrl.includes('.m3u8') ||
+          streamUrl.includes('/api/stream/proxy')
+        ) {
           if (Hls.isSupported()) {
             const hls = new Hls({
               enableWorker: true,
@@ -771,7 +1649,6 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
               setQualities(qList);
               if (autoplay) {
                 videoEl.play().catch(() => {
-                  // Autoplay muted fallback if browser policy blocks unmuted autoplay
                   videoEl.muted = true;
                   setMuted(true);
                   videoEl.play().catch(() => {});
@@ -821,7 +1698,15 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
         advanceToNextServer();
       }
     },
-    [autoplay, cleanupMediaEngines, currentEpisode, currentSeason, updateServerStatus]
+    [
+      autoplay,
+      cleanupMediaEngines,
+      currentEpisode,
+      currentSeason,
+      playerMode,
+      startNxshaParallelDiscovery,
+      updateServerStatus,
+    ]
   );
 
   // Trigger server probing when metadata, season, or episode changes
@@ -831,20 +1716,31 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
   useEffect(() => {
     if (!metadata) return;
     setAvailableDubs([]);
+    setNxshaDiagnostics(null);
+    failedNxshaProvidersRef.current.clear();
+    hasEstablishedPlaybackRef.current = false;
+    currentPlayingProviderRef.current = null;
     const runId = ++probeRunIdRef.current;
-    const startIdx = Math.max(0, Math.min(PLAYER_SERVERS.length - 1, initialServer));
-    setServers(
-      PLAYER_SERVERS.map((s) => ({
-        index: s.index,
-        code: s.id,
-        name: s.label,
-        status: 'queue',
-      }))
-    );
-    probeServerAtIndex(startIdx, runId, metadata, initialDubRef.current);
+    const activeList = playerMode === 'nxsha' ? NXSHA_SERVERS : PLAYER_SERVERS;
+    const startIdx = Math.max(0, Math.min(activeList.length - 1, initialServer));
 
-    // If starting on a server other than Orion (0), still fetch Orion's available dubs list in background
-    if (startIdx !== 0) {
+    if (playerMode === 'nxsha') {
+      startNxshaParallelDiscovery(metadata, initialDubRef.current, startIdx);
+    } else {
+      setServers(
+        activeList.map((s) => ({
+          index: s.index,
+          code: s.id,
+          name: s.label,
+          status: 'checking',
+          state: 'PENDING',
+        }))
+      );
+      void probeServerAtIndex(startIdx, runId, metadata, initialDubRef.current, false);
+    }
+
+    // Always fetch Orion's available dubs list in background when starting on non-Orion or in NXSHA mode
+    if (startIdx !== 0 || playerMode === 'nxsha') {
       fetch('/api/stream/resolve', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -866,7 +1762,7 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
         .then((r) => (r.ok ? r.json() : null))
         .then((d) => {
           if (Array.isArray(d?.dubs) && d.dubs.length > 0) {
-            setAvailableDubs(d.dubs);
+            setAvailableDubs((prev) => mergeAvailableDubs(prev, d.dubs));
           }
         })
         .catch(() => {});
@@ -874,8 +1770,24 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
 
     return () => {
       probeRunIdRef.current++;
+      for (const ctrl of nxshaProviderControllersRef.current.values()) {
+        ctrl.abort();
+      }
+      nxshaProviderControllersRef.current.clear();
+      if (nxshaAbortControllerRef.current) {
+        nxshaAbortControllerRef.current.abort();
+        nxshaAbortControllerRef.current = null;
+      }
     };
-  }, [metadata, currentSeason, currentEpisode, initialServer, probeServerAtIndex]);
+  }, [
+    metadata,
+    currentSeason,
+    currentEpisode,
+    initialServer,
+    playerMode,
+    probeServerAtIndex,
+    startNxshaParallelDiscovery,
+  ]);
 
   // Synchronize external Dub Audio stream (from Orion /api/stream/mpd-audio) whenever selectedDub differs from the loaded video's audio
   useEffect(() => {
@@ -943,12 +1855,8 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
       })
       .then(({ ok, data }) => {
         if (cancelled || dubRequestIdRef.current !== reqId) return;
-        if (
-          Array.isArray(data?.dubs) &&
-          data.dubs.length > 0 &&
-          availableDubsRef.current.length === 0
-        ) {
-          setAvailableDubs(data.dubs);
+        if (Array.isArray(data?.dubs) && data.dubs.length > 0) {
+          setAvailableDubs((prev) => mergeAvailableDubs(prev, data.dubs));
         }
         const dubMpdUrl: string | null = data?.dubAudioUrl || data?.link || null;
         const audioEl = dubAudioRef.current;
@@ -1102,18 +2010,133 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
     showDubFallbackBanner,
   ]);
 
-  // Manual server switch from user clicking a server in the right-side carousel
-  const handleManualServerSelect = (idx: number) => {
-    if (!metadata) return;
-    const runId = ++probeRunIdRef.current;
-    setServers((prev) =>
-      prev.map((s, i) => ({
-        ...s,
-        status: i === idx ? 'checking' : s.status === 'available' ? 'queue' : s.status,
-      }))
-    );
-    probeServerAtIndex(idx, runId, metadata, selectedDub);
-  };
+  // Manual server switch from user clicking an eligible server in the right-side list
+  const handleManualServerSelect = useCallback(
+    (idx: number) => {
+      if (!metadata) return;
+
+      if (playerMode === 'nxsha') {
+        const machine = nxshaStateMachineRef.current;
+        const sessionId = activeSessionIdRef.current;
+        const targetDef = NXSHA_SERVERS[idx];
+        if (!targetDef || !sessionId || !machine.isCurrentSession(sessionId)) return;
+
+        // Never select a FAILED server or duplicate-select the already SELECTED server
+        if (machine.isProviderFailed(sessionId, targetDef.id)) return;
+        if (machine.getSelectedProviderCode(sessionId) === targetDef.id) return;
+
+        const selRes = machine.selectServer(sessionId, targetDef.id);
+        if (!selRes.selected || !selRes.entry) return;
+
+        syncNxshaStateMachineToUi(sessionId);
+
+        if (selRes.entry.sources.length > 0) {
+          // Server already has validated AVAILABLE sources cached in this session -> instant 0ms switch!
+          attachNxshaPlayback(
+            sessionId,
+            targetDef.id,
+            selRes.entry.sources,
+            selectedDub,
+            metadata
+          );
+        } else {
+          // Server is currently PROCESSING in-flight; wait for its active request to complete without sending a duplicate request
+          cleanupMediaEngines();
+          currentPlayingProviderRef.current = null;
+          hasEstablishedPlaybackRef.current = false;
+          setCanPlay(false);
+          setPlaying(false);
+        }
+        return;
+      }
+
+      // ZXCSTREAM custom mode manual selection (excluding failed servers)
+      const targetSrv = servers[idx];
+      if (!targetSrv || targetSrv.status === 'failed' || targetSrv.state === 'FAILED') return;
+      if (idx === currentServerIndex && canPlay) return;
+
+      const runId = ++probeRunIdRef.current;
+      hasEstablishedPlaybackRef.current = false;
+      setServers((prev) =>
+        prev.map((s, i) => {
+          if (s.status === 'failed' || s.state === 'FAILED') return s;
+          if (i === idx) return { ...s, status: 'checking', state: 'SELECTED' };
+          return {
+            ...s,
+            status: s.status === 'available' ? 'available' : 'checking',
+            state: s.status === 'available' ? 'AVAILABLE' : 'PROCESSING',
+          };
+        })
+      );
+      void probeServerAtIndex(idx, runId, metadata, selectedDub, true);
+    },
+    [
+      attachNxshaPlayback,
+      canPlay,
+      cleanupMediaEngines,
+      currentServerIndex,
+      metadata,
+      playerMode,
+      probeServerAtIndex,
+      selectedDub,
+      servers,
+      syncNxshaStateMachineToUi,
+    ]
+  );
+
+  // Expose deterministic test/diagnostic API on window for automated state-machine & race-condition verification
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    (window as any).__NXSHA_TEST_API__ = {
+      getSessionState: () => (window as any).__NXSHA_SESSION_STATE__,
+      selectServerByIndex: (idx: number) => handleManualServerSelect(idx),
+      simulateProviderFailure: (
+        code: string,
+        reason = 'Simulated failure',
+        options?: { sessionId?: string; requestId?: string; isPlaybackError?: boolean }
+      ) => {
+        const machine = nxshaStateMachineRef.current;
+        const sid = options?.sessionId || activeSessionIdRef.current;
+        if (options?.isPlaybackError && metadata) {
+          handleNxshaPlaybackFailure(sid, code, metadata, selectedDub, reason);
+          return { applied: true, wasSelected: true };
+        }
+        const res = machine.markProviderFailed(sid, code, reason, options);
+        syncNxshaStateMachineToUi(sid);
+        if (res.wasSelected && metadata) {
+          handleNxshaPlaybackFailure(sid, code, metadata, selectedDub, reason);
+        }
+        return res;
+      },
+      simulateProviderSuccess: (
+        code: string,
+        payload: { sources: any[]; subtitles?: any[]; dubs?: any[] },
+        options?: { sessionId?: string; requestId?: string; autoSelectIfNoWinner?: boolean }
+      ) => {
+        const machine = nxshaStateMachineRef.current;
+        const sid = options?.sessionId || activeSessionIdRef.current;
+        const res = machine.resolveProviderSuccess(sid, code, payload, options);
+        syncNxshaStateMachineToUi(sid);
+        if (
+          res.applied &&
+          res.becameSelected &&
+          res.state === 'SELECTED' &&
+          metadata &&
+          currentPlayingProviderRef.current !== code
+        ) {
+          attachNxshaPlayback(sid, code, res.validSources, selectedDub, metadata);
+        }
+        return res;
+      },
+    };
+  }, [
+    attachNxshaPlayback,
+    handleManualServerSelect,
+    handleNxshaPlaybackFailure,
+    metadata,
+    selectedDub,
+    syncNxshaStateMachineToUi,
+  ]);
 
   // Auto-hide controls after 3s of mouse inactivity during playback
   useEffect(() => {
@@ -1405,6 +2428,19 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
   // Quality change handler
   const handleSelectQuality = (qIdx: number) => {
     setSelectedQuality(qIdx);
+    if (playerMode === 'nxsha' && nxshaSourcesRef.current.length > 0 && (qIdx >= 1000 || (qIdx === -1 && selectedQuality >= 1000))) {
+      const targetHeight = qIdx >= 1000 ? qIdx - 1000 : null;
+      const targetSrc = matchNxshaSourceForDub(
+        nxshaSourcesRef.current,
+        loadedStreamDubRef.current,
+        targetHeight
+      );
+      if (targetSrc) {
+        switchNxshaSourceInPlace(targetSrc, loadedStreamDubRef.current);
+      }
+      setSettingsTab('main');
+      return;
+    }
     if (hlsRef.current) {
       hlsRef.current.currentLevel = qIdx;
     } else if (dashRef.current) {
@@ -1456,6 +2492,68 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
     setSelectedDub(cleanCode);
     setSelectedDubType(String(dubTypeVal ?? 0));
     setSettingsTab('main');
+
+    if (playerMode === 'nxsha') {
+      const preferredHeight = selectedQuality >= 1000 ? selectedQuality - 1000 : null;
+      // 0. Switching back to Original Audio
+      if (!cleanCode || cleanCode === 'orig' || cleanCode === 'original') {
+        cleanupDubAudioEngine();
+        const origSource =
+          matchNxshaSourceForDub(nxshaSourcesRef.current, '', preferredHeight) ||
+          nxshaDefaultSourceRef.current;
+        if (loadedStreamDubRef.current !== '' && origSource) {
+          switchNxshaSourceInPlace(origSource, '');
+        } else {
+          loadedStreamDubRef.current = '';
+          if (videoRef.current) {
+            videoRef.current.muted = mutedRef.current;
+            videoRef.current.volume = volumeRef.current;
+          }
+        }
+        return;
+      }
+
+      // 1. Check if current HLS stream has an embedded audio track for this language
+      if (hlsRef.current && audioTracks.length > 1) {
+        const matchedTrack = audioTracks.find((t) => {
+          const detected =
+            detectSingleStreamLanguage(t.lang || '') ||
+            detectSingleStreamLanguage(t.label || '');
+          return (
+            (t.lang && t.lang.toLowerCase() === cleanCode) ||
+            detected?.code === cleanCode
+          );
+        });
+        if (matchedTrack) {
+          cleanupDubAudioEngine();
+          hlsRef.current.audioTrack = matchedTrack.id;
+          setSelectedAudioTrack(matchedTrack.id);
+          loadedStreamDubRef.current = cleanCode;
+          if (videoRef.current) {
+            videoRef.current.muted = mutedRef.current;
+            videoRef.current.volume = volumeRef.current;
+          }
+          return;
+        }
+      }
+
+      // 2. Check if NXSHA resolved sources have a verified native stream for this exact language
+      const matchedSource = matchNxshaSourceForDub(
+        nxshaSourcesRef.current,
+        cleanCode,
+        preferredHeight
+      );
+      if (matchedSource) {
+        switchNxshaSourceInPlace(matchedSource, cleanCode);
+        return;
+      }
+
+      // 3. Otherwise, ensure the base video is Original Audio if it was previously switched to a different native dub,
+      // and let the External Dub Audio Sync useEffect load Orion's synchronized dubbed audio track over the NXSHA video!
+      if (loadedStreamDubRef.current !== '' && nxshaDefaultSourceRef.current) {
+        switchNxshaSourceInPlace(nxshaDefaultSourceRef.current, '');
+      }
+    }
   };
 
   // Playback speed change handler
@@ -1817,6 +2915,17 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
       data-is-fullscreen={isFullscreen}
       data-orientation={isFullscreen ? (isPortrait ? 'forced-landscape' : 'landscape') : 'auto'}
       data-episode-key={activeEpisodeKey}
+      data-session-id={activeSessionIdRef.current}
+      data-selected-server={
+        playerMode === 'nxsha'
+          ? nxshaStateMachineRef.current.getSelectedProviderCode() ?? ''
+          : PLAYER_SERVERS[currentServerIndex]?.id ?? ''
+      }
+      data-failed-servers={
+        playerMode === 'nxsha'
+          ? nxshaStateMachineRef.current.getFailedProviderCodes().join(',')
+          : ''
+      }
       data-intro-start={resolvedTiming.introStart ?? ''}
       data-intro-end={resolvedTiming.introEnd ?? ''}
       data-recap-start={resolvedTiming.recapStart ?? ''}
@@ -1826,6 +2935,8 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
       data-next-trigger-time={resolvedTiming.nextEpisodeTriggerTime ?? ''}
       data-next-episode-id={resolvedTiming.nextEpisodeId ?? ''}
       data-timing-source={resolvedTiming.source ?? ''}
+      data-discovery-winner={nxshaDiagnostics?.winningProvider ?? ''}
+      data-discovery-time-ms={nxshaDiagnostics?.timeToFirstValidSourceMs ?? ''}
       onMouseMove={wakeControls}
       onClick={wakeControls}
       className={`relative bg-black overflow-hidden select-none font-sans text-white ${
@@ -1857,19 +2968,41 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
           if (v.duration && Number.isFinite(v.duration) && v.duration > 0) {
             setDuration(v.duration);
           }
+          hasEstablishedPlaybackRef.current = true;
           setCanPlay(true);
           setWaiting(false);
-          updateServerStatus(currentServerIndex, 'available');
+          if (playerMode === 'nxsha') {
+            nxshaStateMachineRef.current.markPlaybackEstablished(
+              activeSessionIdRef.current,
+              currentPlayingProviderRef.current ||
+                nxshaStateMachineRef.current.getSelectedProviderCode() ||
+                ''
+            );
+            syncNxshaStateMachineToUi(activeSessionIdRef.current);
+          } else {
+            updateServerStatus(currentServerIndex, 'available');
+          }
         }}
         onPlaying={(e) => {
           const v = e.currentTarget;
           if (v.duration && Number.isFinite(v.duration) && v.duration > 0) {
             setDuration(v.duration);
           }
+          hasEstablishedPlaybackRef.current = true;
           setCanPlay(true);
           setPlaying(true);
           setWaiting(false);
-          updateServerStatus(currentServerIndex, 'available');
+          if (playerMode === 'nxsha') {
+            nxshaStateMachineRef.current.markPlaybackEstablished(
+              activeSessionIdRef.current,
+              currentPlayingProviderRef.current ||
+                nxshaStateMachineRef.current.getSelectedProviderCode() ||
+                ''
+            );
+            syncNxshaStateMachineToUi(activeSessionIdRef.current);
+          } else {
+            updateServerStatus(currentServerIndex, 'available');
+          }
           if (usingExternalDubRef.current && dubAudioRef.current && videoRef.current) {
             videoRef.current.muted = true;
             dubAudioRef.current.muted = mutedRef.current;
@@ -2026,11 +3159,27 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
         }}
         onError={() => {
           if (!canPlay && metadata) {
-            const nextRunId = ++probeRunIdRef.current;
-            updateServerStatus(currentServerIndex, 'failed');
-            const nextIdx = (currentServerIndex + 1) % PLAYER_SERVERS.length;
-            if (servers[nextIdx]?.status === 'queue') {
-              probeServerAtIndex(nextIdx, nextRunId, metadata, selectedDub);
+            if (playerMode === 'nxsha') {
+              const failingCode =
+                currentPlayingProviderRef.current ||
+                NXSHA_SERVERS[currentServerIndex]?.id ||
+                '';
+              if (failingCode) {
+                handleNxshaPlaybackFailure(
+                  activeSessionIdRef.current,
+                  failingCode,
+                  metadata,
+                  selectedDub,
+                  'HTMLVideoElement playback error'
+                );
+              }
+            } else {
+              const nextRunId = ++probeRunIdRef.current;
+              updateServerStatus(currentServerIndex, 'failed');
+              const nextIdx = (currentServerIndex + 1) % PLAYER_SERVERS.length;
+              if (servers[nextIdx]?.status === 'queue') {
+                probeServerAtIndex(nextIdx, nextRunId, metadata, selectedDub);
+              }
             }
           }
         }}
@@ -2061,21 +3210,37 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
         </div>
       )}
 
-      {canPlay && activeCueText && (
+      {canPlay && (activeCueText || activeDualCueText) && (
         <div
           style={{ top: `${controlsVisible || !playing ? Math.min(subPosition, 75) : subPosition}%` }}
-          className="absolute inset-x-0 z-20 flex justify-center pointer-events-none px-6 -translate-y-1/2 transition-all duration-200"
+          className="absolute inset-x-0 z-20 flex flex-col items-center justify-center gap-1.5 pointer-events-none px-6 -translate-y-1/2 transition-all duration-200"
         >
-          <div
-            style={{
-              fontSize: `${subFontSize}px`,
-              color: subTextColor,
-              backgroundColor: `rgba(0, 0, 0, ${subBgOpacity / 100})`,
-            }}
-            className="px-3 py-1 rounded text-center whitespace-pre-line leading-snug drop-shadow-md max-w-2xl"
-          >
-            {activeCueText}
-          </div>
+          {activeDualCueText && (
+            <div
+              data-testid="dual-subtitle-cue"
+              style={{
+                fontSize: `${Math.max(12, Math.round(subFontSize * 0.88))}px`,
+                color: '#fde047',
+                backgroundColor: `rgba(0, 0, 0, ${subBgOpacity / 100})`,
+              }}
+              className="px-3 py-1 rounded text-center whitespace-pre-line leading-snug drop-shadow-md max-w-2xl"
+            >
+              {activeDualCueText}
+            </div>
+          )}
+          {activeCueText && (
+            <div
+              data-testid="primary-subtitle-cue"
+              style={{
+                fontSize: `${subFontSize}px`,
+                color: subTextColor,
+                backgroundColor: `rgba(0, 0, 0, ${subBgOpacity / 100})`,
+              }}
+              className="px-3 py-1 rounded text-center whitespace-pre-line leading-snug drop-shadow-md max-w-2xl"
+            >
+              {activeCueText}
+            </div>
+          )}
         </div>
       )}
 

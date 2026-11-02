@@ -67,7 +67,12 @@ export default function App() {
         isStandalonePage={true}
         onBack={() => navigateTo('/')}
         onEpisodeChange={(newSeason, newEpisode) => {
-          const endpoint = route.playerMode === 'custom' ? 'player' : 'embed';
+          const endpoint =
+            route.playerMode === 'nxsha'
+              ? 'nxsha'
+              : route.playerMode === 'custom'
+              ? 'player'
+              : 'embed';
           navigateTo(`/${endpoint}/tv/${route.tmdbId}/${newSeason}/${newEpisode}`, search);
         }}
       />
@@ -88,7 +93,12 @@ export default function App() {
         season: string,
         episode: string
       ) => {
-        const endpoint = playerMode === 'custom' ? 'player' : 'embed';
+        const endpoint =
+          playerMode === 'nxsha'
+            ? 'nxsha'
+            : playerMode === 'custom'
+            ? 'player'
+            : 'embed';
         const path =
           mediaType === 'tv'
             ? `/${endpoint}/tv/${tmdbId}/${season || '1'}/${episode || '1'}`

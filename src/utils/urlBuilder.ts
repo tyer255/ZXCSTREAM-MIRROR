@@ -1,4 +1,4 @@
-export type PlayerMode = 'custom' | 'builtin';
+export type PlayerMode = 'custom' | 'builtin' | 'nxsha';
 export type MediaType = 'movie' | 'tv';
 
 export interface PlayerUrlOptions {
@@ -46,6 +46,7 @@ export interface RawOrionDub {
   type?: number;
   lang: string;
   name: string;
+  label?: string;
   original?: boolean;
 }
 
@@ -131,7 +132,7 @@ export function getDefaultOrigin(): string {
  */
 export function buildPlayerUrl(options: PlayerUrlOptions): string {
   const origin = (options.baseOrigin ?? getDefaultOrigin()).replace(/\/+$/, '');
-  const endpoint = options.playerMode === 'custom' ? 'player' : 'embed';
+  const endpoint = options.playerMode === 'nxsha' ? 'nxsha' : options.playerMode === 'custom' ? 'player' : 'embed';
   const cleanId = options.tmdbId.trim();
 
   let path = `${origin}/${endpoint}/${options.mediaType}`;
@@ -177,11 +178,12 @@ export function buildEmbedIframeCode(
   tmdbId: string,
   season = '1',
   episode = '1',
-  baseOrigin?: string
+  baseOrigin?: string,
+  playerMode: PlayerMode = 'builtin'
 ): string {
   const url = buildPlayerUrl({
     baseOrigin: baseOrigin ?? getDefaultOrigin(),
-    playerMode: 'builtin',
+    playerMode,
     mediaType,
     tmdbId,
     season,
@@ -215,6 +217,18 @@ export const PLAYER_SERVERS = [
   { index: 3, id: 'ursa', label: 'Ursa IV' },
   { index: 4, id: 'alatreon', label: 'Alatreon V' },
   { index: 5, id: 'daedalus', label: 'Daedalus VI' },
+] as const;
+
+export const NXSHA_SERVERS = [
+  { index: 0, id: 'rive-citadel', label: 'Citadel (Hindi & Multi)' },
+  { index: 1, id: 'castle', label: 'CastVid (Multi-Lang)' },
+  { index: 2, id: 'watchout', label: 'Multi-bill (Fast HLS)' },
+  { index: 3, id: 'streamflix', label: 'StremFx (Direct MP4)' },
+  { index: 4, id: 'nitro', label: 'Nitro (1080p Multi-Audio)' },
+  { index: 5, id: 'xdownloader', label: 'XDrop (Alternative)' },
+  { index: 6, id: 'purstream', label: 'PurStream (Fast)' },
+  { index: 7, id: 'vixolity', label: 'Vixolity (UHD)' },
+  { index: 8, id: 'rive-primevids', label: 'PrimeVids (Backup)' },
 ] as const;
 
 export const PLAYER_HINTS = [
@@ -320,6 +334,7 @@ export function filterAudioDubTracks(dubs?: RawOrionDub[] | null): RawOrionDub[]
     // Exclude type 1 (hardcoded subtitle stream) unless marked original
     if (typeNum !== 0 && !item.original) continue;
     const cleanLang = item.lang.trim().toLowerCase();
+    if (cleanLang === 'orig' || cleanLang === 'original') continue;
     const key = `${cleanLang}:${typeNum}:${Boolean(item.original)}`;
     if (seen.has(key)) continue;
     seen.add(key);
@@ -331,6 +346,42 @@ export function filterAudioDubTracks(dubs?: RawOrionDub[] | null): RawOrionDub[]
     });
   }
   return result;
+}
+
+/**
+ * Merges two RawOrionDub arrays (e.g. native NXSHA dubs and Orion dubs) without duplicates.
+ */
+export function mergeAvailableDubs(
+  existing?: RawOrionDub[] | null,
+  incoming?: RawOrionDub[] | null
+): RawOrionDub[] {
+  const combined = [...(Array.isArray(existing) ? existing : []), ...(Array.isArray(incoming) ? incoming : [])];
+  const byLang = new Map<string, RawOrionDub>();
+  for (const item of combined) {
+    if (!item || typeof item.lang !== 'string' || !item.lang.trim()) continue;
+    const typeNum = Number(item.type ?? 0);
+    if (typeNum !== 0 && !item.original) continue;
+    const cleanLang = item.lang.trim().toLowerCase();
+    if (cleanLang === 'orig' || cleanLang === 'original') continue;
+    const existingEntry = byLang.get(cleanLang);
+    if (!existingEntry) {
+      byLang.set(cleanLang, {
+        type: 0,
+        lang: cleanLang,
+        name: item.name || item.label || cleanLang.toUpperCase(),
+        label: item.label || item.name || cleanLang.toUpperCase(),
+        original: Boolean(item.original),
+      });
+    } else if (existingEntry.original && !item.original) {
+      // Keep as selectable non-original dub if one provider explicitly offers it as a selectable dub track
+      byLang.set(cleanLang, {
+        ...existingEntry,
+        name: item.name || existingEntry.name,
+        original: false,
+      });
+    }
+  }
+  return Array.from(byLang.values());
 }
 
 export interface EffectiveDubResolution {
@@ -352,7 +403,7 @@ export function resolveEffectiveDubSelection(
   availableDubs?: RawOrionDub[] | null
 ): EffectiveDubResolution {
   const cleanCode = (selectedCode || '').trim().toLowerCase();
-  if (!cleanCode) {
+  if (!cleanCode || cleanCode === 'orig' || cleanCode === 'original') {
     return {
       isOriginal: true,
       dubCode: '',
@@ -484,12 +535,12 @@ export function parseAppRoute(pathname: string): AppRoute {
     };
   }
 
-  if ((first === 'player' || first === 'embed') && (second === 'movie' || second === 'tv') && third) {
+  if ((first === 'player' || first === 'embed' || first === 'nxsha') && (second === 'movie' || second === 'tv') && third) {
     const season = Math.max(1, Number.parseInt(fourth ?? '1', 10) || 1);
     const episode = Math.max(1, Number.parseInt(fifth ?? '1', 10) || 1);
     return {
       page: 'player',
-      playerMode: first === 'player' ? 'custom' : 'builtin',
+      playerMode: first === 'nxsha' ? 'nxsha' : first === 'player' ? 'custom' : 'builtin',
       mediaType: second,
       tmdbId: third,
       season,
@@ -1104,5 +1155,214 @@ export function evaluatePlaybackSkipState(
     showNextEpisode: inNextEpisodeWindow,
   };
 }
+
+// ============================================================================
+// NXSHA Language Detection, Source Matching, Quality & Subtitle Helpers
+// ============================================================================
+
+const NXSHA_LANG_PATTERNS: Array<{ code: string; name: string; regex: RegExp }> = [
+  { code: 'hi', name: 'Hindi', regex: /(?:^|\b|\s|\[|\|)(hindi|hin|hi|हिन्दी|हिंदी)(?:\b|\s|\]|\||$)/i },
+  { code: 'en', name: 'English', regex: /(?:^|\b|\s|\[|\|)(english|eng|en)(?:\b|\s|\]|\||$)/i },
+  { code: 'ta', name: 'Tamil', regex: /(?:^|\b|\s|\[|\|)(tamil|tam|ta|தமிழ்)(?:\b|\s|\]|\||$)/i },
+  { code: 'te', name: 'Telugu', regex: /(?:^|\b|\s|\[|\|)(telugu|tel|te|తెలుగు)(?:\b|\s|\]|\||$)/i },
+  { code: 'ml', name: 'Malayalam', regex: /(?:^|\b|\s|\[|\|)(malayalam|mal|ml|മലയാളം)(?:\b|\s|\]|\||$)/i },
+  { code: 'kn', name: 'Kannada', regex: /(?:^|\b|\s|\[|\|)(kannada|kan|kn|ಕನ್ನಡ)(?:\b|\s|\]|\||$)/i },
+  { code: 'bn', name: 'Bengali', regex: /(?:^|\b|\s|\[|\|)(bengali|bangla|ben|bn|বাংলা)(?:\b|\s|\]|\||$)/i },
+  { code: 'es', name: 'Spanish', regex: /(?:^|\b|\s|\[|\|)(spanish|español|espanol|esla|castilian|spa|es)(?:\b|\s|\]|\||$)/i },
+  { code: 'fr', name: 'French', regex: /(?:^|\b|\s|\[|\|)(french|français|francais|fra|fre|fr)(?:\b|\s|\]|\||$)/i },
+  { code: 'de', name: 'German', regex: /(?:^|\b|\s|\[|\|)(german|deutsch|ger|deu|de)(?:\b|\s|\]|\||$)/i },
+  { code: 'ja', name: 'Japanese', regex: /(?:^|\b|\s|\[|\|)(japanese|日本語|nihongo|jap|jpn|ja)(?:\b|\s|\]|\||$)/i },
+  { code: 'pt', name: 'Portuguese', regex: /(?:^|\b|\s|\[|\|)(portuguese|ptbr|português|portugues|por|pt)(?:\b|\s|\]|\||$)/i },
+  { code: 'it', name: 'Italian', regex: /(?:^|\b|\s|\[|\|)(italian|italiano|ita|it)(?:\b|\s|\]|\||$)/i },
+  { code: 'ko', name: 'Korean', regex: /(?:^|\b|\s|\[|\|)(korean|한국어|kor|ko)(?:\b|\s|\]|\||$)/i },
+  { code: 'ar', name: 'Arabic', regex: /(?:^|\b|\s|\[|\|)(arabic|العربية|ara|ar)(?:\b|\s|\]|\||$)/i },
+  { code: 'ru', name: 'Russian', regex: /(?:^|\b|\s|\[|\|)(russian|русский|rus|ru)(?:\b|\s|\]|\||$)/i },
+  { code: 'tr', name: 'Turkish', regex: /(?:^|\b|\s|\[|\|)(turkish|türkçe|turkce|tur|tr)(?:\b|\s|\]|\||$)/i },
+  { code: 'pl', name: 'Polish', regex: /(?:^|\b|\s|\[|\|)(polish|polski|pol|pl)(?:\b|\s|\]|\||$)/i },
+  { code: 'id', name: 'Indonesian', regex: /(?:^|\b|\s|\[|\|)(indonesian|bahasa|ind|id)(?:\b|\s|\]|\||$)/i },
+  { code: 'tl', name: 'Tagalog', regex: /(?:^|\b|\s|\[|\|)(tagalog|filipino|tgl|tl)(?:\b|\s|\]|\||$)/i },
+  { code: 'vi', name: 'Vietnamese', regex: /(?:^|\b|\s|\[|\|)(vietnamese|vietsub|thuyết minh|vie|vi)(?:\b|\s|\]|\||$)/i },
+];
+
+/**
+ * Detects the actual baked-in language of a single NXSHA stream from its label/quality text.
+ * - If a label contains a comma-separated list of languages in brackets like
+ *   `[English, Hindi, Tamil, Telugu] - 720P`, only the FIRST listed language (`English`)
+ *   is present in that single-track HLS stream.
+ */
+export function detectSingleStreamLanguage(text?: string | null): { code: string; name: string } | null {
+  if (!text) return null;
+  let normalized = text;
+  // If brackets contain comma-separated languages (e.g. "[English, Hindi, Tamil, Telugu]"), keep only the first
+  normalized = normalized.replace(/\[([^\]]*,[^\]]*)\]/g, (_full, inner: string) => {
+    const firstPart = inner.split(',')[0]?.trim() || '';
+    return `[${firstPart}]`;
+  });
+
+  // Also if pipe-separated or comma-separated without brackets, check earliest match position in string
+  let bestMatch: { code: string; name: string; index: number } | null = null;
+  for (const pat of NXSHA_LANG_PATTERNS) {
+    const m = pat.regex.exec(normalized);
+    if (m && (bestMatch === null || m.index < bestMatch.index)) {
+      bestMatch = { code: pat.code, name: pat.name, index: m.index };
+    }
+  }
+  return bestMatch ? { code: bestMatch.code, name: bestMatch.name } : null;
+}
+
+export function parseResolutionHeight(text?: string | null): number {
+  if (!text) return 0;
+  const m = text.match(/\b(2160|1440|1080|720|480|360)p?\b/i);
+  if (m) return Number.parseInt(m[1], 10);
+  if (/\b4k\b/i.test(text)) return 2160;
+  return 0;
+}
+
+/**
+ * Strictly matches an NXSHA source for a given dub language code (and optional resolution height),
+ * avoiding unsafe substring `.includes()` false positives.
+ */
+export function matchNxshaSourceForDub(
+  sources?: any[] | null,
+  dubCode?: string | null,
+  preferredHeight?: number | null
+): any | null {
+  if (!Array.isArray(sources) || sources.length === 0) return null;
+  const cleanCode = (dubCode || '').trim().toLowerCase();
+  const isOriginal = !cleanCode || cleanCode === 'orig' || cleanCode === 'original';
+
+  const getSourceLang = (s: any): string => {
+    if (s?.lang && typeof s.lang === 'string') return s.lang.trim().toLowerCase();
+    const detected = detectSingleStreamLanguage(`${s?.label || ''} ${s?.quality || ''}`);
+    return detected?.code || '';
+  };
+
+  const candidates = sources.filter((s) => {
+    if (!s?.url) return false;
+    const sLang = getSourceLang(s);
+    if (isOriginal) {
+      return sLang === 'en' || sLang === '';
+    }
+    return sLang === cleanCode;
+  });
+
+  if (candidates.length === 0) return null;
+
+  if (preferredHeight && preferredHeight > 0) {
+    const exactHeight = candidates.find(
+      (s) => parseResolutionHeight(`${s.label || ''} ${s.quality || ''} ${s.url || ''}`) === preferredHeight
+    );
+    if (exactHeight) return exactHeight;
+  }
+
+  // Sort candidates by resolution height descending (prefer 1080p/720p over 480p)
+  const sorted = [...candidates].sort((a, b) => {
+    const hA = parseResolutionHeight(`${a.label || ''} ${a.quality || ''} ${a.url || ''}`) || 720;
+    const hB = parseResolutionHeight(`${b.label || ''} ${b.quality || ''} ${b.url || ''}`) || 720;
+    return hB - hA;
+  });
+
+  return sorted[0];
+}
+
+/**
+ * Extracts distinct resolution quality options (e.g. 1080p, 720p, 480p) from NXSHA sources
+ * for the currently active language so Settings -> Quality works on single-level HLS streams.
+ * Uses index = 1000 + height to distinguish NXSHA source-switching qualities from internal HLS levels.
+ */
+export function extractNxshaQualitiesForDub(
+  sources?: any[] | null,
+  dubCode?: string | null
+): Array<{ index: number; height: number }> {
+  if (!Array.isArray(sources) || sources.length === 0) return [];
+  const cleanCode = (dubCode || '').trim().toLowerCase();
+  const isOriginal = !cleanCode || cleanCode === 'orig' || cleanCode === 'original';
+
+  const getSourceLang = (s: any): string => {
+    if (s?.lang && typeof s.lang === 'string') return s.lang.trim().toLowerCase();
+    const detected = detectSingleStreamLanguage(`${s?.label || ''} ${s?.quality || ''}`);
+    return detected?.code || '';
+  };
+
+  let matching = sources.filter((s) => {
+    if (!s?.url) return false;
+    const sLang = getSourceLang(s);
+    if (isOriginal) return sLang === 'en' || sLang === '';
+    return sLang === cleanCode;
+  });
+
+  if (matching.length === 0) {
+    matching = sources.filter((s) => Boolean(s?.url));
+  }
+
+  const heights = new Set<number>();
+  for (const s of matching) {
+    const h = parseResolutionHeight(`${s.label || ''} ${s.quality || ''} ${s.url || ''}`);
+    if (h > 0) heights.add(h);
+  }
+
+  return Array.from(heights)
+    .sort((a, b) => b - a)
+    .map((h) => ({ index: 1000 + h, height: h }));
+}
+
+const SUBTITLE_LANG_NAMES: Record<string, string> = {
+  en: 'English',
+  hi: 'Hindi',
+  es: 'Spanish',
+  fr: 'French',
+  de: 'German',
+  it: 'Italian',
+  pt: 'Portuguese',
+  pb: 'Portuguese (BR)',
+  ru: 'Russian',
+  ja: 'Japanese',
+  ko: 'Korean',
+  ar: 'Arabic',
+  tr: 'Turkish',
+  id: 'Indonesian',
+  vi: 'Vietnamese',
+  ta: 'Tamil',
+  te: 'Telugu',
+  ml: 'Malayalam',
+  kn: 'Kannada',
+  bn: 'Bengali',
+  nl: 'Dutch',
+  pl: 'Polish',
+};
+
+/**
+ * Normalizes and merges subtitle track lists from ZXCSTREAM and NXSHA APIs.
+ */
+export function normalizeSubtitleTracks(
+  existing?: any[] | null,
+  incoming?: any[] | null
+): Array<{ id: string; language: string; url: string }> {
+  const combined = [...(Array.isArray(existing) ? existing : []), ...(Array.isArray(incoming) ? incoming : [])];
+  const seenLang = new Set<string>();
+  const result: Array<{ id: string; language: string; url: string }> = [];
+
+  for (let i = 0; i < combined.length; i++) {
+    const item = combined[i];
+    if (!item) continue;
+    const rawUrl = String(item.url || item.uri || item.file || '').trim();
+    if (!rawUrl) continue;
+    const rawTitle = String(item.title || item.label || item.language || item.lang || '').trim();
+    if (!rawTitle) continue;
+    const lowerCode = rawTitle.toLowerCase();
+    const displayLanguage = SUBTITLE_LANG_NAMES[lowerCode] || rawTitle;
+    const key = displayLanguage.toLowerCase();
+    if (seenLang.has(key)) continue;
+    seenLang.add(key);
+    result.push({
+      id: String(item.id || `sub-${i}-${key}`),
+      language: displayLanguage,
+      url: rawUrl,
+    });
+  }
+
+  return result;
+}
+
 
 

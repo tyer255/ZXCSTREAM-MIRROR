@@ -1,6 +1,7 @@
 import express from 'express';
 import cors from 'cors';
 import crypto from 'node:crypto';
+import CryptoJS from 'crypto-js';
 import {
   getCatalogSeasonEpisodes,
   getEpisodeTimingMetadata,
@@ -8,7 +9,22 @@ import {
   getSeriesTvdbId,
   getMediaByTmdbId,
 } from './src/data/tmdbCatalog.js';
-import { normalizeIntervalSeconds, MediaType } from './src/utils/urlBuilder.js';
+import {
+  normalizeIntervalSeconds,
+  MediaType,
+  RawOrionDub,
+  NXSHA_SERVERS,
+  detectSingleStreamLanguage,
+  normalizeSubtitleTracks,
+} from './src/utils/urlBuilder.js';
+import {
+  ALLOWED_NXSHA_PROVIDERS,
+  isAuthorizedNxshaProvider,
+  isDeadNxshaSourceUrl,
+  isTrustedNxshaMediaUrl,
+  validatePlayableNxshaSource,
+  raceNxshaProviders,
+} from './src/utils/nxshaDiscovery.js';
 
 const app = express();
 
@@ -229,34 +245,48 @@ async function resolveForServer(
     let sourceData: any = null;
     let lastError = 'Request failed';
 
+    const tokenEndpoints = tokenEndpoint ? [tokenEndpoint] : ['/backend/wtfnigga', '/backend/fucku'];
+
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
-        const tokenController = new AbortController();
-        const tokenTimer = setTimeout(() => tokenController.abort(), 4500);
-        const tokenRes = await fetch(`${baseHost}${tokenEndpoint}`, {
-          method: 'POST',
-          headers: {
-            ...COMMON_HEADERS,
-            Origin: baseHost,
-            Referer: refererUrl,
-          },
-          body: JSON.stringify(tokenBody),
-          signal: tokenController.signal,
-        });
-        clearTimeout(tokenTimer);
+        let tokenData: any = null;
+        let tokenStatus = 0;
 
-        if (!tokenRes.ok) {
-          lastError = `Token HTTP ${tokenRes.status}`;
-          if (attempt === 0 && (tokenRes.status >= 500 || tokenRes.status === 429)) {
+        for (const ep of tokenEndpoints) {
+          try {
+            const tokenController = new AbortController();
+            const tokenTimer = setTimeout(() => tokenController.abort(), 4500);
+            const tokenRes = await fetch(`${baseHost}${ep}`, {
+              method: 'POST',
+              headers: {
+                ...COMMON_HEADERS,
+                Origin: baseHost,
+                Referer: refererUrl,
+              },
+              body: JSON.stringify(tokenBody),
+              signal: tokenController.signal,
+            });
+            clearTimeout(tokenTimer);
+            tokenStatus = tokenRes.status;
+            if (tokenRes.ok) {
+              const parsed = await tokenRes.json();
+              if (parsed?.token) {
+                tokenData = parsed;
+                break;
+              }
+            }
+          } catch {
+            // Try next token endpoint
+          }
+        }
+
+        if (!tokenData || !tokenData.token) {
+          lastError = tokenStatus ? `Token HTTP ${tokenStatus}` : 'Token failed';
+          if (attempt === 0 && (tokenStatus >= 500 || tokenStatus === 429)) {
             await new Promise((r) => setTimeout(r, 200));
             continue;
           }
           return { success: false, server: targetServer, error: lastError, links: [], dubs: [] };
-        }
-
-        const tokenData = await tokenRes.json();
-        if (!tokenData.token) {
-          return { success: false, server: targetServer, error: 'No token', links: [], dubs: [] };
         }
 
         const query = new URLSearchParams({
@@ -412,27 +442,25 @@ async function resolveForServer(
   };
 
   // For 'atlas' (Atlas III), vidstuck.cc/backend/servers/atlas provides the active H.264 HLS edge stream,
-  // whereas zxcstream.cc/backend_/sources/atlas points to deprecated workers.dev links.
-  if (targetServer === 'atlas') {
-    const vidstuckAtlas = await queryProvider(
-      'https://vidstuck.cc',
-      '/backend/qwerty',
-      '/backend/servers',
-      'atlas'
-    );
-    if (vidstuckAtlas.links && vidstuckAtlas.links.length > 0) {
-      return vidstuckAtlas;
-    }
-  }
-
   const primaryRes = await queryProvider(
     'https://zxcstream.cc',
-    '/backend/fucku',
+    '/backend/wtfnigga',
     '/backend_/sources',
     targetServer
   );
   if (primaryRes.links && primaryRes.links.length > 0) {
     return primaryRes;
+  }
+
+  // Fallback to legacy endpoint if upstream changes back
+  const legacyRes = await queryProvider(
+    'https://zxcstream.cc',
+    '/backend/fucku',
+    '/backend_/sources',
+    targetServer
+  );
+  if (legacyRes.links && legacyRes.links.length > 0) {
+    return legacyRes;
   }
 
   // Automatic failover to vidstuck.cc mirror backend
@@ -462,7 +490,7 @@ async function resolveForServer(
     };
   }
 
-  return primaryRes;
+  return primaryRes.error ? primaryRes : legacyRes;
 }
 
 // Router for all API routes (mounted at /api, /api/index, and /)
@@ -667,7 +695,8 @@ apiRouter.post('/stream/resolve', async (req, res) => {
 
     let result = filterPlayable(await resolveForServer(serverPath, options));
 
-    if ((!result.links || result.links.length === 0) && autoFallback) {
+    const shouldFallback = autoFallback || (!req.body.strictSingleServer && (!result.links || result.links.length === 0));
+    if ((!result.links || result.links.length === 0) && shouldFallback) {
       const fallbackServers = ['valstrax', 'atlas', 'ursa', 'alatreon', 'daedalus', 'orion'].filter(
         (s) => s !== serverPath
       );
@@ -746,24 +775,36 @@ apiRouter.post('/subtitles/resolve', async (req, res) => {
   } = req.body;
 
   try {
-    const fuckuBody: Record<string, any> = {
+    const subBody: Record<string, any> = {
       [FIELD_MAP.id]: String(tmdbId),
       [FIELD_MAP.mediaType]: mediaType,
       [FIELD_MAP.path]: 'subtitle_',
     };
     if (mediaType === 'tv') {
-      fuckuBody[FIELD_MAP.season] = Number(season) || 1;
-      fuckuBody[FIELD_MAP.episode] = Number(episode) || 1;
+      subBody[FIELD_MAP.season] = Number(season) || 1;
+      subBody[FIELD_MAP.episode] = Number(episode) || 1;
     }
 
-    const tokenRes = await fetch('https://zxcstream.cc/backend/fucku', {
-      method: 'POST',
-      headers: COMMON_HEADERS,
-      body: JSON.stringify(fuckuBody),
-    });
-    if (!tokenRes.ok) return res.json({ subtitles: [] });
-    const tokenData = await tokenRes.json();
-    if (!tokenData.token) return res.json({ subtitles: [] });
+    let tokenData: any = null;
+    for (const ep of ['/backend/wtfnigga', '/backend/fucku']) {
+      try {
+        const tokenRes = await fetch(`https://zxcstream.cc${ep}`, {
+          method: 'POST',
+          headers: COMMON_HEADERS,
+          body: JSON.stringify(subBody),
+        });
+        if (tokenRes.ok) {
+          const parsed = await tokenRes.json();
+          if (parsed?.token) {
+            tokenData = parsed;
+            break;
+          }
+        }
+      } catch {
+        // try next
+      }
+    }
+    if (!tokenData?.token) return res.json({ subtitles: [] });
 
     const query = new URLSearchParams({
       [FIELD_MAP.id]: String(tmdbId),
@@ -780,12 +821,26 @@ apiRouter.post('/subtitles/resolve', async (req, res) => {
       query.set(FIELD_MAP.episode, String(Number(episode) || 1));
     }
 
+    // Try vidstuck.cc/backend/subtitle then zxcstream.cc/backend_/subtitle_
+    try {
+      const vidRes = await fetch(`https://vidstuck.cc/backend/subtitle?${query.toString()}`, {
+        headers: COMMON_HEADERS,
+      });
+      if (vidRes.ok) {
+        const vidData = await vidRes.json();
+        const list = Array.isArray(vidData) ? vidData : vidData.captions || vidData.subtitles || [];
+        if (list.length > 0) return res.json({ subtitles: list });
+      }
+    } catch {
+      // fallback
+    }
+
     const subRes = await fetch(`https://zxcstream.cc/backend_/subtitle_?${query.toString()}`, {
       headers: COMMON_HEADERS,
     });
     if (!subRes.ok) return res.json({ subtitles: [] });
     const subData = await subRes.json();
-    const list = Array.isArray(subData) ? subData : subData.subtitles || [];
+    const list = Array.isArray(subData) ? subData : subData.subtitles || subData.captions || [];
     return res.json({ subtitles: list });
   } catch {
     return res.json({ subtitles: [] });
@@ -805,24 +860,36 @@ apiRouter.get('/subtitles', async (req, res) => {
   } = req.query as Record<string, string>;
 
   try {
-    const fuckuBody: Record<string, any> = {
+    const subBody: Record<string, any> = {
       [FIELD_MAP.id]: String(tmdbId),
       [FIELD_MAP.mediaType]: mediaType,
       [FIELD_MAP.path]: 'subtitle_',
     };
     if (mediaType === 'tv') {
-      fuckuBody[FIELD_MAP.season] = Number(season) || 1;
-      fuckuBody[FIELD_MAP.episode] = Number(episode) || 1;
+      subBody[FIELD_MAP.season] = Number(season) || 1;
+      subBody[FIELD_MAP.episode] = Number(episode) || 1;
     }
 
-    const tokenRes = await fetch('https://zxcstream.cc/backend/fucku', {
-      method: 'POST',
-      headers: COMMON_HEADERS,
-      body: JSON.stringify(fuckuBody),
-    });
-    if (!tokenRes.ok) return res.json({ captions: [] });
-    const tokenData = await tokenRes.json();
-    if (!tokenData.token) return res.json({ captions: [] });
+    let tokenData: any = null;
+    for (const ep of ['/backend/wtfnigga', '/backend/fucku']) {
+      try {
+        const tokenRes = await fetch(`https://zxcstream.cc${ep}`, {
+          method: 'POST',
+          headers: COMMON_HEADERS,
+          body: JSON.stringify(subBody),
+        });
+        if (tokenRes.ok) {
+          const parsed = await tokenRes.json();
+          if (parsed?.token) {
+            tokenData = parsed;
+            break;
+          }
+        }
+      } catch {
+        // try next
+      }
+    }
+    if (!tokenData?.token) return res.json({ captions: [] });
 
     const query = new URLSearchParams({
       [FIELD_MAP.id]: String(tmdbId),
@@ -837,6 +904,19 @@ apiRouter.get('/subtitles', async (req, res) => {
     if (mediaType === 'tv') {
       query.set(FIELD_MAP.season, String(Number(season) || 1));
       query.set(FIELD_MAP.episode, String(Number(episode) || 1));
+    }
+
+    try {
+      const vidRes = await fetch(`https://vidstuck.cc/backend/subtitle?${query.toString()}`, {
+        headers: COMMON_HEADERS,
+      });
+      if (vidRes.ok) {
+        const vidData = await vidRes.json();
+        const list = Array.isArray(vidData) ? vidData : vidData.captions || vidData.subtitles || [];
+        if (list.length > 0) return res.json({ captions: list });
+      }
+    } catch {
+      // fallback
     }
 
     const subRes = await fetch(`https://zxcstream.cc/backend_/subtitle_?${query.toString()}`, {
@@ -1420,6 +1500,978 @@ apiRouter.get('/intro', async (req, res) => {
     source: resolvedSource,
   });
 });
+
+// ============================================================================
+// NXSHA (nxsha.space/embed) Reverse-Engineered Ad-Free Streaming Engine
+// ============================================================================
+const NXSHA_KEY = 'f4488ab4da401203d23baa129fc546153898162524635d6776826d0c867ccaa3';
+
+export function nxshaEncrypt(data: Record<string, unknown>): string {
+  try {
+    const payload = JSON.stringify({
+      ...data,
+      _req_ts: Date.now(),
+      _req_salt: Math.random().toString(36).substring(2, 12),
+    });
+    const ciphertext = CryptoJS.AES.encrypt(payload, NXSHA_KEY).toString();
+    return ciphertext.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  } catch {
+    return '';
+  }
+}
+
+export function nxshaDecrypt<T = any>(enc?: string | null): T | null {
+  if (!enc) return null;
+  try {
+    let b64 = enc.replace(/-/g, '+').replace(/_/g, '/');
+    while (b64.length % 4 !== 0) b64 += '=';
+    const bytes = CryptoJS.AES.decrypt(b64, NXSHA_KEY);
+    const jsonStr = bytes.toString(CryptoJS.enc.Utf8);
+    if (!jsonStr) return null;
+    const parsed = JSON.parse(jsonStr);
+    delete parsed._req_ts;
+    delete parsed._req_salt;
+    return parsed as T;
+  } catch {
+    return null;
+  }
+}
+
+export interface NxshaServer {
+  id: string | number;
+  name: string;
+  scraper: string;
+  quality?: string;
+  high_priority?: number;
+  web_support?: boolean;
+  types?: string[];
+  status?: string;
+}
+
+export interface NxshaSource {
+  id?: string;
+  provider?: string;
+  url: string;
+  org_uri?: string;
+  quality?: string;
+  label?: string;
+  type?: string;
+  isEmbed?: boolean;
+  headers?: Record<string, string>;
+  lang?: string;
+  langName?: string;
+}
+
+const DUB_LANGUAGE_PATTERNS: { code: string; name: string; regex: RegExp }[] = [
+  { code: 'hi', name: 'Hindi', regex: /(?:^|\b|\s|\[|\|)(hindi|hin|hi|हिन्दी|हिंदी)(?:\b|\s|\]|\||$)/i },
+  { code: 'en', name: 'English', regex: /(?:^|\b|\s|\[|\|)(english|eng|en)(?:\b|\s|\]|\||$)/i },
+  { code: 'ta', name: 'Tamil', regex: /(?:^|\b|\s|\[|\|)(tamil|tam|ta|தமிழ்)(?:\b|\s|\]|\||$)/i },
+  { code: 'te', name: 'Telugu', regex: /(?:^|\b|\s|\[|\|)(telugu|tel|te|తెలుగు)(?:\b|\s|\]|\||$)/i },
+  { code: 'ml', name: 'Malayalam', regex: /(?:^|\b|\s|\[|\|)(malayalam|mal|ml|മലയാളം)(?:\b|\s|\]|\||$)/i },
+  { code: 'kn', name: 'Kannada', regex: /(?:^|\b|\s|\[|\|)(kannada|kan|kn|ಕನ್ನಡ)(?:\b|\s|\]|\||$)/i },
+  { code: 'bn', name: 'Bengali', regex: /(?:^|\b|\s|\[|\|)(bengali|bangla|ben|bn|বাংলা)(?:\b|\s|\]|\||$)/i },
+  { code: 'es', name: 'Spanish', regex: /(?:^|\b|\s|\[|\|)(spanish|español|espanol|esla|castilian|spa|es)(?:\b|\s|\]|\||$)/i },
+  { code: 'fr', name: 'French', regex: /(?:^|\b|\s|\[|\|)(french|français|francais|fra|fre|fr)(?:\b|\s|\]|\||$)/i },
+  { code: 'de', name: 'German', regex: /(?:^|\b|\s|\[|\|)(german|deutsch|ger|deu|de)(?:\b|\s|\]|\||$)/i },
+  { code: 'ja', name: 'Japanese', regex: /(?:^|\b|\s|\[|\|)(japanese|日本語|nihongo|jap|jpn|ja)(?:\b|\s|\]|\||$)/i },
+  { code: 'pt', name: 'Portuguese', regex: /(?:^|\b|\s|\[|\|)(portuguese|ptbr|português|portugues|por|pt)(?:\b|\s|\]|\||$)/i },
+  { code: 'it', name: 'Italian', regex: /(?:^|\b|\s|\[|\|)(italian|italiano|ita|it)(?:\b|\s|\]|\||$)/i },
+  { code: 'ko', name: 'Korean', regex: /(?:^|\b|\s|\[|\|)(korean|한국어|kor|ko)(?:\b|\s|\]|\||$)/i },
+  { code: 'ar', name: 'Arabic', regex: /(?:^|\b|\s|\[|\|)(arabic|العربية|ara|ar)(?:\b|\s|\]|\||$)/i },
+  { code: 'ru', name: 'Russian', regex: /(?:^|\b|\s|\[|\|)(russian|русский|rus|ru)(?:\b|\s|\]|\||$)/i },
+  { code: 'tr', name: 'Turkish', regex: /(?:^|\b|\s|\[|\|)(turkish|türkçe|turkce|tur|tr)(?:\b|\s|\]|\||$)/i },
+  { code: 'pl', name: 'Polish', regex: /(?:^|\b|\s|\[|\|)(polish|polski|pol|pl)(?:\b|\s|\]|\||$)/i },
+  { code: 'id', name: 'Indonesian', regex: /(?:^|\b|\s|\[|\|)(indonesian|bahasa|ind|id)(?:\b|\s|\]|\||$)/i },
+  { code: 'tl', name: 'Tagalog', regex: /(?:^|\b|\s|\[|\|)(tagalog|filipino|tgl|tl)(?:\b|\s|\]|\||$)/i },
+  { code: 'vi', name: 'Vietnamese', regex: /(?:^|\b|\s|\[|\|)(vietnamese|vietsub|thuyết minh|vie|vi)(?:\b|\s|\]|\||$)/i },
+];
+
+export function detectNxshaLanguage(text: string): { code: string; name: string } | null {
+  return detectSingleStreamLanguage(text);
+}
+
+const NXSHA_COMMON_HEADERS = {
+  'User-Agent':
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+  Accept: 'application/json, text/plain, */*',
+  'Accept-Language': 'en-US,en;q=0.9',
+};
+
+function extractHscowAssetKey(url: string): string | null {
+  if (!url) return null;
+  const m = url.match(/(?:hscow\.com|fcxmb\.com)\/(?:my)?hls(?:_mps)?\/(?:(\d{4}\/\d+yue\/[A-Za-z0-9]+)|([A-Za-z0-9]{6,}))/i);
+  if (!m) return null;
+  const raw = m[1] || m[2] || '';
+  // Normalize language/resolution suffix from named folders like TheWildRobot_Hindi_720 -> thewildrobot
+  return raw.split('_')[0].toLowerCase();
+}
+
+function needsNxshaProxy(url: string): boolean {
+  if (!url) return false;
+  const lower = url.toLowerCase();
+  return lower.includes('itsnitrox.tech') || lower.includes('finepulfe.xyz');
+}
+
+function wrapInNxshaProxy(url: string): string {
+  if (!url || url.startsWith('/api/nxsha/proxy')) return url;
+  return `/api/nxsha/proxy?url=${encodeURIComponent(url)}`;
+}
+
+async function fetchNxshaServers(
+  tmdbId: string,
+  mediaType: string,
+  season = 1,
+  episode = 1,
+  imdbId = '',
+  parentSignal?: AbortSignal
+): Promise<NxshaServer[]> {
+  try {
+    const encPayload = nxshaEncrypt({
+      tmdbId: String(tmdbId || ''),
+      imdb_id: imdbId || '',
+      type: mediaType === 'tv' ? 'tv' : 'movie',
+      season: mediaType === 'tv' ? season : undefined,
+      episode: mediaType === 'tv' ? episode : undefined,
+    });
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 4500);
+    if (parentSignal) {
+      if (parentSignal.aborted) {
+        clearTimeout(timeout);
+        return [];
+      }
+      parentSignal.addEventListener('abort', () => controller.abort(), { once: true });
+    }
+    const res = await fetch(`https://nxsha.space/api/servers?q=${encodeURIComponent(encPayload)}`, {
+      headers: {
+        ...NXSHA_COMMON_HEADERS,
+        Referer:
+          mediaType === 'tv'
+            ? `https://nxsha.space/embed/tv/${tmdbId}/${season}/${episode}`
+            : `https://nxsha.space/embed/movie/${tmdbId}`,
+      },
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+    if (!res.ok) return [];
+    const json = await res.json();
+    const decrypted = nxshaDecrypt<{ servers?: NxshaServer[] }>(json?._hash);
+    const rawList = Array.isArray(decrypted?.servers) ? decrypted!.servers! : [];
+    return rawList.filter(
+      (s) =>
+        s &&
+        s.scraper &&
+        s.web_support !== false &&
+        isAuthorizedNxshaProvider(s.scraper)
+    );
+  } catch {
+    return [];
+  }
+}
+
+async function fetchNxshaSubtitles(
+  tmdbId: string,
+  mediaType: string,
+  season = 1,
+  episode = 1,
+  imdbId = '',
+  parentSignal?: AbortSignal
+): Promise<Array<{ id: string; language: string; url: string }>> {
+  try {
+    const encPayload = nxshaEncrypt({
+      tmdbId: String(tmdbId || ''),
+      imdb_id: imdbId || '',
+      type: mediaType === 'tv' ? 'tv' : 'movie',
+      season: mediaType === 'tv' ? season : undefined,
+      episode: mediaType === 'tv' ? episode : undefined,
+    });
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 4500);
+    if (parentSignal) {
+      if (parentSignal.aborted) {
+        clearTimeout(timeout);
+        return [];
+      }
+      parentSignal.addEventListener('abort', () => controller.abort(), { once: true });
+    }
+    const res = await fetch(`https://nxsha.space/api/subtitles?q=${encodeURIComponent(encPayload)}`, {
+      headers: {
+        ...NXSHA_COMMON_HEADERS,
+        Referer:
+          mediaType === 'tv'
+            ? `https://nxsha.space/embed/tv/${tmdbId}/${season}/${episode}`
+            : `https://nxsha.space/embed/movie/${tmdbId}`,
+      },
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+    if (!res.ok) return [];
+    const json = await res.json();
+    const decrypted = nxshaDecrypt<{ subtitles?: any[] }>(json?._hash);
+    return normalizeSubtitleTracks([], decrypted?.subtitles || []);
+  } catch {
+    return [];
+  }
+}
+
+async function fetchNxshaSources(
+  provider: string,
+  tmdbId: string,
+  mediaType: string,
+  season = 1,
+  episode = 1,
+  imdbId = '',
+  parentSignal?: AbortSignal
+): Promise<{ sources: NxshaSource[]; subtitles: any[]; dubs: RawOrionDub[] }> {
+  if (!isAuthorizedNxshaProvider(provider)) {
+    return { sources: [], subtitles: [], dubs: [] };
+  }
+  if (parentSignal?.aborted) {
+    throw new Error('Aborted before fetchNxshaSources start');
+  }
+  try {
+    const fetchWithLang = async (ex_lang: boolean) => {
+      try {
+        if (parentSignal?.aborted) return { sources: [], subtitles: [] };
+        const encPayload = nxshaEncrypt({
+          ex_lang,
+          provider,
+          tmdbId: String(tmdbId || ''),
+          imdb_id: imdbId || '',
+          type: mediaType === 'tv' ? 'tv' : 'movie',
+          season: mediaType === 'tv' ? season : undefined,
+          episode: mediaType === 'tv' ? episode : undefined,
+        });
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 4800);
+        if (parentSignal) {
+          parentSignal.addEventListener('abort', () => controller.abort(), { once: true });
+        }
+        const res = await fetch(`https://nxsha.space/api/sources?q=${encodeURIComponent(encPayload)}`, {
+          headers: {
+            ...NXSHA_COMMON_HEADERS,
+            Referer:
+              mediaType === 'tv'
+                ? `https://nxsha.space/embed/tv/${tmdbId}/${season}/${episode}`
+                : `https://nxsha.space/embed/movie/${tmdbId}`,
+          },
+          signal: controller.signal,
+        });
+        clearTimeout(timeout);
+        if (!res.ok) return { sources: [], subtitles: [] };
+        const json = await res.json();
+        const decrypted = nxshaDecrypt<{ sources?: NxshaSource[]; subtitles?: any[] }>(json?._hash);
+        const sources = Array.isArray(decrypted?.sources)
+          ? decrypted!.sources!.filter(
+              (s) => s && s.url && !s.isEmbed && !isDeadNxshaSourceUrl(s.url)
+            )
+          : [];
+        const subtitles = Array.isArray(decrypted?.subtitles) ? decrypted!.subtitles! : [];
+        return { sources, subtitles };
+      } catch {
+        return { sources: [], subtitles: [] };
+      }
+    };
+
+    const singleRes = await fetchWithLang(false);
+    if (parentSignal?.aborted) {
+      throw new Error('Aborted during fetchNxshaSources');
+    }
+    const combinedSources = singleRes.sources;
+    const seenUrls = new Set<string>();
+    const uniqueSources: NxshaSource[] = [];
+
+    // Collect available dubs
+    const dubsMap = new Map<string, RawOrionDub>();
+    dubsMap.set('orig', {
+      type: 0,
+      lang: 'orig',
+      name: 'Original Audio',
+      label: 'Original Audio',
+      original: true,
+    });
+
+    for (const src of combinedSources) {
+      if (!src?.url || seenUrls.has(src.url) || isDeadNxshaSourceUrl(src.url)) continue;
+      if (!isTrustedNxshaMediaUrl(src.url)) continue;
+      seenUrls.add(src.url);
+      const rawUrl = src.url;
+      const labelToDetect = `${src.label || ''} ${src.quality || ''}`;
+      const lang = detectNxshaLanguage(labelToDetect);
+      if (lang) {
+        src.lang = lang.code;
+        src.langName = lang.name;
+      }
+      if (needsNxshaProxy(rawUrl)) {
+        src.org_uri = rawUrl;
+        src.url = wrapInNxshaProxy(rawUrl);
+        src.type = 'hls';
+      }
+      uniqueSources.push(src);
+    }
+
+    // If provider is nitro (or has proxied multi-audio HLS), inspect the first master manifest for #EXT-X-MEDIA:TYPE=AUDIO tracks
+    if (provider === 'nitro' && uniqueSources.length > 0 && !parentSignal?.aborted) {
+      const targetRawUrl = uniqueSources[0].org_uri || uniqueSources[0].url;
+      if (targetRawUrl && targetRawUrl.startsWith('http') && isTrustedNxshaMediaUrl(targetRawUrl)) {
+        try {
+          const ctrl = new AbortController();
+          const t = setTimeout(() => ctrl.abort(), 2200);
+          if (parentSignal) {
+            parentSignal.addEventListener('abort', () => ctrl.abort(), { once: true });
+          }
+          const mRes = await fetch(targetRawUrl, {
+            headers: {
+              'User-Agent': NXSHA_COMMON_HEADERS['User-Agent'],
+              Referer: 'https://nxsha.space/',
+            },
+            signal: ctrl.signal,
+          });
+          clearTimeout(t);
+          if (mRes.ok) {
+            const mText = await mRes.text();
+            const lines = mText.split(/\r?\n/);
+            for (const line of lines) {
+              if (line.startsWith('#EXT-X-MEDIA:') && line.includes('TYPE=AUDIO')) {
+                const langMatch = line.match(/LANGUAGE="([^"]+)"/i);
+                const nameMatch = line.match(/NAME="([^"]+)"/i);
+                const detected =
+                  detectNxshaLanguage(langMatch?.[1] || '') ||
+                  detectNxshaLanguage(nameMatch?.[1] || '');
+                if (detected && !dubsMap.has(detected.code)) {
+                  dubsMap.set(detected.code, {
+                    type: 0,
+                    lang: detected.code,
+                    name: `${detected.name} dub`,
+                    label: detected.name,
+                    original: false,
+                  });
+                }
+              }
+            }
+          }
+        } catch {
+          // ignore manifest probe failure
+        }
+      }
+    }
+
+    const subtitles = singleRes.subtitles;
+
+    for (const src of uniqueSources) {
+      if (src.lang && !dubsMap.has(src.lang)) {
+        dubsMap.set(src.lang, {
+          type: 0,
+          lang: src.lang,
+          name: `${src.langName || src.lang} dub`,
+          label: src.langName || src.lang,
+          original: false,
+        });
+      }
+    }
+
+    return {
+      sources: uniqueSources,
+      subtitles,
+      dubs: Array.from(dubsMap.values()),
+    };
+  } catch (err) {
+    if (parentSignal?.aborted) throw err;
+    return { sources: [], subtitles: [], dubs: [] };
+  }
+}
+
+// 0. GET /api/nxsha/proxy (Ad-free, SSRF-hardened CORS & Referer proxy for NXSHA HLS manifests, audio tracks, and segments)
+apiRouter.get('/nxsha/proxy', async (req, res) => {
+  const targetUrl = String(req.query.url || '').trim();
+  if (!targetUrl || !targetUrl.startsWith('http') || !isTrustedNxshaMediaUrl(targetUrl)) {
+    return res.status(400).send('Invalid or untrusted target URL');
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 8000);
+
+  try {
+    const reqHeaders: Record<string, string> = {
+      'User-Agent': NXSHA_COMMON_HEADERS['User-Agent'],
+      Referer: 'https://nxsha.space/',
+    };
+    if (req.headers.range) {
+      reqHeaders.Range = String(req.headers.range);
+    }
+
+    // Follow at most 3 redirects manually while validating every redirect target against SSRF rules
+    let currentUrl = targetUrl;
+    let upstream: Response | null = null;
+    for (let hop = 0; hop <= 3; hop++) {
+      upstream = await fetch(currentUrl, {
+        headers: reqHeaders,
+        redirect: 'manual',
+        signal: controller.signal,
+      });
+      if (upstream.status >= 300 && upstream.status < 400) {
+        const location = upstream.headers.get('location');
+        if (!location) break;
+        const resolvedRedirect = new URL(location, currentUrl).toString();
+        if (!isTrustedNxshaMediaUrl(resolvedRedirect)) {
+          clearTimeout(timeout);
+          return res.status(403).send('Blocked untrusted redirect target');
+        }
+        currentUrl = resolvedRedirect;
+        continue;
+      }
+      break;
+    }
+
+    clearTimeout(timeout);
+    if (!upstream) {
+      return res.status(502).send('Upstream unavailable');
+    }
+
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    if (!upstream.ok && upstream.status !== 206) {
+      return res.status(upstream.status).send(`Upstream error ${upstream.status}`);
+    }
+
+    const contentType = (upstream.headers.get('content-type') || '').toLowerCase();
+    const finalUrl = currentUrl;
+    const isM3u8 =
+      contentType.includes('mpegurl') ||
+      contentType.includes('x-mpegurl') ||
+      finalUrl.includes('.m3u8');
+
+    if (isM3u8) {
+      const text = await upstream.text();
+      if (text.trimStart().startsWith('#EXTM3U')) {
+        const resolveAgainstBase = (relOrAbs: string) => {
+          try {
+            return new URL(relOrAbs.trim(), finalUrl).toString();
+          } catch {
+            return relOrAbs.trim();
+          }
+        };
+
+        const rewritten = text
+          .split(/\r?\n/)
+          .map((line) => {
+            const trimmed = line.trim();
+            if (!trimmed) return line;
+            if (trimmed.startsWith('#')) {
+              return line.replace(/URI="([^"]+)"/g, (_m, uriVal) => {
+                const absUri = resolveAgainstBase(uriVal);
+                return `URI="/api/nxsha/proxy?url=${encodeURIComponent(absUri)}"`;
+              });
+            }
+            const absUrl = resolveAgainstBase(trimmed);
+            return `/api/nxsha/proxy?url=${encodeURIComponent(absUrl)}`;
+          })
+          .join('\n');
+
+        res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
+        return res.status(200).send(rewritten);
+      }
+    }
+
+    res.status(upstream.status);
+    if (contentType) res.setHeader('Content-Type', contentType);
+    const contentRange = upstream.headers.get('content-range');
+    if (contentRange) res.setHeader('Content-Range', contentRange);
+    const contentLength = upstream.headers.get('content-length');
+    if (contentLength) res.setHeader('Content-Length', contentLength);
+
+    const buffer = Buffer.from(await upstream.arrayBuffer());
+    return res.send(buffer);
+  } catch (err: any) {
+    clearTimeout(timeout);
+    return res.status(502).send(err.message || 'NXSHA proxy failed');
+  }
+});
+
+// 1. GET /api/nxsha/servers
+apiRouter.get('/nxsha/servers', async (req, res) => {
+  const tmdbId = String(req.query.id || req.query.tmdbId || '').trim();
+  const mediaType = (String(req.query.type || req.query.mediaType || 'movie').trim().toLowerCase() === 'tv'
+    ? 'tv'
+    : 'movie') as MediaType;
+  const season = Math.max(1, Number.parseInt(String(req.query.season || '1'), 10) || 1);
+  const episode = Math.max(1, Number.parseInt(String(req.query.episode || '1'), 10) || 1);
+  const imdbId = String(req.query.imdbId || tmdbImdbCache.get(tmdbId) || getSeriesImdbId(tmdbId) || '');
+
+  if (!tmdbId) {
+    return res.status(400).json({ error: 'Missing tmdbId query param' });
+  }
+
+  const servers = await fetchNxshaServers(tmdbId, mediaType, season, episode, imdbId);
+  return res.json({
+    success: true,
+    count: servers.length,
+    servers: servers.map((s, idx) => ({
+      index: idx,
+      id: s.scraper,
+      name: s.name,
+      quality: s.quality || 'HD',
+      scraper: s.scraper,
+    })),
+  });
+});
+
+// 1b. GET /api/nxsha/subtitles (Asynchronous subtitle discovery endpoint)
+apiRouter.get('/nxsha/subtitles', async (req, res) => {
+  const tmdbId = String(req.query.id || req.query.tmdbId || '').trim();
+  const mediaType = (String(req.query.type || req.query.mediaType || 'movie').trim().toLowerCase() === 'tv'
+    ? 'tv'
+    : 'movie') as MediaType;
+  const season = Math.max(1, Number.parseInt(String(req.query.season || '1'), 10) || 1);
+  const episode = Math.max(1, Number.parseInt(String(req.query.episode || '1'), 10) || 1);
+  const imdbId = String(req.query.imdbId || tmdbImdbCache.get(tmdbId) || getSeriesImdbId(tmdbId) || '');
+
+  if (!tmdbId) {
+    return res.status(400).json({ error: 'Missing tmdbId query param' });
+  }
+
+  const subtitles = await fetchNxshaSubtitles(tmdbId, mediaType, season, episode, imdbId);
+  return res.json({
+    success: true,
+    count: subtitles.length,
+    subtitles,
+  });
+});
+
+// 2. GET /api/nxsha/sources
+apiRouter.get('/nxsha/sources', async (req, res) => {
+  const tmdbId = String(req.query.id || req.query.tmdbId || '').trim();
+  const provider = String(req.query.server || req.query.provider || 'rive-citadel').trim();
+  const mediaType = (String(req.query.type || req.query.mediaType || 'movie').trim().toLowerCase() === 'tv'
+    ? 'tv'
+    : 'movie') as MediaType;
+  const season = Math.max(1, Number.parseInt(String(req.query.season || '1'), 10) || 1);
+  const episode = Math.max(1, Number.parseInt(String(req.query.episode || '1'), 10) || 1);
+  const imdbId = String(req.query.imdbId || tmdbImdbCache.get(tmdbId) || getSeriesImdbId(tmdbId) || '');
+
+  if (!tmdbId) {
+    return res.status(400).json({ error: 'Missing tmdbId' });
+  }
+  if (!isAuthorizedNxshaProvider(provider)) {
+    return res.status(400).json({ error: 'Unauthorized or unknown NXSHA provider' });
+  }
+
+  const { sources, subtitles, dubs } = await fetchNxshaSources(
+    provider,
+    tmdbId,
+    mediaType,
+    season,
+    episode,
+    imdbId
+  );
+  return res.json({
+    success: sources.length > 0,
+    provider,
+    sources,
+    subtitles,
+    dubs,
+  });
+});
+
+// Short-TTL (45s) in-memory promise cache for deduplicating concurrent NXSHA upstream requests within the same search session
+const NXSHA_CACHE_TTL_MS = 45_000;
+const nxshaCitadelCache = new Map<
+  string,
+  { expiresAt: number; promise: Promise<{ sources: NxshaSource[]; subtitles: any[]; dubs: RawOrionDub[] }> }
+>();
+const nxshaSubsCache = new Map<
+  string,
+  { expiresAt: number; promise: Promise<Array<{ id: string; language: string; url: string }>> }
+>();
+const nxshaServersCache = new Map<string, { expiresAt: number; promise: Promise<NxshaServer[]> }>();
+
+function getCachedNxshaSubtitles(
+  tmdbId: string,
+  mediaType: string,
+  season: number,
+  episode: number,
+  imdbId: string
+) {
+  const key = `${mediaType}:${tmdbId}:${season}:${episode}`;
+  const now = Date.now();
+  const hit = nxshaSubsCache.get(key);
+  if (hit && hit.expiresAt > now) return hit.promise;
+  const promise = fetchNxshaSubtitles(tmdbId, mediaType, season, episode, imdbId);
+  nxshaSubsCache.set(key, { expiresAt: now + NXSHA_CACHE_TTL_MS, promise });
+  return promise;
+}
+
+function getCachedNxshaServers(
+  tmdbId: string,
+  mediaType: string,
+  season: number,
+  episode: number,
+  imdbId: string
+) {
+  const key = `${mediaType}:${tmdbId}:${season}:${episode}`;
+  const now = Date.now();
+  const hit = nxshaServersCache.get(key);
+  if (hit && hit.expiresAt > now) return hit.promise;
+  const promise = fetchNxshaServers(tmdbId, mediaType, season, episode, imdbId);
+  nxshaServersCache.set(key, { expiresAt: now + NXSHA_CACHE_TTL_MS, promise });
+  return promise;
+}
+
+function getCachedCitadelSources(
+  tmdbId: string,
+  mediaType: string,
+  season: number,
+  episode: number,
+  imdbId: string
+) {
+  const key = `${mediaType}:${tmdbId}:${season}:${episode}`;
+  const now = Date.now();
+  const hit = nxshaCitadelCache.get(key);
+  if (hit && hit.expiresAt > now) return hit.promise;
+  const promise = fetchNxshaSources('rive-citadel', tmdbId, mediaType, season, episode, imdbId).catch(
+    () => ({ sources: [] as NxshaSource[], subtitles: [] as any[], dubs: [] as RawOrionDub[] })
+  );
+  nxshaCitadelCache.set(key, { expiresAt: now + NXSHA_CACHE_TTL_MS, promise });
+  return promise;
+}
+
+// 3. POST & GET /api/nxsha/resolve (Concurrent First-Valid-Source-Wins Stream Resolver with Auto Server Racing & Diagnostics)
+const handleNxshaResolve = async (req: express.Request, res: express.Response) => {
+  const params = req.method === 'POST' ? req.body || {} : req.query || {};
+  const tmdbId = String(params.id || params.tmdbId || '').trim();
+  const mediaType = (String(params.type || params.mediaType || 'movie').trim().toLowerCase() === 'tv'
+    ? 'tv'
+    : 'movie') as MediaType;
+  const season = Math.max(1, Number.parseInt(String(params.season || '1'), 10) || 1);
+  const episode = Math.max(1, Number.parseInt(String(params.episode || '1'), 10) || 1);
+  const preferredServer = String(params.server || params.provider || params.preferredServer || '').trim();
+  const strictSingleServer = Boolean(params.strictSingleServer === true || params.strictSingleServer === 'true');
+  const allowFallback = Boolean(params.allowFallback === true || params.allowFallback === 'true');
+  const requestedDub = String(params.dubCode || params.dubLang || params.lang || '').trim().toLowerCase();
+  const imdbId = String(params.imdbId || tmdbImdbCache.get(tmdbId) || getSeriesImdbId(tmdbId) || '');
+
+  const rawExclude = params.excludeServers;
+  const excludeSet = new Set<string>(
+    Array.isArray(rawExclude)
+      ? rawExclude.map((s: any) => String(s).trim())
+      : typeof rawExclude === 'string' && rawExclude.trim()
+      ? rawExclude.split(',').map((s) => s.trim())
+      : []
+  );
+
+  if (!tmdbId) {
+    return res.status(400).json({ success: false, error: 'Missing tmdbId' });
+  }
+
+  // Kick off subtitles and upstream server list in parallel without blocking provider racing!
+  const nxshaSubsPromise = getCachedNxshaSubtitles(tmdbId, mediaType, season, episode, imdbId);
+  const nxshaServersPromise = getCachedNxshaServers(tmdbId, mediaType, season, episode, imdbId);
+
+  const defaultServerList = NXSHA_SERVERS.map((s) => ({
+    index: s.index,
+    id: s.id,
+    name: s.label,
+    quality: 'HD',
+  }));
+
+  // Build candidate provider list to race concurrently
+  const candidateProviders: string[] = [];
+  if (strictSingleServer && preferredServer && isAuthorizedNxshaProvider(preferredServer)) {
+    if (!excludeSet.has(preferredServer)) {
+      candidateProviders.push(preferredServer);
+    }
+  } else {
+    if (preferredServer && isAuthorizedNxshaProvider(preferredServer) && !excludeSet.has(preferredServer)) {
+      candidateProviders.push(preferredServer);
+    }
+    for (const p of ALLOWED_NXSHA_PROVIDERS) {
+      if (!excludeSet.has(p) && !candidateProviders.includes(p)) {
+        candidateProviders.push(p);
+      }
+    }
+  }
+
+  const allDubsMap = new Map<string, RawOrionDub>();
+  allDubsMap.set('orig', {
+    type: 0,
+    lang: 'orig',
+    name: 'Original Audio',
+    label: 'Original Audio',
+    original: true,
+  });
+
+  // Shared memoized promise for rive-citadel so if both rive-citadel and castle run in parallel,
+  // rive-citadel is only fetched once and castle can verify its hscow.com asset keys against rive-citadel
+  const citadelState: { resolved: { sources: NxshaSource[]; subtitles: any[]; dubs: RawOrionDub[] } | null } = {
+    resolved: null,
+  };
+
+  const getCitadelSources = () =>
+    getCachedCitadelSources(tmdbId, mediaType, season, episode, imdbId).then((val) => {
+      citadelState.resolved = val;
+      return val;
+    });
+
+  // Start rive-citadel immediately at t = 0ms if it or castle is in the candidate pool
+  if (candidateProviders.includes('rive-citadel') || candidateProviders.includes('castle')) {
+    void getCitadelSources();
+  }
+
+  // Race all eligible NXSHA providers concurrently — First Valid Source Wins!
+  const raceResult = await raceNxshaProviders({
+    providers: candidateProviders,
+    concurrencyLimit: 6,
+    providerTimeoutMs: 4800,
+    overallTimeoutMs: 7500,
+    queryProvider: async (provider, signal) => {
+      if (provider === 'rive-citadel') {
+        return getCitadelSources();
+      }
+      return fetchNxshaSources(provider, tmdbId, mediaType, season, episode, imdbId, signal);
+    },
+    validateCandidate: async (provider, sources) => {
+      // Non-fuzzy providers validate immediately in 0ms without waiting on any other provider!
+      if (provider !== 'castle') {
+        return { valid: sources.length > 0, sources };
+      }
+      // For castle (which uses fuzzy title search on hscow.com), cross-check against rive-citadel's exact ID lookup
+      const citadelRes = await getCitadelSources();
+      if (citadelRes.sources.length === 0) {
+        return {
+          valid: false,
+          sources: [],
+          reason: 'Rejected fuzzy castle match because exact ID provider rive-citadel returned 0 sources',
+        };
+      }
+      // If rive-citadel is also racing in this candidate pool and has sources, yield one tick so rive-citadel wins the simultaneous tie
+      if (candidateProviders.includes('rive-citadel') && preferredServer !== 'castle') {
+        await new Promise((r) => setTimeout(r, 5));
+      }
+      const verifiedAssetKeys = new Set(
+        citadelRes.sources.map((s) => extractHscowAssetKey(s.url)).filter((k): k is string => Boolean(k))
+      );
+      if (verifiedAssetKeys.size === 0) {
+        return { valid: sources.length > 0, sources };
+      }
+      const filtered = sources.filter((s) => {
+        const key = extractHscowAssetKey(s.url);
+        return key ? verifiedAssetKeys.has(key) : true;
+      });
+      return {
+        valid: filtered.length > 0,
+        sources: filtered,
+        reason: filtered.length === 0 ? 'Castle asset key did not match verified rive-citadel asset key' : undefined,
+      };
+    },
+    isPreferredMatch: (_provider, sources) => {
+      if (!requestedDub || requestedDub === 'orig') return true;
+      return sources.some((s) => s.lang === requestedDub);
+    },
+  });
+
+  for (const d of raceResult.allDiscoveredDubs) {
+    if (d?.lang && !allDubsMap.has(d.lang)) {
+      allDubsMap.set(d.lang, d);
+    }
+  }
+
+  if (raceResult.success && raceResult.winner) {
+    const winner = raceResult.winner;
+    const mergedSources = [...winner.sources];
+    const existingUrls = new Set(mergedSources.map((s) => s.url));
+
+    // If rive-citadel has already resolved in parallel, merge its valid (unexpired) language variants and dubs
+    if (citadelState.resolved && citadelState.resolved.sources.length > 0) {
+      for (const citSrc of citadelState.resolved.sources) {
+        if (
+          citSrc?.url &&
+          !existingUrls.has(citSrc.url) &&
+          validatePlayableNxshaSource(citSrc).valid
+        ) {
+          existingUrls.add(citSrc.url);
+          mergedSources.push(citSrc);
+        }
+      }
+      for (const d of citadelState.resolved.dubs) {
+        if (d?.lang && !allDubsMap.has(d.lang) && mergedSources.some((s) => s.lang === d.lang)) {
+          allDubsMap.set(d.lang, d);
+        }
+      }
+    }
+
+    if (requestedDub && requestedDub !== 'orig') {
+      mergedSources.sort((a, b) => {
+        const aMatch = a.lang === requestedDub;
+        const bMatch = b.lang === requestedDub;
+        return aMatch && !bMatch ? -1 : !aMatch && bMatch ? 1 : 0;
+      });
+    }
+
+    // Give subtitles and server metadata a short non-blocking 180ms grace window so they never delay playback
+    const [apiSubtitles, rawServers] = await Promise.all([
+      Promise.race([
+        nxshaSubsPromise,
+        new Promise<Array<{ id: string; language: string; url: string }>>((r) =>
+          setTimeout(() => r([]), 180)
+        ),
+      ]),
+      Promise.race([
+        nxshaServersPromise,
+        new Promise<NxshaServer[]>((r) => setTimeout(() => r([]), 180)),
+      ]),
+    ]);
+
+    const mergedSubtitles = normalizeSubtitleTracks(winner.subtitles, apiSubtitles);
+    const serverMeta =
+      rawServers.find((s) => s.scraper === winner.provider) ||
+      defaultServerList.find((s) => s.id === winner.provider);
+
+    return res.json({
+      success: true,
+      engine: 'nxsha',
+      resolvedServer: winner.provider,
+      serverName: serverMeta?.name || winner.provider,
+      sources: mergedSources,
+      subtitles: mergedSubtitles,
+      dubs: Array.from(allDubsMap.values()),
+      activeDub: requestedDub || 'orig',
+      servers:
+        rawServers.length > 0
+          ? rawServers.map((s, idx) => ({
+              index: idx,
+              id: s.scraper,
+              name: s.name,
+              quality: s.quality || 'HD',
+            }))
+          : defaultServerList,
+      diagnostics: raceResult.diagnostics,
+    });
+  }
+
+  // When querying a single specific NXSHA server (without allowFallback), report its true failure immediately
+  // so the client state machine permanently marks that server FAILED and removes it from the active list.
+  if (strictSingleServer && !allowFallback) {
+    return res.json({
+      success: false,
+      engine: 'nxsha',
+      provider: preferredServer,
+      sources: [],
+      error:
+        raceResult.error ||
+        `No valid playable stream found on NXSHA provider ${preferredServer || 'unknown'}`,
+      servers: defaultServerList,
+      dubs: Array.from(allDubsMap.values()),
+      diagnostics: raceResult.diagnostics,
+    });
+  }
+
+  // Concurrent Fallback Racing for titles not hosted on primary NXSHA CDNs (e.g. anime Movie 128 Princess Mononoke):
+  // Race verified ad-free ZXCSTREAM HLS/DASH providers concurrently so the first valid fallback stream wins!
+  try {
+    const details = await fetchTmdbDetailsWithFallback(mediaType, tmdbId);
+    const fallbackMeta = getMediaByTmdbId(mediaType, tmdbId);
+    const title = String(details?.title || details?.name || fallbackMeta?.title || '').trim();
+    const releaseStr = String(
+      details?.release_date || details?.first_air_date || `${fallbackMeta?.releaseYear || ''}-01-01`
+    );
+    const year = releaseStr.slice(0, 4);
+
+    const fallbackRace = await raceNxshaProviders({
+      providers: ['valstrax', 'atlas', 'ursa', 'orion'],
+      allowUnauthorizedProviders: true,
+      concurrencyLimit: 4,
+      providerTimeoutMs: 4500,
+      overallTimeoutMs: 5500,
+      queryProvider: async (fallbackSrv) => {
+        const resolved = await resolveForServer(fallbackSrv, {
+          mediaType,
+          tmdbId,
+          season,
+          episode,
+          title,
+          releaseYear: year,
+          date: releaseStr,
+          lastAirDate: String(details?.last_air_date || ''),
+          imdbId,
+          dubCode: '',
+          dubType: '0',
+        });
+
+        const playableLinks = Array.isArray(resolved?.links)
+          ? resolved.links.filter((l: any) => l?.link && !l.onlyHevc)
+          : [];
+
+        return {
+          sources: playableLinks.map((l: any) => ({
+            id: `verified-${fallbackSrv}`,
+            provider: fallbackSrv,
+            url: l.link,
+            quality: '1080p',
+            label: '1080p | Original',
+            type: l.type === 'dash' || l.type === 'andromeda' ? 'dash' : 'hls',
+            lang: 'en',
+            langName: 'Original',
+          })),
+          subtitles: [],
+          dubs: Array.isArray(resolved?.dubs) ? resolved.dubs : [],
+        };
+      },
+    });
+
+    for (const d of fallbackRace.allDiscoveredDubs) {
+      if (d?.lang && !allDubsMap.has(d.lang)) {
+        allDubsMap.set(d.lang, d);
+      }
+    }
+
+    if (fallbackRace.success && fallbackRace.winner) {
+      const apiSubtitles = await Promise.race([
+        nxshaSubsPromise,
+        new Promise<Array<{ id: string; language: string; url: string }>>((r) =>
+          setTimeout(() => r([]), 250)
+        ),
+      ]);
+      const nonExcludedServer =
+        defaultServerList.find((s) => !excludeSet.has(s.id)) || defaultServerList[0];
+      return res.json({
+        success: true,
+        engine: 'nxsha',
+        isFallbackStream: true,
+        resolvedServer: nonExcludedServer.id,
+        serverName: `${nonExcludedServer.name} (Verified)`,
+        sources: fallbackRace.winner.sources,
+        subtitles: apiSubtitles,
+        dubs: Array.from(allDubsMap.values()),
+        activeDub: requestedDub || 'orig',
+        servers: defaultServerList,
+        diagnostics: {
+          ...raceResult.diagnostics,
+          winningProvider: fallbackRace.winner.provider,
+          timeToFirstValidSourceMs:
+            raceResult.diagnostics.totalDiscoveryDurationMs +
+            (fallbackRace.diagnostics.timeToFirstValidSourceMs || 0),
+          providerTimings: [
+            ...raceResult.diagnostics.providerTimings,
+            ...fallbackRace.diagnostics.providerTimings,
+          ],
+        },
+      });
+    }
+  } catch {
+    // ignore fallback error
+  }
+
+  return res.status(404).json({
+    success: false,
+    engine: 'nxsha',
+    error: 'No active ad-free stream found across NXSHA providers for this title',
+    servers: defaultServerList,
+    dubs: Array.from(allDubsMap.values()),
+    diagnostics: raceResult.diagnostics,
+  });
+};
+
+apiRouter.post('/nxsha/resolve', handleNxshaResolve);
+apiRouter.get('/nxsha/resolve', handleNxshaResolve);
 
 // Mount on /api, /api/index, and also root / so any routing setup (Vercel rewrite, direct path, etc.) succeeds!
 app.use('/api', apiRouter);

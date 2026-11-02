@@ -390,7 +390,7 @@ export const PlayerControlsOverlay: React.FC<PlayerControlsOverlayProps> = ({
             ))}
           </select>
         )}
-        {playerMode === 'custom' && (
+        {(playerMode === 'custom' || playerMode === 'nxsha') && (
           <button
             type="button"
             aria-label="Toggle Servers"
@@ -413,7 +413,7 @@ export const PlayerControlsOverlay: React.FC<PlayerControlsOverlayProps> = ({
       onClick={(e) => e.stopPropagation()}
       className="space-y-3 pointer-events-auto bg-gradient-to-t from-black/90 via-black/50 to-transparent -mx-4 -mb-4 p-4 lg:-mx-6 lg:-mb-6 lg:p-6 pt-12"
     >
-      {playerMode === 'custom' && metadata && (
+      {(playerMode === 'custom' || playerMode === 'nxsha') && metadata && (
         <div className="hidden md:block space-y-0.5 mb-2 max-w-[55%] pointer-events-none">
           <div className="flex items-center gap-2">
             <div style={{ backgroundColor: normalizedColor }} className="w-1 h-4 rounded-full" />
@@ -747,7 +747,7 @@ export const PlayerControlsOverlay: React.FC<PlayerControlsOverlayProps> = ({
                     <span>Original Audio</span>
                     {effectiveDub.isOriginal && <Check className="w-4 h-4 text-green-400" />}
                   </button>
-                  {filteredDubs.filter((d) => !d.original).length > 0
+                  {filteredDubs.filter((d) => !d.original && d.lang !== 'en').length > 0
                     ? filteredDubs
                         .filter((d) => !d.original)
                         .map((d, idx) => {
