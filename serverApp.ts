@@ -40,6 +40,7 @@ app.use((req, _res, next) => {
     const pathname = parsed.pathname.replace(/\/+$/, '') || '/';
     const isEntrypointPath =
       pathname === '/' ||
+      pathname === '/index' ||
       pathname === '/api' ||
       pathname === '/api/index' ||
       pathname === '/api/index.js' ||
@@ -72,19 +73,19 @@ app.use((req, _res, next) => {
 });
 
 const FIELD_MAP: Record<string, string> = {
-  id: 'a7f39c821d604e5b91e547b',
-  fToken: 'e83c4b719a52105479c1635a',
-  ts: '61d9a5274c8e3b2f38c291e6',
-  token: 'c492f7a183d01e436c538a716d',
-  title: '5e28c9147a06d1e29f3674b392a1',
-  year: 'b731e6c94f8675f8341c306e',
-  season: 'd8427b5c38a2f957c3613e85b',
-  episode: '91c6ea753d1f785c92346b713d',
-  imdbId: 'f35a81943265e871c4933a725f',
-  path: '6b491e258d392e7561a9384c',
-  mediaType: 'c81b306d28147a35632e816b',
-  date: 'e164931a39e5814b3027',
-  latestDate: 'e9543416ad739e5814b3027',
+  id: 'a7f39c821d604e5b91e57b',
+  fToken: 'e83c4b719a5210579c1635a',
+  ts: '61d9a5274c8e3b2f38291e6',
+  token: 'c492f7a183d01e36c538a716d',
+  title: '5e28c9147a06de29f3674b392a1',
+  year: 'b731e6c94f867f8341c306e',
+  season: 'd8427b5c382f957c3613e85b',
+  episode: '91c6ea75d1f785c92346b713d',
+  imdbId: 'f35a8194265e871c4933a725f',
+  path: '6b491e258392e7561a9384c',
+  mediaType: 'c81306d28147a35632e816b',
+  date: 'e16493139e5814b3027',
+  latestDate: 'e953416ad739e5814b3027',
 };
 
 const DECRYPTION_KEY = '7f4c9e2a81d63b05c4f7a9e8126d3b50e1a8c7f23d9465ab0c6e9f1d4a7b832c';
@@ -931,6 +932,13 @@ apiRouter.get('/subtitles', async (req, res) => {
   }
 });
 
+apiRouter.options('/stream/proxy', (_req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', '*');
+  return res.sendStatus(200);
+});
+
 // Universal Proxy endpoint for subtitles (.vtt, .srt) & stream manifest chunks
 apiRouter.get('/stream/proxy', async (req, res) => {
   const targetUrl = req.query.url as string;
@@ -938,19 +946,68 @@ apiRouter.get('/stream/proxy', async (req, res) => {
     return res.status(400).send('Invalid or missing target URL');
   }
 
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Headers', '*');
+
   try {
+    const reqHeaders: Record<string, string> = {
+      'User-Agent': COMMON_HEADERS['User-Agent'],
+      Referer: 'https://zxcstream.cc/',
+      Origin: 'https://zxcstream.cc',
+    };
+    if (req.headers.range) {
+      reqHeaders.Range = String(req.headers.range);
+    }
+
     const upstream = await fetch(targetUrl, {
-      headers: {
-        'User-Agent': COMMON_HEADERS['User-Agent'],
-        Referer: 'https://zxcstream.cc/',
-        Origin: 'https://zxcstream.cc',
-      },
+      headers: reqHeaders,
     });
 
     res.status(upstream.status);
-    const contentType = upstream.headers.get('content-type');
+    const contentType = (upstream.headers.get('content-type') || '').toLowerCase();
     if (contentType) res.setHeader('Content-Type', contentType);
-    res.setHeader('Access-Control-Allow-Origin', '*');
+    const contentRange = upstream.headers.get('content-range');
+    if (contentRange) res.setHeader('Content-Range', contentRange);
+    const contentLength = upstream.headers.get('content-length');
+    if (contentLength) res.setHeader('Content-Length', contentLength);
+    res.setHeader('Accept-Ranges', 'bytes');
+
+    const isM3u8 =
+      contentType.includes('mpegurl') ||
+      contentType.includes('x-mpegurl') ||
+      targetUrl.includes('.m3u8');
+
+    if (isM3u8) {
+      const text = await upstream.text();
+      if (text.trimStart().startsWith('#EXTM3U')) {
+        const resolveAgainstBase = (relOrAbs: string) => {
+          try {
+            return new URL(relOrAbs.trim(), targetUrl).toString();
+          } catch {
+            return relOrAbs.trim();
+          }
+        };
+
+        const rewritten = text
+          .split(/\r?\n/)
+          .map((line) => {
+            const trimmed = line.trim();
+            if (!trimmed) return line;
+            if (trimmed.startsWith('#')) {
+              return line.replace(/URI="([^"]+)"/g, (_m, uriVal) => {
+                const absUri = resolveAgainstBase(uriVal);
+                return `URI="/api/stream/proxy?url=${encodeURIComponent(absUri)}"`;
+              });
+            }
+            const absUrl = resolveAgainstBase(trimmed);
+            return `/api/stream/proxy?url=${encodeURIComponent(absUrl)}`;
+          })
+          .join('\n');
+
+        res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
+        return res.status(200).send(rewritten);
+      }
+    }
 
     const buffer = Buffer.from(await upstream.arrayBuffer());
     return res.send(buffer);
@@ -1881,6 +1938,13 @@ async function fetchNxshaSources(
   }
 }
 
+apiRouter.options('/nxsha/proxy', (_req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', '*');
+  return res.sendStatus(200);
+});
+
 // 0. GET /api/nxsha/proxy (Ad-free, SSRF-hardened CORS & Referer proxy for NXSHA HLS manifests, audio tracks, and segments)
 apiRouter.get('/nxsha/proxy', async (req, res) => {
   const targetUrl = String(req.query.url || '').trim();
@@ -1929,6 +1993,8 @@ apiRouter.get('/nxsha/proxy', async (req, res) => {
     }
 
     res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Headers', '*');
+    res.setHeader('Accept-Ranges', 'bytes');
     if (!upstream.ok && upstream.status !== 206) {
       return res.status(upstream.status).send(`Upstream error ${upstream.status}`);
     }
@@ -2233,34 +2299,27 @@ const handleNxshaResolve = async (req: express.Request, res: express.Response) =
       if (provider !== 'castle') {
         return { valid: sources.length > 0, sources };
       }
-      // For castle (which uses fuzzy title search on hscow.com), cross-check against rive-citadel's exact ID lookup
-      const citadelRes = await getCitadelSources();
-      if (citadelRes.sources.length === 0) {
-        return {
-          valid: false,
-          sources: [],
-          reason: 'Rejected fuzzy castle match because exact ID provider rive-citadel returned 0 sources',
-        };
+      // For castle, if exact ID provider rive-citadel also has sources, prioritize matching asset keys
+      const citadelRes = await getCitadelSources().catch(() => ({ sources: [] as NxshaSource[] }));
+      if (citadelRes.sources.length > 0) {
+        // If rive-citadel is also racing in this candidate pool and has sources, yield one tick so rive-citadel wins the simultaneous tie
+        if (candidateProviders.includes('rive-citadel') && preferredServer !== 'castle') {
+          await new Promise((r) => setTimeout(r, 5));
+        }
+        const verifiedAssetKeys = new Set(
+          citadelRes.sources.map((s) => extractHscowAssetKey(s.url)).filter((k): k is string => Boolean(k))
+        );
+        if (verifiedAssetKeys.size > 0) {
+          const filtered = sources.filter((s) => {
+            const key = extractHscowAssetKey(s.url);
+            return key ? verifiedAssetKeys.has(key) : true;
+          });
+          if (filtered.length > 0) {
+            return { valid: true, sources: filtered };
+          }
+        }
       }
-      // If rive-citadel is also racing in this candidate pool and has sources, yield one tick so rive-citadel wins the simultaneous tie
-      if (candidateProviders.includes('rive-citadel') && preferredServer !== 'castle') {
-        await new Promise((r) => setTimeout(r, 5));
-      }
-      const verifiedAssetKeys = new Set(
-        citadelRes.sources.map((s) => extractHscowAssetKey(s.url)).filter((k): k is string => Boolean(k))
-      );
-      if (verifiedAssetKeys.size === 0) {
-        return { valid: sources.length > 0, sources };
-      }
-      const filtered = sources.filter((s) => {
-        const key = extractHscowAssetKey(s.url);
-        return key ? verifiedAssetKeys.has(key) : true;
-      });
-      return {
-        valid: filtered.length > 0,
-        sources: filtered,
-        reason: filtered.length === 0 ? 'Castle asset key did not match verified rive-citadel asset key' : undefined,
-      };
+      return { valid: sources.length > 0, sources };
     },
     isPreferredMatch: (_provider, sources) => {
       if (!requestedDub || requestedDub === 'orig') return true;

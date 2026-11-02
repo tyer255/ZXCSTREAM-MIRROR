@@ -1,5 +1,5 @@
 import React, { useEffect, useRef } from 'react';
-import { Loader, LoaderCircle, X } from 'lucide-react';
+import { Check, CheckCircle, Loader, LoaderCircle, X } from 'lucide-react';
 import { MediaType, PLAYER_HINTS, PlayerMode } from '../utils/urlBuilder.js';
 import type { NxshaServerState } from '../utils/nxshaDiscovery.js';
 
@@ -385,6 +385,24 @@ export const PlayerLoadingScreen: React.FC<{
   </div>
 );
 
+const SERVER_SUBTITLES: Record<string, string> = {
+  orion: 'Multi Audio Support',
+  valstrax: 'HD Quality & Reliable',
+  atlas: 'Fast & Stable',
+  ursa: 'Alternative',
+  alatreon: 'Extensive Movie & TV Library',
+  daedalus: 'Alternative',
+  'rive-citadel': 'Hindi & Multi Audio',
+  castle: 'Multi-Language HLS',
+  watchout: 'Fast HLS',
+  streamflix: 'Direct Edge MP4',
+  nitro: '1080p Multi-Audio',
+  xdownloader: 'Alternative Edge',
+  purstream: 'Fast Multi-Audio',
+  vixolity: 'UHD Direct',
+  'rive-primevids': 'Backup Mirror',
+};
+
 export const PlayerServerCarousel: React.FC<{
   canPlay: boolean;
   servers: ServerItemState[];
@@ -392,12 +410,10 @@ export const PlayerServerCarousel: React.FC<{
   onClose: () => void;
   onSelectServer: (index: number) => void;
 }> = ({ canPlay, servers, currentServerIndex, onClose, onSelectServer }) => {
-  const itemRefs = useRef<Map<number, HTMLButtonElement | null>>(new Map());
+  const itemRefs = useRef<Map<number, HTMLDivElement | null>>(new Map());
 
-  // Immediately exclude FAILED servers from the active server list
-  const visibleServers = servers.filter(
-    (srv) => srv.status !== 'failed' && srv.state !== 'FAILED'
-  );
+  // Show all servers so the original server list is preserved with its distinct status badges and subtitles
+  const visibleServers = servers;
 
   // Keep the selected server centered smoothly inside the scrollable container when selection changes
   useEffect(() => {
@@ -418,15 +434,18 @@ export const PlayerServerCarousel: React.FC<{
         if (canPlay) onClose();
       }}
       className={`absolute inset-0 flex items-center justify-end z-30 transition-all duration-300 ${
-        canPlay ? 'bg-black/65 backdrop-blur-xs pointer-events-auto' : 'pointer-events-none'
+        canPlay
+          ? 'bg-black/65 backdrop-blur-xs pointer-events-auto cursor-pointer'
+          : 'pointer-events-none bg-gradient-to-l from-black/75 via-black/25 to-transparent'
       }`}
     >
       <div
         data-testid="zxc-server-scroll-container"
         onClick={(e) => e.stopPropagation()}
-        className="relative max-h-[85vh] w-72 sm:w-80 lg:w-96 overflow-y-auto overscroll-contain scroll-smooth pointer-events-auto px-3 sm:px-4 lg:px-6 py-6 sm:py-10 my-auto mr-4 sm:mr-8 lg:mr-16 flex flex-col no-scrollbar"
+        className="relative max-h-[85vh] w-auto min-w-[240px] max-w-sm sm:max-w-md overflow-y-auto overscroll-contain scroll-smooth pointer-events-auto px-4 sm:px-6 lg:px-8 py-8 sm:py-12 my-auto mr-2 sm:mr-6 lg:mr-12 flex flex-col no-scrollbar"
+        style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}
       >
-        <div className="flex flex-col gap-2.5 sm:gap-3 w-full py-4">
+        <div className="flex flex-col gap-1 sm:gap-2 w-full py-4 items-end">
           {visibleServers.map((srv) => {
             const authoritativeState: NxshaServerState =
               srv.state ||
@@ -435,6 +454,8 @@ export const PlayerServerCarousel: React.FC<{
                 ? 'SELECTED'
                 : srv.status === 'available'
                 ? 'AVAILABLE'
+                : srv.status === 'failed'
+                ? 'FAILED'
                 : 'PROCESSING');
 
             const isSelected =
@@ -444,7 +465,10 @@ export const PlayerServerCarousel: React.FC<{
               (authoritativeState === 'SELECTED' && srv.status === 'available');
             const isConnecting =
               srv.status === 'connecting' ||
-              (authoritativeState === 'SELECTED' && srv.status !== 'available');
+              (authoritativeState === 'SELECTED' && srv.status !== 'available' && srv.status !== 'failed');
+            const isFailed = srv.status === 'failed' || authoritativeState === 'FAILED';
+
+            const subtitle = SERVER_SUBTITLES[srv.code] || 'High Quality Stream';
 
             const statusLabel =
               isSelected && isAvailable
@@ -453,52 +477,78 @@ export const PlayerServerCarousel: React.FC<{
                 ? 'connecting...'
                 : isAvailable
                 ? 'available'
-                : 'processing...';
+                : isFailed
+                ? 'No video found'
+                : 'queue';
 
             return (
-              <button
+              <div
                 key={srv.code}
                 ref={(el) => {
                   itemRefs.current.set(srv.index, el);
                 }}
-                type="button"
                 data-testid={`server-carousel-item-${srv.index}`}
                 data-server-code={srv.code}
                 data-server-state={authoritativeState}
                 onClick={() => onSelectServer(srv.index)}
-                className={`w-full text-left transition-all duration-300 ease-out flex items-center gap-3 px-4 py-3 rounded-2xl border backdrop-blur-xl cursor-pointer ${
+                className={`h-auto w-fit ml-auto transition-all duration-300 [text-shadow:0_2px_4px_rgba(0,0,0,0.5)] cursor-pointer select-none group text-end py-3 sm:py-4 lg:py-5 px-3 sm:px-4 pointer-events-auto rounded-xl ${
                   isSelected
-                    ? 'bg-white/20 border-white/40 scale-[1.03] opacity-100 font-bold text-white shadow-[0_12px_32px_rgba(0,0,0,0.7)] ring-1 ring-white/20 translate-x-[-2px]'
-                    : isAvailable
-                    ? 'bg-zinc-950/80 hover:bg-white/15 border-white/15 opacity-85 hover:opacity-100 hover:scale-[1.01] text-zinc-100 hover:text-white backdrop-blur-md'
-                    : 'bg-zinc-950/60 hover:bg-white/10 border-white/10 opacity-75 hover:opacity-100 text-zinc-300 backdrop-blur-sm'
-                } ${isConnecting ? 'animate-pulse' : ''}`}
+                    ? 'scale-105 origin-right opacity-100'
+                    : isFailed
+                    ? 'opacity-25 hover:opacity-50 pointer-events-auto'
+                    : 'opacity-35 hover:opacity-85 hover:scale-[1.02] origin-right'
+                }`}
               >
-                <div className={`flex items-center justify-center rounded-full p-2 backdrop-blur-sm shrink-0 transition-colors ${
-                  isSelected ? 'bg-white/25 text-white' : 'bg-white/10 text-zinc-300'
-                }`}>
-                  {isAvailable ? (
+                <p
+                  className={`transition-all duration-300 ${
+                    isFailed
+                      ? 'line-through text-zinc-400 font-semibold text-base sm:text-xl lg:text-2xl'
+                      : isSelected
+                      ? 'font-bold text-lg sm:text-2xl lg:text-3xl text-white drop-shadow-[0_4px_12px_rgba(0,0,0,0.8)]'
+                      : 'font-semibold text-base sm:text-xl lg:text-2xl text-white/90 group-hover:text-white'
+                  }`}
+                >
+                  {srv.name}
+                </p>
+                <p
+                  className={`font-medium transition-colors duration-300 mt-0.5 sm:mt-1 ${
+                    isSelected
+                      ? 'text-zinc-200 text-xs sm:text-sm lg:text-base'
+                      : isFailed
+                      ? 'text-zinc-600 text-xs sm:text-sm'
+                      : 'text-zinc-400 text-xs sm:text-sm group-hover:text-zinc-200'
+                  }`}
+                >
+                  {subtitle}
+                </p>
+                <span
+                  data-testid={`server-status-label-${srv.index}`}
+                  className={`capitalize font-medium flex justify-end items-center gap-1.5 sm:gap-2 text-xs sm:text-sm lg:text-base mt-1.5 sm:mt-2 transition-all duration-300 ${
+                    isSelected && isAvailable
+                      ? 'text-emerald-400 font-semibold'
+                      : isConnecting
+                      ? 'text-amber-300 font-semibold'
+                      : isAvailable
+                      ? 'text-emerald-400/90'
+                      : isFailed
+                      ? 'text-red-500 font-medium'
+                      : 'text-zinc-400'
+                  }`}
+                >
+                  <p>{statusLabel}</p>
+                  {isSelected && isAvailable ? (
                     <CastConnectedSvg />
                   ) : isConnecting ? (
-                    <LoaderCircle className="size-4 animate-spin text-white" />
+                    <LoaderCircle className="size-4 animate-spin text-amber-300" />
+                  ) : isAvailable ? (
+                    <Check className="size-4 text-emerald-400" />
+                  ) : isFailed ? (
+                    <X className="size-4 text-red-500" strokeWidth={2.5} />
                   ) : (
-                    <Loader className="size-4 animate-spin text-white" />
+                    <Loader className="size-3.5 animate-spin text-zinc-400" />
                   )}
-                </div>
-                <div className="min-w-0 flex-1">
-                  <div className="text-sm sm:text-base lg:text-lg leading-tight truncate">
-                    {srv.name}
-                  </div>
-                  <div
-                    data-testid={`server-status-label-${srv.index}`}
-                    className={`text-xs lg:text-sm font-medium ${
-                      isAvailable ? 'text-green-400' : 'text-zinc-400'
-                    }`}
-                  >
-                    {statusLabel}
-                  </div>
-                </div>
-              </button>
+                </span>
+              </div>
             );
           })}
         </div>
