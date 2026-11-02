@@ -72,7 +72,7 @@ app.use((req, _res, next) => {
   next();
 });
 
-const FIELD_MAP: Record<string, string> = {
+let FIELD_MAP: Record<string, string> = {
   id: 'a7f39c821d604e5b91e57b',
   fToken: 'e83c4b719a5210579c1635a',
   ts: '61d9a5274c8e3b2f38291e6',
@@ -87,6 +87,75 @@ const FIELD_MAP: Record<string, string> = {
   date: 'e16493139e5814b3027',
   latestDate: 'e953416ad739e5814b3027',
 };
+
+let lastFieldMapDiscoveryAt = 0;
+let fieldMapDiscoveryPromise: Promise<boolean> | null = null;
+
+async function refreshFieldMapFromUpstream(): Promise<boolean> {
+  const now = Date.now();
+  if (now - lastFieldMapDiscoveryAt < 60_000) return false;
+  if (fieldMapDiscoveryPromise) return fieldMapDiscoveryPromise;
+
+  fieldMapDiscoveryPromise = (async () => {
+    try {
+      lastFieldMapDiscoveryAt = Date.now();
+      const pageRes = await fetch('https://zxcstream.cc/player/movie/128', {
+        headers: {
+          'User-Agent':
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        },
+      });
+      if (!pageRes.ok) return false;
+      const html = await pageRes.text();
+      const chunkMatches = Array.from(
+        new Set(html.match(/\/_next\/static\/chunks\/[a-zA-Z0-9_.~-]+\.js/g) || [])
+      );
+      for (const chunkPath of chunkMatches) {
+        try {
+          const chunkRes = await fetch(`https://zxcstream.cc${chunkPath}`, {
+            headers: {
+              'User-Agent':
+                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+            },
+          });
+          if (!chunkRes.ok) continue;
+          const js = await chunkRes.text();
+          if (!js.includes('generateFrontendToken') && !js.includes('latestDate:')) continue;
+          const mapMatch = js.match(
+            /\{id:"([a-f0-9]+)",fToken:"([a-f0-9]+)",ts:"([a-f0-9]+)",token:"([a-f0-9]+)",title:"([a-f0-9]+)",year:"([a-f0-9]+)",season:"([a-f0-9]+)",episode:"([a-f0-9]+)",imdbId:"([a-f0-9]+)",path:"([a-f0-9]+)",mediaType:"([a-f0-9]+)",date:"([a-f0-9]+)",latestDate:"([a-f0-9]+)"\}/
+          );
+          if (mapMatch) {
+            FIELD_MAP = {
+              id: mapMatch[1],
+              fToken: mapMatch[2],
+              ts: mapMatch[3],
+              token: mapMatch[4],
+              title: mapMatch[5],
+              year: mapMatch[6],
+              season: mapMatch[7],
+              episode: mapMatch[8],
+              imdbId: mapMatch[9],
+              path: mapMatch[10],
+              mediaType: mapMatch[11],
+              date: mapMatch[12],
+              latestDate: mapMatch[13],
+            };
+            return true;
+          }
+        } catch {
+          // continue next chunk
+        }
+      }
+      return false;
+    } catch {
+      return false;
+    } finally {
+      fieldMapDiscoveryPromise = null;
+    }
+  })();
+
+  return fieldMapDiscoveryPromise;
+}
 
 const DECRYPTION_KEY = '7f4c9e2a81d63b05c4f7a9e8126d3b50e1a8c7f23d9465ab0c6e9f1d4a7b832c';
 
@@ -129,7 +198,7 @@ async function fetchTmdbDetailsWithFallback(mediaType: string, tmdbId: string, l
   const tryTypeOnHost = async (host: string, type: string) => {
     try {
       const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 4500);
+      const timer = setTimeout(() => controller.abort(), 3000);
       const res = await fetch(
         `${host}/backend/tmdb/details/${encodeURIComponent(type)}/${encodeURIComponent(tmdbId)}?language=${encodeURIComponent(language)}`,
         {
@@ -156,9 +225,7 @@ async function fetchTmdbDetailsWithFallback(mediaType: string, tmdbId: string, l
   };
 
   const tryType = async (type: string) => {
-    const resZxc = await tryTypeOnHost('https://zxcstream.cc', type);
-    if (resZxc) return resZxc;
-    return await tryTypeOnHost('https://vidstuck.cc', type);
+    return await tryTypeOnHost('https://zxcstream.cc', type);
   };
 
   const primary = await tryType(mediaType);
@@ -232,31 +299,31 @@ async function resolveForServer(
       mediaType === 'tv' ? `/${season}/${episode}` : ''
     }`;
 
-    const tokenBody: Record<string, any> = {
-      [FIELD_MAP.id]: String(tmdbId),
-      [FIELD_MAP.mediaType]: mediaType,
-      [FIELD_MAP.path]: serverKey,
-    };
-
-    if (mediaType === 'tv') {
-      tokenBody[FIELD_MAP.season] = Number(season) || 1;
-      tokenBody[FIELD_MAP.episode] = Number(episode) || 1;
-    }
-
     let sourceData: any = null;
     let lastError = 'Request failed';
 
-    const tokenEndpoints = tokenEndpoint ? [tokenEndpoint] : ['/backend/wtfnigga', '/backend/fucku'];
+    const tokenEndpoints = tokenEndpoint ? [tokenEndpoint] : ['/backend/wtfnigga'];
 
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
+        const tokenBody: Record<string, any> = {
+          [FIELD_MAP.id]: String(tmdbId),
+          [FIELD_MAP.mediaType]: mediaType,
+          [FIELD_MAP.path]: serverKey,
+        };
+
+        if (mediaType === 'tv') {
+          tokenBody[FIELD_MAP.season] = Number(season) || 1;
+          tokenBody[FIELD_MAP.episode] = Number(episode) || 1;
+        }
+
         let tokenData: any = null;
         let tokenStatus = 0;
 
         for (const ep of tokenEndpoints) {
           try {
             const tokenController = new AbortController();
-            const tokenTimer = setTimeout(() => tokenController.abort(), 4500);
+            const tokenTimer = setTimeout(() => tokenController.abort(), 3500);
             const tokenRes = await fetch(`${baseHost}${ep}`, {
               method: 'POST',
               headers: {
@@ -283,8 +350,12 @@ async function resolveForServer(
 
         if (!tokenData || !tokenData.token) {
           lastError = tokenStatus ? `Token HTTP ${tokenStatus}` : 'Token failed';
+          if (attempt === 0 && tokenStatus === 400) {
+            const refreshed = await refreshFieldMapFromUpstream();
+            if (refreshed) continue;
+          }
           if (attempt === 0 && (tokenStatus >= 500 || tokenStatus === 429)) {
-            await new Promise((r) => setTimeout(r, 200));
+            await new Promise((r) => setTimeout(r, 150));
             continue;
           }
           return { success: false, server: targetServer, error: lastError, links: [], dubs: [] };
@@ -315,7 +386,7 @@ async function resolveForServer(
         }
 
         const srcController = new AbortController();
-        const srcTimer = setTimeout(() => srcController.abort(), 5000);
+        const srcTimer = setTimeout(() => srcController.abort(), 4000);
         const sourceRes = await fetch(
           `${baseHost}${sourcesPrefix}/${encodeURIComponent(serverKey)}?${query.toString()}`,
           {
@@ -332,7 +403,7 @@ async function resolveForServer(
         if (!sourceRes.ok) {
           lastError = `HTTP ${sourceRes.status}`;
           if (attempt === 0 && (sourceRes.status >= 500 || sourceRes.status === 429)) {
-            await new Promise((r) => setTimeout(r, 250));
+            await new Promise((r) => setTimeout(r, 150));
             continue;
           }
           return { success: false, server: targetServer, error: lastError, links: [], dubs: [] };
@@ -343,7 +414,7 @@ async function resolveForServer(
       } catch (err: any) {
         lastError = err?.message || 'Network error';
         if (attempt === 0) {
-          await new Promise((r) => setTimeout(r, 200));
+          await new Promise((r) => setTimeout(r, 150));
           continue;
         }
         return { success: false, server: targetServer, error: lastError, links: [], dubs: [] };
@@ -376,7 +447,7 @@ async function resolveForServer(
       if (isDash) {
         try {
           const controller = new AbortController();
-          const timer = setTimeout(() => controller.abort(), 4500);
+          const timer = setTimeout(() => controller.abort(), 3500);
           const mpdRes = await fetch(item.link, {
             headers: {
               'User-Agent': COMMON_HEADERS['User-Agent'],
@@ -409,7 +480,7 @@ async function resolveForServer(
       } else if (isWorkerUrl) {
         try {
           const controller = new AbortController();
-          const timer = setTimeout(() => controller.abort(), 3000);
+          const timer = setTimeout(() => controller.abort(), 2000);
           const probeRes = await fetch(item.link, {
             method: 'HEAD',
             headers: {
@@ -442,56 +513,12 @@ async function resolveForServer(
     };
   };
 
-  // For 'atlas' (Atlas III), vidstuck.cc/backend/servers/atlas provides the active H.264 HLS edge stream,
-  const primaryRes = await queryProvider(
+  return await queryProvider(
     'https://zxcstream.cc',
     '/backend/wtfnigga',
     '/backend_/sources',
     targetServer
   );
-  if (primaryRes.links && primaryRes.links.length > 0) {
-    return primaryRes;
-  }
-
-  // Fallback to legacy endpoint if upstream changes back
-  const legacyRes = await queryProvider(
-    'https://zxcstream.cc',
-    '/backend/fucku',
-    '/backend_/sources',
-    targetServer
-  );
-  if (legacyRes.links && legacyRes.links.length > 0) {
-    return legacyRes;
-  }
-
-  // Automatic failover to vidstuck.cc mirror backend
-  const vidstuckMap: Record<string, string> = {
-    orion: 'orion',
-    valstrax: 'andromeda',
-    atlas: 'atlas',
-    ursa: 'ursa',
-    alatreon: 'atlas',
-    daedalus: 'daedalus',
-  };
-  const mappedKey = vidstuckMap[targetServer] || targetServer;
-  const fallbackRes = await queryProvider(
-    'https://vidstuck.cc',
-    '/backend/qwerty',
-    '/backend/servers',
-    mappedKey
-  );
-  if (fallbackRes.links && fallbackRes.links.length > 0) {
-    return {
-      ...fallbackRes,
-      dubs:
-        Array.isArray(primaryRes.dubs) && primaryRes.dubs.length > 0
-          ? primaryRes.dubs
-          : fallbackRes.dubs,
-      server: targetServer,
-    };
-  }
-
-  return primaryRes.error ? primaryRes : legacyRes;
 }
 
 // Router for all API routes (mounted at /api, /api/index, and /)

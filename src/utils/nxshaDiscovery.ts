@@ -1,4 +1,4 @@
-import { detectSingleStreamLanguage, parseResolutionHeight } from './urlBuilder';
+import { detectSingleStreamLanguage, parseResolutionHeight } from './urlBuilder.js';
 
 export const ALLOWED_NXSHA_PROVIDERS = [
   'rive-citadel',
