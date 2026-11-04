@@ -336,39 +336,43 @@ export const PlayerLoadingScreen: React.FC<{
   activeServerStatus: ServerProbeStatus;
   metadataError: string | null;
   hintIndex: number;
-}> = ({ backdropPath, logoPath, title, activeServerStatus, metadataError, hintIndex }) => (
-  <div data-testid="zxc-loading-screen" className="absolute inset-0 z-20 overflow-hidden bg-black">
-    {backdropPath && (
-      <img
-        src={`https://image.tmdb.org/t/p/w1280${backdropPath}`}
-        alt={title || 'Backdrop'}
-        style={{
-          filter:
-            activeServerStatus === 'checking' || activeServerStatus === 'queue'
-              ? 'grayscale(1) contrast(1.3) brightness(0.75)'
-              : 'grayscale(0)',
-        }}
-        className="w-full h-full object-cover object-center transition-all duration-700"
-      />
-    )}
-    <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,rgba(0,0,0,0.45)_0%,rgba(0,0,0,0.85)_100%)]">
-      <div className="absolute inset-0 bg-gradient-to-r from-black/80 via-black/40 to-transparent" />
-      {logoPath ? (
+}> = ({ backdropPath, logoPath, title, activeServerStatus, metadataError, hintIndex }) => {
+  const resolvedBackdrop = backdropPath
+    ? backdropPath.startsWith('http') || backdropPath.startsWith('data:')
+      ? backdropPath
+      : `https://image.tmdb.org/t/p/w1280${backdropPath.startsWith('/') ? backdropPath : `/${backdropPath}`}`
+    : null;
+  const resolvedLogo = logoPath
+    ? logoPath.startsWith('http') || logoPath.startsWith('data:')
+      ? logoPath
+      : `https://image.tmdb.org/t/p/w780${logoPath.startsWith('/') ? logoPath : `/${logoPath}`}`
+    : null;
+
+  return (
+    <div data-testid="zxc-loading-screen" className="absolute inset-0 z-20 overflow-hidden bg-black">
+      {resolvedBackdrop && (
         <img
-          src={`https://image.tmdb.org/t/p/w780${logoPath}`}
-          alt={title || 'Logo'}
-          className="absolute bottom-12 left-12 max-h-14 max-w-xs lg:max-h-40 lg:max-w-md w-auto h-auto object-contain animate-pulse drop-shadow-[0_10px_25px_rgba(0,0,0,0.6)]"
+          src={resolvedBackdrop}
+          alt={title || 'Backdrop'}
+          style={{
+            filter:
+              activeServerStatus === 'checking' || activeServerStatus === 'queue'
+                ? 'grayscale(1) contrast(1.3) brightness(0.75)'
+                : 'grayscale(0)',
+          }}
+          className="w-full h-full object-cover object-center transition-all duration-700"
         />
-      ) : (
-        title && (
-          <div className="absolute bottom-12 left-12 max-w-md animate-pulse drop-shadow-[0_10px_25px_rgba(0,0,0,0.6)]">
-            <h2 className="text-2xl lg:text-5xl font-black tracking-tight text-white uppercase">
-              {title}
-            </h2>
-          </div>
-        )
       )}
-    </div>
+      <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,rgba(0,0,0,0.45)_0%,rgba(0,0,0,0.85)_100%)]">
+        <div className="absolute inset-0 bg-gradient-to-r from-black/80 via-black/40 to-transparent" />
+        {resolvedLogo && (
+          <img
+            src={resolvedLogo}
+            alt={title || 'Logo'}
+            className="absolute bottom-12 left-12 max-h-14 max-w-xs lg:max-h-40 lg:max-w-md w-auto h-auto object-contain animate-pulse"
+          />
+        )}
+      </div>
     {metadataError && (
       <div className="absolute inset-0 flex items-center justify-center z-30 bg-black/80 p-6">
         <div className="text-center max-w-md space-y-2">
@@ -383,7 +387,8 @@ export const PlayerLoadingScreen: React.FC<{
       {PLAYER_HINTS[hintIndex]}
     </div>
   </div>
-);
+  );
+};
 
 const SERVER_SUBTITLES: Record<string, string> = {
   orion: 'Multi Audio Support',

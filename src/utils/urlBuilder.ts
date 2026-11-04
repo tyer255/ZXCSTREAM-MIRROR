@@ -1,4 +1,4 @@
-export type PlayerMode = 'custom' | 'builtin' | 'nxsha';
+export type PlayerMode = 'custom' | 'builtin' | 'nxsha' | 'anime';
 export type MediaType = 'movie' | 'tv';
 
 export interface PlayerUrlOptions {
@@ -40,6 +40,13 @@ export type AppRoute =
       page: 'download';
       mediaType: MediaType;
       tmdbId: string;
+    }
+  | {
+      page: 'anime';
+      tmdbId: string;
+      season: number;
+      episode: number;
+      mediaType?: 'movie' | 'tv';
     };
 
 export interface RawOrionDub {
@@ -132,8 +139,31 @@ export function getDefaultOrigin(): string {
  */
 export function buildPlayerUrl(options: PlayerUrlOptions): string {
   const origin = (options.baseOrigin ?? getDefaultOrigin()).replace(/\/+$/, '');
-  const endpoint = options.playerMode === 'nxsha' ? 'nxsha' : options.playerMode === 'custom' ? 'player' : 'embed';
   const cleanId = options.tmdbId.trim();
+
+  if (options.playerMode === 'anime') {
+    let animePath = '';
+    if (options.mediaType === 'tv') {
+      const s = (options.season ?? '1').trim() || '1';
+      const ep = (options.episode ?? '1').trim() || '1';
+      animePath = `${origin}/anime/tv/${encodeURIComponent(cleanId || '85937')}/${encodeURIComponent(s)}/${encodeURIComponent(ep)}`;
+    } else {
+      animePath = `${origin}/anime/movie/${encodeURIComponent(cleanId || '128')}`;
+    }
+    if (options.queryParams) {
+      const search = new URLSearchParams();
+      for (const [k, v] of Object.entries(options.queryParams)) {
+        if (v !== undefined && v !== '') {
+          search.set(k, v);
+        }
+      }
+      const qs = search.toString();
+      if (qs) animePath += `?${qs}`;
+    }
+    return animePath;
+  }
+
+  const endpoint = options.playerMode === 'nxsha' ? 'nxsha' : options.playerMode === 'custom' ? 'player' : 'embed';
 
   let path = `${origin}/${endpoint}/${options.mediaType}`;
   if (cleanId) {
@@ -535,6 +565,69 @@ export function parseAppRoute(pathname: string): AppRoute {
     };
   }
 
+  // Explicit Anime Route: /anime/:tmdbId/:season/:ep or /anime/movie/:tmdbId or /anime/:tmdbId
+  if (first === 'anime' && second) {
+    if ((second === 'movie' || second === 'tv') && third) {
+      const season = Math.max(1, Number.parseInt(fourth ?? '1', 10) || 1);
+      const episode = Math.max(1, Number.parseInt(fifth ?? '1', 10) || 1);
+      return {
+        page: 'anime',
+        mediaType: second,
+        tmdbId: third,
+        season,
+        episode,
+      };
+    }
+    const season = Math.max(1, Number.parseInt(third ?? '1', 10) || 1);
+    const episode = Math.max(1, Number.parseInt(fourth ?? '1', 10) || 1);
+    return {
+      page: 'anime',
+      tmdbId: second,
+      season,
+      episode,
+      mediaType: !third ? 'movie' : undefined,
+    };
+  }
+
+  // Explicit Anime Embed Route: /embed/anime/movie/:id or /embed/anime/:id/:s/:e
+  if (first === 'embed' && second === 'anime' && third) {
+    if ((third === 'movie' || third === 'tv') && fourth) {
+      const season = Math.max(1, Number.parseInt(fifth ?? '1', 10) || 1);
+      return {
+        page: 'anime',
+        mediaType: third,
+        tmdbId: fourth,
+        season,
+        episode: Math.max(1, Number.parseInt(segments[5] ?? '1', 10) || 1),
+      };
+    }
+    const season = Math.max(1, Number.parseInt(fourth ?? '1', 10) || 1);
+    const episode = Math.max(1, Number.parseInt(fifth ?? '1', 10) || 1);
+    return {
+      page: 'anime',
+      tmdbId: third,
+      season,
+      episode,
+      mediaType: !fourth ? 'movie' : undefined,
+    };
+  }
+
+  // Dedicated Anime Player Endpoint (User Requirement 3): /embed/{tmdbid}/{season}/{ep}
+  // When second segment is a numeric TMDB ID (not 'movie' or 'tv'):
+  // e.g. /embed/94997/1/1, /embed/85937/1/1, /embed/128 (movie)
+  if (first === 'embed' && second && second !== 'movie' && second !== 'tv' && /^\d+$/.test(second)) {
+    const season = Math.max(1, Number.parseInt(third ?? '1', 10) || 1);
+    const episode = Math.max(1, Number.parseInt(fourth ?? '1', 10) || 1);
+    return {
+      page: 'anime',
+      tmdbId: second,
+      season,
+      episode,
+      mediaType: !third ? 'movie' : undefined,
+    };
+  }
+
+  // Standard Embed / Custom / NXSHA Player Routes: /embed/movie/:id or /embed/tv/:id/:s/:e
   if ((first === 'player' || first === 'embed' || first === 'nxsha') && (second === 'movie' || second === 'tv') && third) {
     const season = Math.max(1, Number.parseInt(fourth ?? '1', 10) || 1);
     const episode = Math.max(1, Number.parseInt(fifth ?? '1', 10) || 1);
@@ -1210,6 +1303,22 @@ export function detectSingleStreamLanguage(text?: string | null): { code: string
   return bestMatch ? { code: bestMatch.code, name: bestMatch.name } : null;
 }
 
+/**
+ * Extracts all language codes mentioned in a stream label (e.g. "[Hindi, English, Tamil, Telugu] - 720P").
+ */
+export function detectAllStreamLanguages(text?: string | null): Array<{ code: string; name: string }> {
+  if (!text) return [];
+  const matches: Array<{ code: string; name: string; index: number }> = [];
+  for (const pat of NXSHA_LANG_PATTERNS) {
+    const m = pat.regex.exec(text);
+    if (m) {
+      matches.push({ code: pat.code, name: pat.name, index: m.index });
+    }
+  }
+  matches.sort((a, b) => a.index - b.index);
+  return matches.map(({ code, name }) => ({ code, name }));
+}
+
 export function parseResolutionHeight(text?: string | null): number {
   if (!text) return 0;
   const m = text.match(/\b(2160|1440|1080|720|480|360)p?\b/i);
@@ -1220,7 +1329,7 @@ export function parseResolutionHeight(text?: string | null): number {
 
 /**
  * Strictly matches an NXSHA source for a given dub language code (and optional resolution height),
- * avoiding unsafe substring `.includes()` false positives.
+ * supporting both dedicated single-language streams and multi-audio MPEG-TS streams (`multiLangs`).
  */
 export function matchNxshaSourceForDub(
   sources?: any[] | null,
@@ -1230,6 +1339,7 @@ export function matchNxshaSourceForDub(
   if (!Array.isArray(sources) || sources.length === 0) return null;
   const cleanCode = (dubCode || '').trim().toLowerCase();
   const isOriginal = !cleanCode || cleanCode === 'orig' || cleanCode === 'original';
+  const normalizedTarget = cleanCode === 'esla' ? 'es' : cleanCode === 'ptbr' ? 'pt' : cleanCode;
 
   const getSourceLang = (s: any): string => {
     if (s?.lang && typeof s.lang === 'string') return s.lang.trim().toLowerCase();
@@ -1237,13 +1347,22 @@ export function matchNxshaSourceForDub(
     return detected?.code || '';
   };
 
+  const getSourceMultiLangs = (s: any): string[] => {
+    if (Array.isArray(s?.multiLangs)) {
+      return s.multiLangs.map((c: any) => String(c).trim().toLowerCase()).filter(Boolean);
+    }
+    const all = detectAllStreamLanguages(`${s?.label || ''} ${s?.quality || ''}`);
+    return all.length > 1 ? all.map((l) => l.code) : [];
+  };
+
   const candidates = sources.filter((s) => {
     if (!s?.url) return false;
     const sLang = getSourceLang(s);
+    const mLangs = getSourceMultiLangs(s);
     if (isOriginal) {
-      return sLang === 'en' || sLang === '';
+      return sLang === 'en' || sLang === '' || mLangs.includes('en') || mLangs.length > 1;
     }
-    return sLang === cleanCode;
+    return sLang === cleanCode || sLang === normalizedTarget || mLangs.includes(cleanCode) || mLangs.includes(normalizedTarget);
   });
 
   if (candidates.length === 0) return null;
@@ -1255,7 +1374,7 @@ export function matchNxshaSourceForDub(
     if (exactHeight) return exactHeight;
   }
 
-  // Sort candidates by resolution height descending (prefer 1080p/720p over 480p)
+  // Sort candidates: prefer exact single-lang match first when available at the same or higher resolution, then by height descending
   const sorted = [...candidates].sort((a, b) => {
     const hA = parseResolutionHeight(`${a.label || ''} ${a.quality || ''} ${a.url || ''}`) || 720;
     const hB = parseResolutionHeight(`${b.label || ''} ${b.quality || ''} ${b.url || ''}`) || 720;
@@ -1277,6 +1396,7 @@ export function extractNxshaQualitiesForDub(
   if (!Array.isArray(sources) || sources.length === 0) return [];
   const cleanCode = (dubCode || '').trim().toLowerCase();
   const isOriginal = !cleanCode || cleanCode === 'orig' || cleanCode === 'original';
+  const normalizedTarget = cleanCode === 'esla' ? 'es' : cleanCode === 'ptbr' ? 'pt' : cleanCode;
 
   const getSourceLang = (s: any): string => {
     if (s?.lang && typeof s.lang === 'string') return s.lang.trim().toLowerCase();
@@ -1284,11 +1404,20 @@ export function extractNxshaQualitiesForDub(
     return detected?.code || '';
   };
 
+  const getSourceMultiLangs = (s: any): string[] => {
+    if (Array.isArray(s?.multiLangs)) {
+      return s.multiLangs.map((c: any) => String(c).trim().toLowerCase()).filter(Boolean);
+    }
+    const all = detectAllStreamLanguages(`${s?.label || ''} ${s?.quality || ''}`);
+    return all.length > 1 ? all.map((l) => l.code) : [];
+  };
+
   let matching = sources.filter((s) => {
     if (!s?.url) return false;
     const sLang = getSourceLang(s);
-    if (isOriginal) return sLang === 'en' || sLang === '';
-    return sLang === cleanCode;
+    const mLangs = getSourceMultiLangs(s);
+    if (isOriginal) return sLang === 'en' || sLang === '' || mLangs.includes('en') || mLangs.length > 1;
+    return sLang === cleanCode || sLang === normalizedTarget || mLangs.includes(cleanCode) || mLangs.includes(normalizedTarget);
   });
 
   if (matching.length === 0) {
@@ -1304,6 +1433,355 @@ export function extractNxshaQualitiesForDub(
   return Array.from(heights)
     .sort((a, b) => b - a)
     .map((h) => ({ index: 1000 + h, height: h }));
+}
+
+// ============================================================================
+// MPEG-TS PMT Multi-Audio Track Inspector & In-Place Selector
+// ============================================================================
+
+const ISO639_TO_DUB_CODE: Record<string, { code: string; name: string }> = {
+  hin: { code: 'hi', name: 'Hindi' },
+  hi: { code: 'hi', name: 'Hindi' },
+  eng: { code: 'en', name: 'English' },
+  en: { code: 'en', name: 'English' },
+  tam: { code: 'ta', name: 'Tamil' },
+  ta: { code: 'ta', name: 'Tamil' },
+  tel: { code: 'te', name: 'Telugu' },
+  te: { code: 'te', name: 'Telugu' },
+  mal: { code: 'ml', name: 'Malayalam' },
+  ml: { code: 'ml', name: 'Malayalam' },
+  kan: { code: 'kn', name: 'Kannada' },
+  kn: { code: 'kn', name: 'Kannada' },
+  ben: { code: 'bn', name: 'Bengali' },
+  bn: { code: 'bn', name: 'Bengali' },
+  spa: { code: 'es', name: 'Spanish' },
+  es: { code: 'es', name: 'Spanish' },
+  fra: { code: 'fr', name: 'French' },
+  fre: { code: 'fr', name: 'French' },
+  fr: { code: 'fr', name: 'French' },
+  deu: { code: 'de', name: 'German' },
+  ger: { code: 'de', name: 'German' },
+  de: { code: 'de', name: 'German' },
+  jpn: { code: 'ja', name: 'Japanese' },
+  ja: { code: 'ja', name: 'Japanese' },
+  por: { code: 'pt', name: 'Portuguese' },
+  pt: { code: 'pt', name: 'Portuguese' },
+  ita: { code: 'it', name: 'Italian' },
+  it: { code: 'it', name: 'Italian' },
+  kor: { code: 'ko', name: 'Korean' },
+  ko: { code: 'ko', name: 'Korean' },
+  ara: { code: 'ar', name: 'Arabic' },
+  ar: { code: 'ar', name: 'Arabic' },
+  rus: { code: 'ru', name: 'Russian' },
+  ru: { code: 'ru', name: 'Russian' },
+  tur: { code: 'tr', name: 'Turkish' },
+  tr: { code: 'tr', name: 'Turkish' },
+  pol: { code: 'pl', name: 'Polish' },
+  pl: { code: 'pl', name: 'Polish' },
+  ind: { code: 'id', name: 'Indonesian' },
+  id: { code: 'id', name: 'Indonesian' },
+  tgl: { code: 'tl', name: 'Tagalog' },
+  fil: { code: 'tl', name: 'Tagalog' },
+  tl: { code: 'tl', name: 'Tagalog' },
+  vie: { code: 'vi', name: 'Vietnamese' },
+  vi: { code: 'vi', name: 'Vietnamese' },
+};
+
+export function iso639ToDubInfo(isoCode?: string | null): { code: string; name: string } | null {
+  if (!isoCode) return null;
+  const clean = isoCode.trim().toLowerCase();
+  if (!clean || clean === 'und' || clean === 'mul' || clean === 'mis' || clean === 'zxx') {
+    return null;
+  }
+  return ISO639_TO_DUB_CODE[clean] || null;
+}
+
+export function mpeg2Crc32(bytes: Uint8Array): number {
+  let crc = 0xffffffff;
+  for (let i = 0; i < bytes.length; i++) {
+    crc ^= bytes[i] << 24;
+    for (let b = 0; b < 8; b++) {
+      if (crc & 0x80000000) {
+        crc = ((crc << 1) ^ 0x04c11db7) >>> 0;
+      } else {
+        crc = (crc << 1) >>> 0;
+      }
+    }
+  }
+  return crc >>> 0;
+}
+
+export interface MpegTsAudioSelectionResult {
+  isMpegTs: boolean;
+  audioTrackCount: number;
+  discoveredLangs: string[];
+  discoveredDubs: RawOrionDub[];
+  selectedLang: string;
+  matchedTargetLang: boolean;
+  modified: boolean;
+}
+
+function isMpegTsAudioStreamType(streamType: number): boolean {
+  return (
+    streamType === 0x03 || // MPEG-1 Audio
+    streamType === 0x04 || // MPEG-2 Audio
+    streamType === 0x0f || // ISO/IEC 13818-7 ADTS AAC
+    streamType === 0x11 || // ISO/IEC 14496-3 LATM AAC
+    streamType === 0x81 || // AC-3
+    streamType === 0x87    // E-AC-3
+  );
+}
+
+/**
+ * Inspects MPEG-TS packets in a segment buffer for Program Map Tables (PMT), discovers all
+ * embedded audio elementary stream languages (ISO-639 descriptors), and when multiple audio
+ * tracks are muxed in the container (e.g. `eng`, `hin`, `tam`, `tel` on rive-citadel / castle),
+ * rewrites the PMT in-place so `hls.js` demuxes the exact requested dub language track.
+ */
+export function inspectAndSelectMpegTsAudioTrack(
+  data: Uint8Array,
+  targetDubCode?: string | null
+): MpegTsAudioSelectionResult {
+  const emptyResult: MpegTsAudioSelectionResult = {
+    isMpegTs: false,
+    audioTrackCount: 0,
+    discoveredLangs: [],
+    discoveredDubs: [],
+    selectedLang: '',
+    matchedTargetLang: false,
+    modified: false,
+  };
+
+  if (!data || data.length < 188) return emptyResult;
+
+  // Locate first 188-byte MPEG-TS sync byte (handles raw .ts and header-padded .jpg/.png segments)
+  let startOffset = -1;
+  const maxScan = Math.min(data.length - 188, 2048);
+  for (let i = 0; i <= maxScan; i++) {
+    if (
+      data[i] === 0x47 &&
+      (i + 188 >= data.length || data[i + 188] === 0x47) &&
+      (i + 376 >= data.length || data[i + 376] === 0x47)
+    ) {
+      startOffset = i;
+      break;
+    }
+  }
+  if (startOffset < 0) return emptyResult;
+
+  const rawTarget = (targetDubCode || '').trim().toLowerCase();
+  const isOriginalTarget = !rawTarget || rawTarget === 'orig' || rawTarget === 'original';
+  const normTarget = rawTarget === 'esla' ? 'es' : rawTarget === 'ptbr' ? 'pt' : rawTarget;
+
+  let pmtPid = 0x1000;
+  let audioTrackCount = 0;
+  const discoveredLangSet = new Set<string>();
+  const discoveredDubsMap = new Map<string, RawOrionDub>();
+  let selectedLang = '';
+  let matchedTargetLang = false;
+  let modified = false;
+
+  for (let pkt = startOffset; pkt + 188 <= data.length; pkt += 188) {
+    if (data[pkt] !== 0x47) continue;
+
+    const pusi = (data[pkt + 1] & 0x40) !== 0;
+    const pid = ((data[pkt + 1] & 0x1f) << 8) | data[pkt + 2];
+    const afc = (data[pkt + 3] >> 4) & 0x03;
+    if ((afc & 0x01) === 0) continue;
+
+    let payStart = pkt + 4;
+    if (afc & 0x02) {
+      const adaptLen = data[pkt + 4];
+      payStart += 1 + adaptLen;
+    }
+    if (payStart >= pkt + 188) continue;
+
+    // 1. Parse PAT (PID 0x0000) to discover PMT PID
+    if (pid === 0x0000 && pusi) {
+      const pointer = data[payStart];
+      const secStart = payStart + 1 + pointer;
+      if (secStart + 8 < pkt + 188 && data[secStart] === 0x00) {
+        const secLen = ((data[secStart + 1] & 0x0f) << 8) | data[secStart + 2];
+        const loopEnd = Math.min(pkt + 188, secStart + 3 + secLen - 4);
+        for (let pos = secStart + 8; pos + 4 <= loopEnd; pos += 4) {
+          const progNum = (data[pos] << 8) | data[pos + 1];
+          const progPid = ((data[pos + 2] & 0x1f) << 8) | data[pos + 3];
+          if (progNum !== 0 && progPid > 0) {
+            pmtPid = progPid;
+            break;
+          }
+        }
+      }
+      continue;
+    }
+
+    // 2. Parse PMT (PID === pmtPid, table_id === 0x02)
+    if (pid === pmtPid && pusi) {
+      const pointer = data[payStart];
+      const secStart = payStart + 1 + pointer;
+      if (secStart + 12 >= pkt + 188 || data[secStart] !== 0x02) continue;
+
+      const secLen = ((data[secStart + 1] & 0x0f) << 8) | data[secStart + 2];
+      const secEnd = secStart + 3 + secLen;
+      if (secEnd > pkt + 188) continue;
+
+      const pcrPid = ((data[secStart + 8] & 0x1f) << 8) | data[secStart + 9];
+      const progInfoLen = ((data[secStart + 10] & 0x0f) << 8) | data[secStart + 11];
+      const esPos = secStart + 12 + progInfoLen;
+      const esEnd = secEnd - 4;
+      if (esPos > esEnd) continue;
+
+      interface EsEntry {
+        streamType: number;
+        elemPid: number;
+        isoLang: string;
+        dubCode: string;
+        dubName: string;
+        isAudio: boolean;
+        rawBytes: Uint8Array;
+      }
+
+      const entries: EsEntry[] = [];
+      let pos = esPos;
+      while (pos + 5 <= esEnd) {
+        const streamType = data[pos];
+        const elemPid = ((data[pos + 1] & 0x1f) << 8) | data[pos + 2];
+        const esInfoLen = ((data[pos + 3] & 0x0f) << 8) | data[pos + 4];
+        const entryEnd = pos + 5 + esInfoLen;
+        if (entryEnd > esEnd) break;
+
+        let isoLang = '';
+        let dPos = pos + 5;
+        while (dPos + 2 <= entryEnd) {
+          const dTag = data[dPos];
+          const dLen = data[dPos + 1];
+          if (dTag === 0x0a && dLen >= 3 && dPos + 5 <= entryEnd) {
+            isoLang = String.fromCharCode(data[dPos + 2], data[dPos + 3], data[dPos + 4])
+              .replace(/\0/g, '')
+              .trim()
+              .toLowerCase();
+          }
+          dPos += 2 + dLen;
+        }
+
+        const dubInfo = iso639ToDubInfo(isoLang);
+        const isAudio = isMpegTsAudioStreamType(streamType);
+        entries.push({
+          streamType,
+          elemPid,
+          isoLang,
+          dubCode: dubInfo?.code || '',
+          dubName: dubInfo?.name || '',
+          isAudio,
+          rawBytes: data.slice(pos, entryEnd),
+        });
+        pos = entryEnd;
+      }
+
+      const audioEntries = entries.filter((e) => e.isAudio);
+      if (audioEntries.length > audioTrackCount) {
+        audioTrackCount = audioEntries.length;
+      }
+
+      for (let idx = 0; idx < audioEntries.length; idx++) {
+        const a = audioEntries[idx];
+        if (a.dubCode) {
+          discoveredLangSet.add(a.dubCode);
+          if (!discoveredDubsMap.has(a.dubCode)) {
+            discoveredDubsMap.set(a.dubCode, {
+              type: 0,
+              lang: a.dubCode,
+              name: `${a.dubName} dub`,
+              label: a.dubName,
+              original: false,
+            });
+          }
+        }
+      }
+
+      if (audioEntries.length === 1) {
+        const onlyAudio = audioEntries[0];
+        selectedLang = onlyAudio.dubCode;
+        if (isOriginalTarget) {
+          matchedTargetLang = !onlyAudio.dubCode || onlyAudio.dubCode === 'en';
+        } else {
+          matchedTargetLang =
+            onlyAudio.dubCode === normTarget ||
+            onlyAudio.dubCode === rawTarget ||
+            onlyAudio.isoLang === rawTarget;
+        }
+      } else if (audioEntries.length > 1) {
+        let chosenAudio = audioEntries[0];
+        if (isOriginalTarget) {
+          chosenAudio = audioEntries.find((a) => a.dubCode === 'en') || audioEntries[0];
+          matchedTargetLang = true;
+        } else {
+          const exactMatch = audioEntries.find(
+            (a) =>
+              a.dubCode === normTarget ||
+              a.dubCode === rawTarget ||
+              (rawTarget.length === 3 && a.isoLang === rawTarget)
+          );
+          if (exactMatch) {
+            chosenAudio = exactMatch;
+            matchedTargetLang = true;
+          } else {
+            chosenAudio = audioEntries.find((a) => a.dubCode === 'en') || audioEntries[0];
+            matchedTargetLang = false;
+          }
+        }
+
+        selectedLang = chosenAudio.dubCode;
+
+        // Keep all non-audio streams (video, etc.) and ONLY the chosen audio stream
+        const keptEntries = entries.filter((e) => !e.isAudio || e === chosenAudio);
+        const newEsLen = keptEntries.reduce((sum, e) => sum + e.rawBytes.length, 0);
+
+        // If PCR_PID pointed to a removed audio PID, point it to the first kept stream (video or chosenAudio)
+        const removedAudioPids = new Set(
+          audioEntries.filter((a) => a !== chosenAudio).map((a) => a.elemPid)
+        );
+        if (removedAudioPids.has(pcrPid) && keptEntries.length > 0) {
+          const newPcrPid = keptEntries[0].elemPid;
+          data[secStart + 8] = (data[secStart + 8] & 0xe0) | ((newPcrPid >> 8) & 0x1f);
+          data[secStart + 9] = newPcrPid & 0xff;
+        }
+
+        const newSecLen = 9 + progInfoLen + newEsLen + 4;
+        data[secStart + 1] = (data[secStart + 1] & 0xf0) | ((newSecLen >> 8) & 0x0f);
+        data[secStart + 2] = newSecLen & 0xff;
+
+        let writePos = esPos;
+        for (const k of keptEntries) {
+          data.set(k.rawBytes, writePos);
+          writePos += k.rawBytes.length;
+        }
+
+        const crc = mpeg2Crc32(data.subarray(secStart, writePos));
+        data[writePos] = (crc >>> 24) & 0xff;
+        data[writePos + 1] = (crc >>> 16) & 0xff;
+        data[writePos + 2] = (crc >>> 8) & 0xff;
+        data[writePos + 3] = crc & 0xff;
+        writePos += 4;
+
+        while (writePos < pkt + 188) {
+          data[writePos++] = 0xff;
+        }
+
+        modified = true;
+      }
+    }
+  }
+
+  return {
+    isMpegTs: true,
+    audioTrackCount,
+    discoveredLangs: Array.from(discoveredLangSet),
+    discoveredDubs: Array.from(discoveredDubsMap.values()),
+    selectedLang,
+    matchedTargetLang,
+    modified,
+  };
 }
 
 const SUBTITLE_LANG_NAMES: Record<string, string> = {
@@ -1363,6 +1841,7 @@ export function normalizeSubtitleTracks(
 
   return result;
 }
+
 
 
 

@@ -14,7 +14,9 @@ import {
   MediaType,
   RawOrionDub,
   NXSHA_SERVERS,
+  detectAllStreamLanguages,
   detectSingleStreamLanguage,
+  inspectAndSelectMpegTsAudioTrack,
   normalizeSubtitleTracks,
 } from './src/utils/urlBuilder.js';
 import {
@@ -25,6 +27,8 @@ import {
   validatePlayableNxshaSource,
   raceNxshaProviders,
 } from './src/utils/nxshaDiscovery.js';
+import { validateAnimeTmdbMetadata } from './src/anime/AnimeMetadata.js';
+import { resolveAnimeContent } from './src/anime/AnimeServerResolver.js';
 
 const app = express();
 
@@ -473,7 +477,14 @@ async function resolveForServer(
           const onlyHevc =
             videoCodecs.length > 0 &&
             videoCodecs.every((c) => c.includes('hev1') || c.includes('hvc1'));
-          verifiedLinks.push({ ...item, type: 'dash', onlyHevc, hasAudio });
+          const audioAdaptationMatch = mpdText.match(
+            /<AdaptationSet[^>]*contentType=["']audio["'][\s\S]*?<\/AdaptationSet>/i
+          );
+          const audioInitMatch = (audioAdaptationMatch ? audioAdaptationMatch[0] : mpdText).match(
+            /initialization=["']([^"'?]+)/i
+          );
+          const audioStreamKey = audioInitMatch ? audioInitMatch[1] : '';
+          verifiedLinks.push({ ...item, type: 'dash', onlyHevc, hasAudio, audioStreamKey });
         } catch {
           // Skip broken DASH manifest
         }
@@ -501,14 +512,16 @@ async function resolveForServer(
       }
     }
 
-    const verifiedAudioLink =
-      verifiedLinks.find((l) => l.hasAudio !== false)?.link || verifiedLinks[0]?.link || null;
+    const verifiedAudioItem =
+      verifiedLinks.find((l) => l.hasAudio !== false) || verifiedLinks[0] || null;
+    const verifiedAudioLink = verifiedAudioItem?.link || null;
 
     return {
       ...sourceData,
       success: verifiedLinks.length > 0,
       links: verifiedLinks,
       dubAudioUrl: verifiedAudioLink,
+      audioStreamKey: verifiedAudioItem?.audioStreamKey || '',
       server: targetServer,
     };
   };
@@ -1644,6 +1657,7 @@ export interface NxshaSource {
   headers?: Record<string, string>;
   lang?: string;
   langName?: string;
+  multiLangs?: string[];
 }
 
 const DUB_LANGUAGE_PATTERNS: { code: string; name: string; regex: RegExp }[] = [
@@ -1683,7 +1697,7 @@ const NXSHA_COMMON_HEADERS = {
 
 function extractHscowAssetKey(url: string): string | null {
   if (!url) return null;
-  const m = url.match(/(?:hscow\.com|fcxmb\.com)\/(?:my)?hls(?:_mps)?\/(?:(\d{4}\/\d+yue\/[A-Za-z0-9]+)|([A-Za-z0-9]{6,}))/i);
+  const m = url.match(/(?:hscow\.com|fcxmb\.com)\/(?:my)?hls(?:_mps)?\/(?:(\d{4}\/\d+yue\/(?:\d+\/)?[A-Za-z0-9]+)|([A-Za-z0-9]{6,}))/i);
   if (!m) return null;
   const raw = m[1] || m[2] || '';
   // Normalize language/resolution suffix from named folders like TheWildRobot_Hindi_720 -> thewildrobot
@@ -1882,9 +1896,24 @@ async function fetchNxshaSources(
       const rawUrl = src.url;
       const labelToDetect = `${src.label || ''} ${src.quality || ''}`;
       const lang = detectNxshaLanguage(labelToDetect);
+      const allLangs = detectAllStreamLanguages(labelToDetect);
       if (lang) {
         src.lang = lang.code;
         src.langName = lang.name;
+      }
+      if (allLangs.length > 1) {
+        src.multiLangs = allLangs.map((l) => l.code);
+        for (const l of allLangs) {
+          if (!dubsMap.has(l.code)) {
+            dubsMap.set(l.code, {
+              type: 0,
+              lang: l.code,
+              name: `${l.name} dub`,
+              label: l.name,
+              original: false,
+            });
+          }
+        }
       }
       if (needsNxshaProxy(rawUrl)) {
         src.org_uri = rawUrl;
@@ -1975,6 +2004,7 @@ apiRouter.options('/nxsha/proxy', (_req, res) => {
 // 0. GET /api/nxsha/proxy (Ad-free, SSRF-hardened CORS & Referer proxy for NXSHA HLS manifests, audio tracks, and segments)
 apiRouter.get('/nxsha/proxy', async (req, res) => {
   const targetUrl = String(req.query.url || '').trim();
+  const reqLang = String(req.query.lang || '').trim().toLowerCase();
   if (!targetUrl || !targetUrl.startsWith('http') || !isTrustedNxshaMediaUrl(targetUrl)) {
     return res.status(400).send('Invalid or untrusted target URL');
   }
@@ -2033,6 +2063,8 @@ apiRouter.get('/nxsha/proxy', async (req, res) => {
       contentType.includes('x-mpegurl') ||
       finalUrl.includes('.m3u8');
 
+    const langSuffix = reqLang ? `&lang=${encodeURIComponent(reqLang)}` : '';
+
     if (isM3u8) {
       const text = await upstream.text();
       if (text.trimStart().startsWith('#EXTM3U')) {
@@ -2052,11 +2084,11 @@ apiRouter.get('/nxsha/proxy', async (req, res) => {
             if (trimmed.startsWith('#')) {
               return line.replace(/URI="([^"]+)"/g, (_m, uriVal) => {
                 const absUri = resolveAgainstBase(uriVal);
-                return `URI="/api/nxsha/proxy?url=${encodeURIComponent(absUri)}"`;
+                return `URI="/api/nxsha/proxy?url=${encodeURIComponent(absUri)}${langSuffix}"`;
               });
             }
             const absUrl = resolveAgainstBase(trimmed);
-            return `/api/nxsha/proxy?url=${encodeURIComponent(absUrl)}`;
+            return `/api/nxsha/proxy?url=${encodeURIComponent(absUrl)}${langSuffix}`;
           })
           .join('\n');
 
@@ -2069,10 +2101,12 @@ apiRouter.get('/nxsha/proxy', async (req, res) => {
     if (contentType) res.setHeader('Content-Type', contentType);
     const contentRange = upstream.headers.get('content-range');
     if (contentRange) res.setHeader('Content-Range', contentRange);
-    const contentLength = upstream.headers.get('content-length');
-    if (contentLength) res.setHeader('Content-Length', contentLength);
 
     const buffer = Buffer.from(await upstream.arrayBuffer());
+    if (reqLang && buffer.length >= 188) {
+      inspectAndSelectMpegTsAudioTrack(buffer, reqLang);
+    }
+    res.setHeader('Content-Length', String(buffer.length));
     return res.send(buffer);
   } catch (err: any) {
     clearTimeout(timeout);
@@ -2326,31 +2360,33 @@ const handleNxshaResolve = async (req: express.Request, res: express.Response) =
       if (provider !== 'castle') {
         return { valid: sources.length > 0, sources };
       }
-      // For castle, if exact ID provider rive-citadel also has sources, prioritize matching asset keys
+      // For castle (which uses fuzzy title search on the same hscow.com/fcxmb.com catalog as rive-citadel),
+      // verify hscow.com/fcxmb.com asset keys against rive-citadel's exact ID lookup so fuzzy mismatches are rejected
       const citadelRes = await getCitadelSources().catch(() => ({ sources: [] as NxshaSource[] }));
-      if (citadelRes.sources.length > 0) {
-        // If rive-citadel is also racing in this candidate pool and has sources, yield one tick so rive-citadel wins the simultaneous tie
-        if (candidateProviders.includes('rive-citadel') && preferredServer !== 'castle') {
-          await new Promise((r) => setTimeout(r, 5));
-        }
-        const verifiedAssetKeys = new Set(
-          citadelRes.sources.map((s) => extractHscowAssetKey(s.url)).filter((k): k is string => Boolean(k))
-        );
-        if (verifiedAssetKeys.size > 0) {
-          const filtered = sources.filter((s) => {
-            const key = extractHscowAssetKey(s.url);
-            return key ? verifiedAssetKeys.has(key) : true;
-          });
-          if (filtered.length > 0) {
-            return { valid: true, sources: filtered };
-          }
-        }
+      if (
+        citadelRes.sources.length > 0 &&
+        candidateProviders.includes('rive-citadel') &&
+        preferredServer !== 'castle'
+      ) {
+        await new Promise((r) => setTimeout(r, 5));
       }
-      return { valid: sources.length > 0, sources };
+      const verifiedAssetKeys = new Set(
+        citadelRes.sources.map((s) => extractHscowAssetKey(s.url)).filter((k): k is string => Boolean(k))
+      );
+      const filtered = sources.filter((s) => {
+        const key = extractHscowAssetKey(s.url);
+        if (!key) return true;
+        return verifiedAssetKeys.has(key);
+      });
+      return { valid: filtered.length > 0, sources: filtered };
     },
     isPreferredMatch: (_provider, sources) => {
       if (!requestedDub || requestedDub === 'orig') return true;
-      return sources.some((s) => s.lang === requestedDub);
+      return sources.some(
+        (s) =>
+          s.lang === requestedDub ||
+          (Array.isArray(s.multiLangs) && s.multiLangs.includes(requestedDub))
+      );
     },
   });
 
@@ -2558,6 +2594,98 @@ const handleNxshaResolve = async (req: express.Request, res: express.Response) =
 
 apiRouter.post('/nxsha/resolve', handleNxshaResolve);
 apiRouter.get('/nxsha/resolve', handleNxshaResolve);
+
+// Anime TMDB Metadata Validation Route
+apiRouter.get('/anime/validate/:tmdbId', async (req, res) => {
+  const { tmdbId } = req.params;
+  const cleanId = String(tmdbId || '').trim();
+  const explicitType = req.query.type === 'movie' ? 'movie' : req.query.type === 'tv' ? 'tv' : undefined;
+
+  try {
+    let details = await fetchTmdbDetailsWithFallback(explicitType || 'tv', cleanId);
+    if (!details || (!details.title && !details.name)) {
+      const fallbackMeta = getMediaByTmdbId(explicitType || 'tv', cleanId);
+      if (fallbackMeta) {
+        details = {
+          id: Number(cleanId),
+          title: fallbackMeta.title,
+          name: fallbackMeta.title,
+          original_language: 'ja',
+          genres: fallbackMeta.genres.map((g, i) => ({ id: i === 0 ? 16 : i + 1, name: g })),
+          release_date: `${fallbackMeta.releaseYear}-01-01`,
+          overview: fallbackMeta.overview,
+        };
+      }
+    }
+
+    let validation = validateAnimeTmdbMetadata(details, explicitType);
+    if (!validation.isValidAnime) {
+      const altType: 'movie' | 'tv' = (explicitType || 'tv') === 'movie' ? 'tv' : 'movie';
+      const altDetails = await fetchTmdbDetailsWithFallback(altType, cleanId);
+      if (altDetails && (altDetails.title || altDetails.name)) {
+        const altValidation = validateAnimeTmdbMetadata(altDetails, altType);
+        if (altValidation.isValidAnime) {
+          validation = altValidation;
+        }
+      }
+    }
+
+    if (!validation.isValidAnime) {
+      return res.status(400).json({
+        isValidAnime: false,
+        isAnime: false,
+        error: validation.rejectionReason,
+        rejectionReason: validation.rejectionReason,
+        classifiedCategory: validation.classifiedCategory,
+        title: validation.title,
+        genres: validation.genres,
+        originalLanguage: validation.originalLanguage,
+      });
+    }
+
+    return res.json(validation);
+  } catch (err: any) {
+    return res.status(500).json({
+      isValidAnime: false,
+      isAnime: false,
+      error: err.message || 'Validation service error',
+    });
+  }
+});
+
+// Anime Stream Resolver Route
+const handleAnimeResolve = async (req: express.Request, res: express.Response) => {
+  const params = {
+    ...req.query,
+    ...req.body,
+  };
+
+  try {
+    const result = await resolveAnimeContent(params, {
+      fetchTmdbDetailsWithFallback,
+      resolveForServer,
+    });
+
+    if (!result.success) {
+      const isValidationRejection =
+        result.error?.includes('Anime Core') ||
+        result.error?.includes('dedicated to Anime') ||
+        result.error?.includes('Western Animation') ||
+        result.error?.includes('Live-Action');
+      return res.status(isValidationRejection ? 400 : 404).json(result);
+    }
+
+    return res.json(result);
+  } catch (err: any) {
+    return res.status(500).json({
+      success: false,
+      error: err.message || 'Error resolving anime stream sources',
+    });
+  }
+};
+
+apiRouter.post('/anime/resolve', handleAnimeResolve);
+apiRouter.get('/anime/resolve', handleAnimeResolve);
 
 // Mount on /api, /api/index, and also root / so any routing setup (Vercel rewrite, direct path, etc.) succeeds!
 app.use('/api', apiRouter);

@@ -413,23 +413,6 @@ export const PlayerControlsOverlay: React.FC<PlayerControlsOverlayProps> = ({
       onClick={(e) => e.stopPropagation()}
       className="space-y-3 pointer-events-auto bg-gradient-to-t from-black/90 via-black/50 to-transparent -mx-4 -mb-4 p-4 lg:-mx-6 lg:-mb-6 lg:p-6 pt-12"
     >
-      {(playerMode === 'custom' || playerMode === 'nxsha') && metadata && (
-        <div className="hidden md:block space-y-0.5 mb-2 max-w-[55%] pointer-events-none">
-          <div className="flex items-center gap-2">
-            <div style={{ backgroundColor: normalizedColor }} className="w-1 h-4 rounded-full" />
-            <span className="text-xs text-zinc-300 font-medium">You&apos;re Watching</span>
-          </div>
-          <div className="text-sm lg:text-base font-bold text-white leading-snug truncate">
-            {metadata.title}{' '}
-            {activeMediaType === 'tv' ? `S${currentSeason}E${currentEpisode}` : ''}{' '}
-            {metadata.year ? `(${metadata.year})` : ''}
-          </div>
-          <div className="text-[11px] lg:text-xs text-zinc-300">
-            {activeMediaType === 'tv' ? 'TV Show' : 'Movie'} / {genreLabel} / {statusLabel}
-          </div>
-        </div>
-      )}
-
       <div
         ref={seekBarRef}
         onMouseMove={onSeekBarMouseMove}

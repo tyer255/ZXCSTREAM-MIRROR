@@ -1075,12 +1075,289 @@ function detectSingleStreamLanguage(text) {
   }
   return bestMatch ? { code: bestMatch.code, name: bestMatch.name } : null;
 }
+function detectAllStreamLanguages(text) {
+  if (!text) return [];
+  const matches = [];
+  for (const pat of NXSHA_LANG_PATTERNS) {
+    const m = pat.regex.exec(text);
+    if (m) {
+      matches.push({ code: pat.code, name: pat.name, index: m.index });
+    }
+  }
+  matches.sort((a, b) => a.index - b.index);
+  return matches.map(({ code, name }) => ({ code, name }));
+}
 function parseResolutionHeight(text) {
   if (!text) return 0;
   const m = text.match(/\b(2160|1440|1080|720|480|360)p?\b/i);
   if (m) return Number.parseInt(m[1], 10);
   if (/\b4k\b/i.test(text)) return 2160;
   return 0;
+}
+var ISO639_TO_DUB_CODE = {
+  hin: { code: "hi", name: "Hindi" },
+  hi: { code: "hi", name: "Hindi" },
+  eng: { code: "en", name: "English" },
+  en: { code: "en", name: "English" },
+  tam: { code: "ta", name: "Tamil" },
+  ta: { code: "ta", name: "Tamil" },
+  tel: { code: "te", name: "Telugu" },
+  te: { code: "te", name: "Telugu" },
+  mal: { code: "ml", name: "Malayalam" },
+  ml: { code: "ml", name: "Malayalam" },
+  kan: { code: "kn", name: "Kannada" },
+  kn: { code: "kn", name: "Kannada" },
+  ben: { code: "bn", name: "Bengali" },
+  bn: { code: "bn", name: "Bengali" },
+  spa: { code: "es", name: "Spanish" },
+  es: { code: "es", name: "Spanish" },
+  fra: { code: "fr", name: "French" },
+  fre: { code: "fr", name: "French" },
+  fr: { code: "fr", name: "French" },
+  deu: { code: "de", name: "German" },
+  ger: { code: "de", name: "German" },
+  de: { code: "de", name: "German" },
+  jpn: { code: "ja", name: "Japanese" },
+  ja: { code: "ja", name: "Japanese" },
+  por: { code: "pt", name: "Portuguese" },
+  pt: { code: "pt", name: "Portuguese" },
+  ita: { code: "it", name: "Italian" },
+  it: { code: "it", name: "Italian" },
+  kor: { code: "ko", name: "Korean" },
+  ko: { code: "ko", name: "Korean" },
+  ara: { code: "ar", name: "Arabic" },
+  ar: { code: "ar", name: "Arabic" },
+  rus: { code: "ru", name: "Russian" },
+  ru: { code: "ru", name: "Russian" },
+  tur: { code: "tr", name: "Turkish" },
+  tr: { code: "tr", name: "Turkish" },
+  pol: { code: "pl", name: "Polish" },
+  pl: { code: "pl", name: "Polish" },
+  ind: { code: "id", name: "Indonesian" },
+  id: { code: "id", name: "Indonesian" },
+  tgl: { code: "tl", name: "Tagalog" },
+  fil: { code: "tl", name: "Tagalog" },
+  tl: { code: "tl", name: "Tagalog" },
+  vie: { code: "vi", name: "Vietnamese" },
+  vi: { code: "vi", name: "Vietnamese" }
+};
+function iso639ToDubInfo(isoCode) {
+  if (!isoCode) return null;
+  const clean = isoCode.trim().toLowerCase();
+  if (!clean || clean === "und" || clean === "mul" || clean === "mis" || clean === "zxx") {
+    return null;
+  }
+  return ISO639_TO_DUB_CODE[clean] || null;
+}
+function mpeg2Crc32(bytes) {
+  let crc = 4294967295;
+  for (let i = 0; i < bytes.length; i++) {
+    crc ^= bytes[i] << 24;
+    for (let b = 0; b < 8; b++) {
+      if (crc & 2147483648) {
+        crc = (crc << 1 ^ 79764919) >>> 0;
+      } else {
+        crc = crc << 1 >>> 0;
+      }
+    }
+  }
+  return crc >>> 0;
+}
+function isMpegTsAudioStreamType(streamType) {
+  return streamType === 3 || // MPEG-1 Audio
+  streamType === 4 || // MPEG-2 Audio
+  streamType === 15 || // ISO/IEC 13818-7 ADTS AAC
+  streamType === 17 || // ISO/IEC 14496-3 LATM AAC
+  streamType === 129 || // AC-3
+  streamType === 135;
+}
+function inspectAndSelectMpegTsAudioTrack(data, targetDubCode) {
+  const emptyResult = {
+    isMpegTs: false,
+    audioTrackCount: 0,
+    discoveredLangs: [],
+    discoveredDubs: [],
+    selectedLang: "",
+    matchedTargetLang: false,
+    modified: false
+  };
+  if (!data || data.length < 188) return emptyResult;
+  let startOffset = -1;
+  const maxScan = Math.min(data.length - 188, 2048);
+  for (let i = 0; i <= maxScan; i++) {
+    if (data[i] === 71 && (i + 188 >= data.length || data[i + 188] === 71) && (i + 376 >= data.length || data[i + 376] === 71)) {
+      startOffset = i;
+      break;
+    }
+  }
+  if (startOffset < 0) return emptyResult;
+  const rawTarget = (targetDubCode || "").trim().toLowerCase();
+  const isOriginalTarget = !rawTarget || rawTarget === "orig" || rawTarget === "original";
+  const normTarget = rawTarget === "esla" ? "es" : rawTarget === "ptbr" ? "pt" : rawTarget;
+  let pmtPid = 4096;
+  let audioTrackCount = 0;
+  const discoveredLangSet = /* @__PURE__ */ new Set();
+  const discoveredDubsMap = /* @__PURE__ */ new Map();
+  let selectedLang = "";
+  let matchedTargetLang = false;
+  let modified = false;
+  for (let pkt = startOffset; pkt + 188 <= data.length; pkt += 188) {
+    if (data[pkt] !== 71) continue;
+    const pusi = (data[pkt + 1] & 64) !== 0;
+    const pid = (data[pkt + 1] & 31) << 8 | data[pkt + 2];
+    const afc = data[pkt + 3] >> 4 & 3;
+    if ((afc & 1) === 0) continue;
+    let payStart = pkt + 4;
+    if (afc & 2) {
+      const adaptLen = data[pkt + 4];
+      payStart += 1 + adaptLen;
+    }
+    if (payStart >= pkt + 188) continue;
+    if (pid === 0 && pusi) {
+      const pointer = data[payStart];
+      const secStart = payStart + 1 + pointer;
+      if (secStart + 8 < pkt + 188 && data[secStart] === 0) {
+        const secLen = (data[secStart + 1] & 15) << 8 | data[secStart + 2];
+        const loopEnd = Math.min(pkt + 188, secStart + 3 + secLen - 4);
+        for (let pos = secStart + 8; pos + 4 <= loopEnd; pos += 4) {
+          const progNum = data[pos] << 8 | data[pos + 1];
+          const progPid = (data[pos + 2] & 31) << 8 | data[pos + 3];
+          if (progNum !== 0 && progPid > 0) {
+            pmtPid = progPid;
+            break;
+          }
+        }
+      }
+      continue;
+    }
+    if (pid === pmtPid && pusi) {
+      const pointer = data[payStart];
+      const secStart = payStart + 1 + pointer;
+      if (secStart + 12 >= pkt + 188 || data[secStart] !== 2) continue;
+      const secLen = (data[secStart + 1] & 15) << 8 | data[secStart + 2];
+      const secEnd = secStart + 3 + secLen;
+      if (secEnd > pkt + 188) continue;
+      const pcrPid = (data[secStart + 8] & 31) << 8 | data[secStart + 9];
+      const progInfoLen = (data[secStart + 10] & 15) << 8 | data[secStart + 11];
+      const esPos = secStart + 12 + progInfoLen;
+      const esEnd = secEnd - 4;
+      if (esPos > esEnd) continue;
+      const entries = [];
+      let pos = esPos;
+      while (pos + 5 <= esEnd) {
+        const streamType = data[pos];
+        const elemPid = (data[pos + 1] & 31) << 8 | data[pos + 2];
+        const esInfoLen = (data[pos + 3] & 15) << 8 | data[pos + 4];
+        const entryEnd = pos + 5 + esInfoLen;
+        if (entryEnd > esEnd) break;
+        let isoLang = "";
+        let dPos = pos + 5;
+        while (dPos + 2 <= entryEnd) {
+          const dTag = data[dPos];
+          const dLen = data[dPos + 1];
+          if (dTag === 10 && dLen >= 3 && dPos + 5 <= entryEnd) {
+            isoLang = String.fromCharCode(data[dPos + 2], data[dPos + 3], data[dPos + 4]).replace(/\0/g, "").trim().toLowerCase();
+          }
+          dPos += 2 + dLen;
+        }
+        const dubInfo = iso639ToDubInfo(isoLang);
+        const isAudio = isMpegTsAudioStreamType(streamType);
+        entries.push({
+          streamType,
+          elemPid,
+          isoLang,
+          dubCode: dubInfo?.code || "",
+          dubName: dubInfo?.name || "",
+          isAudio,
+          rawBytes: data.slice(pos, entryEnd)
+        });
+        pos = entryEnd;
+      }
+      const audioEntries = entries.filter((e) => e.isAudio);
+      if (audioEntries.length > audioTrackCount) {
+        audioTrackCount = audioEntries.length;
+      }
+      for (let idx = 0; idx < audioEntries.length; idx++) {
+        const a = audioEntries[idx];
+        if (a.dubCode) {
+          discoveredLangSet.add(a.dubCode);
+          if (!discoveredDubsMap.has(a.dubCode)) {
+            discoveredDubsMap.set(a.dubCode, {
+              type: 0,
+              lang: a.dubCode,
+              name: `${a.dubName} dub`,
+              label: a.dubName,
+              original: false
+            });
+          }
+        }
+      }
+      if (audioEntries.length === 1) {
+        const onlyAudio = audioEntries[0];
+        selectedLang = onlyAudio.dubCode;
+        if (isOriginalTarget) {
+          matchedTargetLang = !onlyAudio.dubCode || onlyAudio.dubCode === "en";
+        } else {
+          matchedTargetLang = onlyAudio.dubCode === normTarget || onlyAudio.dubCode === rawTarget || onlyAudio.isoLang === rawTarget;
+        }
+      } else if (audioEntries.length > 1) {
+        let chosenAudio = audioEntries[0];
+        if (isOriginalTarget) {
+          chosenAudio = audioEntries.find((a) => a.dubCode === "en") || audioEntries[0];
+          matchedTargetLang = true;
+        } else {
+          const exactMatch = audioEntries.find(
+            (a) => a.dubCode === normTarget || a.dubCode === rawTarget || rawTarget.length === 3 && a.isoLang === rawTarget
+          );
+          if (exactMatch) {
+            chosenAudio = exactMatch;
+            matchedTargetLang = true;
+          } else {
+            chosenAudio = audioEntries.find((a) => a.dubCode === "en") || audioEntries[0];
+            matchedTargetLang = false;
+          }
+        }
+        selectedLang = chosenAudio.dubCode;
+        const keptEntries = entries.filter((e) => !e.isAudio || e === chosenAudio);
+        const newEsLen = keptEntries.reduce((sum, e) => sum + e.rawBytes.length, 0);
+        const removedAudioPids = new Set(
+          audioEntries.filter((a) => a !== chosenAudio).map((a) => a.elemPid)
+        );
+        if (removedAudioPids.has(pcrPid) && keptEntries.length > 0) {
+          const newPcrPid = keptEntries[0].elemPid;
+          data[secStart + 8] = data[secStart + 8] & 224 | newPcrPid >> 8 & 31;
+          data[secStart + 9] = newPcrPid & 255;
+        }
+        const newSecLen = 9 + progInfoLen + newEsLen + 4;
+        data[secStart + 1] = data[secStart + 1] & 240 | newSecLen >> 8 & 15;
+        data[secStart + 2] = newSecLen & 255;
+        let writePos = esPos;
+        for (const k of keptEntries) {
+          data.set(k.rawBytes, writePos);
+          writePos += k.rawBytes.length;
+        }
+        const crc = mpeg2Crc32(data.subarray(secStart, writePos));
+        data[writePos] = crc >>> 24 & 255;
+        data[writePos + 1] = crc >>> 16 & 255;
+        data[writePos + 2] = crc >>> 8 & 255;
+        data[writePos + 3] = crc & 255;
+        writePos += 4;
+        while (writePos < pkt + 188) {
+          data[writePos++] = 255;
+        }
+        modified = true;
+      }
+    }
+  }
+  return {
+    isMpegTs: true,
+    audioTrackCount,
+    discoveredLangs: Array.from(discoveredLangSet),
+    discoveredDubs: Array.from(discoveredDubsMap.values()),
+    selectedLang,
+    matchedTargetLang,
+    modified
+  };
 }
 var SUBTITLE_LANG_NAMES = {
   en: "English",
@@ -1284,12 +1561,14 @@ function validatePlayableNxshaSource(source) {
   }
   const labelToDetect = `${source.label || ""} ${source.quality || ""}`;
   const detectedLang = detectSingleStreamLanguage(labelToDetect);
+  const allLangs = detectAllStreamLanguages(labelToDetect);
   const normalizedSource = {
     ...source,
     url: rawUrl,
     type: normalizedType === "m3u8" ? "hls" : normalizedType === "video/mp4" ? "mp4" : normalizedType,
     lang: source.lang || detectedLang?.code || void 0,
-    langName: source.langName || detectedLang?.name || void 0
+    langName: source.langName || detectedLang?.name || void 0,
+    multiLangs: Array.isArray(source.multiLangs) && source.multiLangs.length > 0 ? source.multiLangs : allLangs.length > 1 ? allLangs.map((l) => l.code) : void 0
   };
   return { valid: true, normalizedSource };
 }
@@ -1694,6 +1973,575 @@ async function raceNxshaProviders(options) {
   });
 }
 
+// src/anime/AnimeMetadata.ts
+var ANIMATION_GENRE_ID = 16;
+var ANIMATION_GENRE_NAME = "animation";
+var ANIME_LANGUAGE_CODES = /* @__PURE__ */ new Set(["ja", "jpn"]);
+var ANIME_COUNTRY_CODES = /* @__PURE__ */ new Set(["JP", "JPN", "JAPAN"]);
+var ANIME_KEYWORDS = [
+  "anime",
+  "manga",
+  "based on manga",
+  "light novel",
+  "based on light novel",
+  "shounen",
+  "seinen",
+  "shoujo",
+  "josei",
+  "isekai",
+  "mecha",
+  "otaku"
+];
+function validateAnimeTmdbMetadata(raw, explicitType) {
+  if (!raw || typeof raw !== "object") {
+    return {
+      isValidAnime: false,
+      isAnime: false,
+      mediaType: explicitType || "tv",
+      tmdbId: 0,
+      title: "Unknown Title",
+      genres: [],
+      genreIds: [],
+      originalLanguage: "",
+      originCountry: [],
+      rejectionReason: "Invalid or missing TMDB metadata.",
+      classifiedCategory: "Hollywood/Live-Action Movie"
+    };
+  }
+  const tmdbId = Number(raw.id || raw.tmdbId || 0);
+  const title = String(raw.name || raw.title || raw.original_name || raw.original_title || `TMDB #${tmdbId}`).trim();
+  const originCountry = Array.isArray(raw.origin_country) ? raw.origin_country.map((c) => String(c).trim().toUpperCase()) : Array.isArray(raw.production_countries) ? raw.production_countries.map((c) => String(c?.iso_3166_1 || c?.name || "").trim().toUpperCase()) : Array.isArray(raw.country) ? raw.country.map((c) => String(c).trim().toUpperCase()) : typeof raw.country === "string" && raw.country.trim() ? raw.country.split(",").map((c) => c.trim().toUpperCase()).filter(Boolean) : [];
+  const isJapanOrigin = originCountry.some((c) => ANIME_COUNTRY_CODES.has(c));
+  const rawOriginalLang = String(raw.original_language || "").trim().toLowerCase();
+  const originalLanguage = rawOriginalLang || (isJapanOrigin ? "ja" : "");
+  const rawGenres = Array.isArray(raw.genres) ? raw.genres : [];
+  const genres = rawGenres.map((g) => typeof g === "string" ? g : String(g?.name || "")).filter(Boolean);
+  const genreIds = rawGenres.map((g) => typeof g?.id === "number" ? g.id : 0).filter((id) => id > 0);
+  const resolvedMediaType = explicitType === "tv" || explicitType === "movie" ? explicitType : raw.resolvedMediaType === "movie" || raw.media_type === "movie" || Boolean(raw.title) && !raw.name && !raw.seasons ? "movie" : "tv";
+  const hasAnimationGenre = genreIds.includes(ANIMATION_GENRE_ID) || genres.some((g) => g.toLowerCase() === ANIMATION_GENRE_NAME);
+  const isJapaneseLanguage = ANIME_LANGUAGE_CODES.has(originalLanguage);
+  const rawKeywords = Array.isArray(raw.keywords?.keywords) ? raw.keywords.keywords : Array.isArray(raw.keywords?.results) ? raw.keywords.results : Array.isArray(raw.keywords) ? raw.keywords : [];
+  const keywordsList = rawKeywords.map((k) => String(k?.name || k || "").toLowerCase());
+  const hasAnimeKeyword = keywordsList.some(
+    (k) => ANIME_KEYWORDS.some((target) => k.includes(target))
+  );
+  const releaseDate = String(raw.release_date || raw.first_air_date || "");
+  const year = releaseDate ? releaseDate.slice(0, 4) : "";
+  const posterPath = raw.poster_path ? raw.poster_path.startsWith("http") ? raw.poster_path : `https://image.tmdb.org/t/p/w500${raw.poster_path.startsWith("/") ? raw.poster_path : `/${raw.poster_path}`}` : null;
+  const backdropPaths = Array.isArray(raw.backdrop_paths) ? raw.backdrop_paths.filter((p) => typeof p === "string" && p.trim().length > 0).map((p) => p.startsWith("http") ? p : `https://image.tmdb.org/t/p/w1280${p.startsWith("/") ? p : `/${p}`}`) : typeof raw.backdrop_path === "string" && raw.backdrop_path.trim() ? [
+    raw.backdrop_path.startsWith("http") ? raw.backdrop_path : `https://image.tmdb.org/t/p/w1280${raw.backdrop_path.startsWith("/") ? raw.backdrop_path : `/${raw.backdrop_path}`}`
+  ] : [];
+  const backdropPath = backdropPaths[0] || null;
+  const logoPaths = Array.isArray(raw.logo_paths) ? raw.logo_paths.filter((p) => typeof p === "string" && p.trim().length > 0).map((p) => p.startsWith("http") ? p : `https://image.tmdb.org/t/p/w780${p.startsWith("/") ? p : `/${p}`}`) : typeof raw.logo_path === "string" && raw.logo_path.trim() ? [
+    raw.logo_path.startsWith("http") ? raw.logo_path : `https://image.tmdb.org/t/p/w780${raw.logo_path.startsWith("/") ? raw.logo_path : `/${raw.logo_path}`}`
+  ] : [];
+  const logoPath = logoPaths[0] || null;
+  const seasonsList = Array.isArray(raw.seasons) ? raw.seasons.filter((s) => typeof s.season_number === "number" && s.season_number > 0).map((s) => ({
+    seasonNumber: s.season_number,
+    name: s.name || `Season ${s.season_number}`,
+    episodeCount: Number(s.episode_count || 0),
+    airDate: s.air_date || null,
+    posterPath: s.poster_path ? `https://image.tmdb.org/t/p/w300${s.poster_path}` : null
+  })) : [];
+  const isKnownAnimeId = tmdbId === 128 || // Princess Mononoke
+  tmdbId === 372058 || // Your Name
+  tmdbId === 85937 || // Demon Slayer
+  tmdbId === 1429 || // Attack on Titan
+  tmdbId === 37854 || // One Piece
+  tmdbId === 30984 || // Bleach
+  tmdbId === 95479 || // Jujutsu Kaisen
+  tmdbId === 88040 || // Chainsaw Man
+  tmdbId === 60735 || // Seven Deadly Sins
+  tmdbId === 92685 || // Vinland Saga
+  tmdbId === 493529 || // Dungeon Meshi
+  tmdbId === 129 || // Spirited Away
+  tmdbId === 4935 || // Howl's Moving Castle
+  tmdbId === 317442;
+  if (!hasAnimationGenre && !isKnownAnimeId) {
+    const category = resolvedMediaType === "tv" ? "Live-Action TV" : "Hollywood/Live-Action Movie";
+    return {
+      isValidAnime: false,
+      isAnime: false,
+      mediaType: resolvedMediaType,
+      tmdbId,
+      title,
+      genres,
+      genreIds,
+      originalLanguage,
+      originCountry,
+      overview: raw.overview,
+      posterPath,
+      backdropPath,
+      backdropPaths,
+      logoPath,
+      logoPaths,
+      rejectionReason: `"${title}" is a ${category}. Anime Core is exclusively dedicated to Anime content.`,
+      classifiedCategory: category
+    };
+  }
+  if (hasAnimationGenre && !isJapaneseLanguage && !isJapanOrigin && !hasAnimeKeyword && !isKnownAnimeId) {
+    return {
+      isValidAnime: false,
+      isAnime: false,
+      mediaType: resolvedMediaType,
+      tmdbId,
+      title,
+      genres,
+      genreIds,
+      originalLanguage,
+      originCountry,
+      overview: raw.overview,
+      posterPath,
+      backdropPath,
+      backdropPaths,
+      logoPath,
+      logoPaths,
+      rejectionReason: `"${title}" is Western Animation (${originalLanguage.toUpperCase()}). Anime Core exclusively plays Japanese Anime.`,
+      classifiedCategory: "Western Animation"
+    };
+  }
+  const classifiedCategory = resolvedMediaType === "movie" ? "Anime Movie" : "Anime TV";
+  return {
+    isValidAnime: true,
+    isAnime: true,
+    mediaType: resolvedMediaType,
+    tmdbId,
+    title,
+    romajiTitle: raw.original_name || raw.original_title || title,
+    englishTitle: raw.title || raw.name || title,
+    japaneseTitle: raw.original_name || raw.original_title || void 0,
+    year,
+    releaseDate,
+    genres,
+    genreIds,
+    originalLanguage: originalLanguage || "ja",
+    originCountry: originCountry.length > 0 ? originCountry : ["JP"],
+    overview: raw.overview,
+    posterPath,
+    backdropPath,
+    backdropPaths,
+    logoPath,
+    logoPaths,
+    totalSeasons: seasonsList.length > 0 ? seasonsList.length : Number(raw.number_of_seasons || 1),
+    totalEpisodes: Number(raw.number_of_episodes || (seasonsList.length > 0 ? seasonsList.reduce((acc, s) => acc + s.episodeCount, 0) : 1)),
+    seasons: seasonsList,
+    imdbId: raw.imdb_id ? String(raw.imdb_id) : void 0,
+    classifiedCategory
+  };
+}
+
+// src/anime/AnimeServerResolver.ts
+async function findAnimeSaltSeriesSlug(title) {
+  const cleanTitle = title.replace(/[^\w\s-]/g, "").trim().toLowerCase();
+  const searchKeywords = [cleanTitle.split(":")[0].trim() || cleanTitle];
+  for (const query of searchKeywords) {
+    if (!query || query.length < 2) continue;
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 1e3);
+      const res = await fetch(`https://animesalt.cx/?s=${encodeURIComponent(query)}`, {
+        headers: {
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+          Referer: "https://animesalt.cx/"
+        },
+        signal: controller.signal
+      });
+      clearTimeout(timer);
+      if (!res.ok) continue;
+      const html = await res.text();
+      const matches = Array.from(html.matchAll(/\/series\/([a-z0-9-]+)\/?/gi));
+      if (matches.length > 0) {
+        return matches[0][1];
+      }
+    } catch {
+    }
+  }
+  return cleanTitle.replace(/\s+/g, "-");
+}
+async function scrapeAnimeSaltSources(slug, season, episode) {
+  const candidateUrls = [
+    `https://animesalt.cx/episode/${slug}-${season}x${episode}/`,
+    `https://animesalt.cx/episode/${slug}-episode-${episode}/`
+  ];
+  for (const url of candidateUrls) {
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 1e3);
+      const res = await fetch(url, {
+        headers: {
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+          Referer: "https://animesalt.cx/"
+        },
+        signal: controller.signal
+      });
+      clearTimeout(timer);
+      if (!res.ok) continue;
+      const html = await res.text();
+      const streams = [];
+      const languages = [];
+      const dataParamMatch = html.match(/player\.php\?data=([A-Za-z0-9+/=%]+)/);
+      if (dataParamMatch) {
+        try {
+          const rawB64 = decodeURIComponent(dataParamMatch[1]);
+          const decodedJson = Buffer.from(rawB64, "base64").toString("utf8");
+          const parsed = JSON.parse(decodedJson);
+          if (Array.isArray(parsed)) {
+            for (const item of parsed) {
+              if (!item || !item.link) continue;
+              const langRaw = String(item.language || "").trim();
+              const langLower = langRaw.toLowerCase();
+              const isHindi = langLower.includes("hindi") || langLower.includes("hin");
+              const isEnglish = langLower.includes("english") || langLower.includes("eng");
+              const isTamil = langLower.includes("tamil") || langLower.includes("tam");
+              const isTelugu = langLower.includes("telugu") || langLower.includes("tel");
+              const isKannada = langLower.includes("kannada") || langLower.includes("kan");
+              const isMalayalam = langLower.includes("malayalam") || langLower.includes("mal");
+              const isJapanese = langLower.includes("japanese") || langLower.includes("jap") || langLower.includes("sub");
+              const langCode = isHindi ? "hi" : isEnglish ? "en" : isTamil ? "ta" : isTelugu ? "te" : isKannada ? "kn" : isMalayalam ? "ml" : "ja";
+              languages.push(langCode);
+              streams.push({
+                id: `animesalt-${langCode}-${streams.length}`,
+                provider: "animesalt",
+                url: item.link.replace(/\\\//g, "/"),
+                quality: "1080p",
+                label: `AnimeSalt | ${langRaw} (${isJapanese ? "Sub" : "Dub"})`,
+                type: "hls",
+                audioLang: langCode,
+                audioLabel: `${langRaw} ${isJapanese ? "(Sub)" : "(Dub)"}`,
+                isSub: isJapanese,
+                isDub: !isJapanese
+              });
+            }
+          }
+        } catch {
+        }
+      }
+      const iframeMatches = Array.from(html.matchAll(/<iframe[^>]+(?:src|data-src)=["']([^"']+)["']/gi));
+      for (const m of iframeMatches) {
+        const src = m[1];
+        if (src && !src.includes("player.php") && src.startsWith("http")) {
+          streams.push({
+            id: `animesalt-embed-${streams.length}`,
+            provider: "animesalt-embed",
+            url: src,
+            quality: "HD",
+            label: "AnimeSalt Player Stream",
+            type: "hls",
+            audioLang: "ja",
+            audioLabel: "Japanese (Sub)",
+            isSub: true,
+            isDub: false
+          });
+        }
+      }
+      if (streams.length > 0) {
+        return { sources: streams, languages };
+      }
+    } catch {
+    }
+  }
+  return { sources: [], languages: [] };
+}
+var ANIME_LANG_LABELS = {
+  ja: "Japanese (Sub)",
+  en: "English (Dub)",
+  hi: "Hindi (Dub)",
+  ta: "Tamil (Dub)",
+  te: "Telugu (Dub)",
+  kn: "Kannada (Dub)",
+  ml: "Malayalam (Dub)",
+  bn: "Bengali (Dub)",
+  id: "Indonesian (Dub)",
+  tl: "Tagalog (Dub)",
+  es: "Spanish (Dub)",
+  esla: "Spanish LA (Dub)",
+  fr: "French (Dub)",
+  de: "German (Dub)",
+  pt: "Portuguese (Dub)",
+  ptbr: "Portuguese BR (Dub)",
+  ru: "Russian (Dub)"
+};
+function buildAvailableAudioTracks(sources) {
+  const detectedLangs = /* @__PURE__ */ new Set();
+  for (const s of sources) {
+    if (s.audioLang) {
+      detectedLangs.add(s.audioLang.toLowerCase().trim());
+    }
+  }
+  const availableAudioTracks = [];
+  if (detectedLangs.has("ja") || sources.some((s) => s.isSub || s.audioLang === "ja")) {
+    availableAudioTracks.push({
+      code: "ja",
+      label: "Japanese (Sub)",
+      isSub: true,
+      isDub: false
+    });
+  }
+  const priorityOrder = ["en", "hi", "ta", "te", "kn", "ml", "bn", "id", "tl", "es", "esla", "fr", "de", "pt", "ptbr", "ru"];
+  for (const code of priorityOrder) {
+    if (code !== "ja" && detectedLangs.has(code)) {
+      availableAudioTracks.push({
+        code,
+        label: ANIME_LANG_LABELS[code] || `${code.toUpperCase()} (Dub)`,
+        isSub: false,
+        isDub: true
+      });
+    }
+  }
+  for (const code of detectedLangs) {
+    if (code !== "ja" && !priorityOrder.includes(code)) {
+      availableAudioTracks.push({
+        code,
+        label: ANIME_LANG_LABELS[code] || `${code.toUpperCase()} (Dub)`,
+        isSub: false,
+        isDub: true
+      });
+    }
+  }
+  if (availableAudioTracks.length === 0) {
+    availableAudioTracks.push({
+      code: "ja",
+      label: "Japanese (Sub)",
+      isSub: true,
+      isDub: false
+    });
+  }
+  return availableAudioTracks;
+}
+async function resolveAnimeContent(params, deps) {
+  const { fetchTmdbDetailsWithFallback: fetchTmdbDetailsWithFallback2, resolveForServer: resolveForServer2 } = deps;
+  const { tmdbId, season = 1, episode = 1, preferredAudio = "ja" } = params;
+  const cleanId = String(tmdbId || "").trim();
+  const explicitType = params.mediaType === "movie" ? "movie" : "tv";
+  let details = await fetchTmdbDetailsWithFallback2(explicitType, cleanId);
+  if (!details || !details.title && !details.name) {
+    const fallbackMeta = getMediaByTmdbId(explicitType, cleanId);
+    if (fallbackMeta) {
+      details = {
+        id: Number(cleanId),
+        title: fallbackMeta.title,
+        name: fallbackMeta.title,
+        original_language: "ja",
+        genres: fallbackMeta.genres.map((g, i) => ({ id: i === 0 ? 16 : i + 1, name: g })),
+        release_date: `${fallbackMeta.releaseYear}-01-01`,
+        overview: fallbackMeta.overview
+      };
+    }
+  }
+  let validation = validateAnimeTmdbMetadata(details, explicitType);
+  if (!validation.isValidAnime) {
+    const altType = explicitType === "movie" ? "tv" : "movie";
+    const altDetails = await fetchTmdbDetailsWithFallback2(altType, cleanId);
+    if (altDetails && (altDetails.title || altDetails.name)) {
+      const altValidation = validateAnimeTmdbMetadata(altDetails, altType);
+      if (altValidation.isValidAnime) {
+        validation = altValidation;
+      }
+    }
+  }
+  if (!validation.isValidAnime) {
+    return {
+      success: false,
+      tmdbId: Number(cleanId),
+      title: validation.title || `TMDB #${cleanId}`,
+      mediaType: validation.mediaType,
+      season,
+      episode,
+      sources: [],
+      subtitles: [],
+      availableAudioTracks: [],
+      error: validation.rejectionReason || "Content is not valid anime."
+    };
+  }
+  const mediaType = validation.mediaType;
+  const animeTitle = validation.title || validation.romajiTitle || `Anime #${cleanId}`;
+  const releaseYear = validation.year || "2020";
+  const date = validation.releaseDate || `${releaseYear}-01-01`;
+  const imdbId = validation.imdbId || "";
+  const startTime = Date.now();
+  const allSources = [];
+  const discoveredLangs = /* @__PURE__ */ new Set(["ja"]);
+  const animeSaltPromise = Promise.race([
+    (async () => {
+      try {
+        const slug = await findAnimeSaltSeriesSlug(animeTitle);
+        if (slug) {
+          const saltResult = await scrapeAnimeSaltSources(slug, season, episode);
+          for (const lang of saltResult.languages) {
+            discoveredLangs.add(lang);
+          }
+          return saltResult.sources;
+        }
+      } catch {
+      }
+      return [];
+    })(),
+    new Promise((resolve) => setTimeout(() => resolve([]), 1400))
+  ]);
+  let orionOrigResponse = null;
+  const providersToRace = ["alatreon", "ursa", "atlas", "orion", "valstrax"];
+  const providerPromises = providersToRace.map(async (provider) => {
+    try {
+      const resolved = await resolveForServer2(provider, {
+        mediaType,
+        tmdbId: cleanId,
+        season,
+        episode,
+        title: animeTitle,
+        releaseYear,
+        date,
+        imdbId,
+        dubCode: "",
+        dubType: "0"
+      });
+      if (provider === "orion" && resolved) {
+        orionOrigResponse = resolved;
+      }
+      if (resolved && resolved.success && Array.isArray(resolved.links)) {
+        const nonHevc = resolved.links.filter((l) => l?.link && !l.onlyHevc);
+        const playable = nonHevc.length > 0 ? nonHevc : resolved.links.filter((l) => l?.link);
+        return playable.map((l, idx) => {
+          const isDash = l.type === "dash" || l.type === "andromeda";
+          return {
+            id: `${provider}-${idx}`,
+            provider,
+            url: l.link,
+            quality: "1080p",
+            label: `${provider.toUpperCase()} | 1080p Ultra HD`,
+            type: isDash ? "dash" : "hls",
+            audioLang: "ja",
+            audioLabel: "Japanese (Original)",
+            isSub: true,
+            isDub: false,
+            onlyHevc: Boolean(l.onlyHevc),
+            audioStreamKey: l.audioStreamKey || resolved.audioStreamKey || ""
+          };
+        });
+      }
+    } catch {
+    }
+    return [];
+  });
+  const cleanPref = (preferredAudio || "ja").trim().toLowerCase();
+  const dubLanguagesToQuery = Array.from(
+    /* @__PURE__ */ new Set(["hi", "en", ...cleanPref && cleanPref !== "ja" ? [cleanPref] : []])
+  );
+  const rawDubPromises = dubLanguagesToQuery.map(async (dubLang) => {
+    try {
+      const orionDub = await resolveForServer2("orion", {
+        mediaType,
+        tmdbId: cleanId,
+        season,
+        episode,
+        title: animeTitle,
+        releaseYear,
+        date,
+        imdbId,
+        dubCode: dubLang,
+        dubType: "0"
+      });
+      if (orionDub && orionDub.success) {
+        const link = orionDub.dubAudioUrl || orionDub.link || orionDub.links?.[0]?.link;
+        if (link) {
+          return {
+            dubLang,
+            link,
+            audioStreamKey: orionDub.audioStreamKey || orionDub.links?.[0]?.audioStreamKey || "",
+            onlyHevc: Boolean(orionDub.links?.[0]?.onlyHevc ?? true),
+            dubs: orionDub.dubs
+          };
+        }
+      }
+    } catch {
+    }
+    return null;
+  });
+  const [providerResults, rawDubResults, saltSources] = await Promise.all([
+    Promise.all(providerPromises),
+    Promise.all(rawDubPromises),
+    animeSaltPromise
+  ]);
+  for (const list of providerResults) {
+    allSources.push(...list);
+  }
+  const origAudioStreamKey = orionOrigResponse?.audioStreamKey || "";
+  const orionRawDubs = orionOrigResponse?.dubs || rawDubResults.find((r) => Array.isArray(r?.dubs))?.dubs || [];
+  const orionVerifiedDubLangs = Array.isArray(orionRawDubs) && orionRawDubs.length > 0 ? new Set(
+    orionRawDubs.filter((d) => Number(d?.type ?? 0) === 0 && !d?.original).map((d) => String(d?.lang || "").toLowerCase().trim()).filter(Boolean)
+  ) : null;
+  for (const dubItem of rawDubResults) {
+    if (!dubItem) continue;
+    const { dubLang, link, audioStreamKey, onlyHevc } = dubItem;
+    if (orionVerifiedDubLangs && orionVerifiedDubLangs.size > 0 && !orionVerifiedDubLangs.has(dubLang)) {
+      continue;
+    }
+    if (origAudioStreamKey && audioStreamKey && audioStreamKey === origAudioStreamKey) {
+      continue;
+    }
+    const langLabel = ANIME_LANG_LABELS[dubLang] || `${dubLang.toUpperCase()} (Dub)`;
+    allSources.push({
+      id: `orion-dub-${dubLang}`,
+      provider: "orion",
+      url: link,
+      quality: "1080p",
+      label: `Orion | ${langLabel}`,
+      type: "dash",
+      audioLang: dubLang,
+      audioLabel: langLabel,
+      isSub: false,
+      isDub: true,
+      onlyHevc,
+      audioStreamKey
+    });
+  }
+  for (const s of saltSources) {
+    allSources.push(s);
+  }
+  const availableAudioTracks = buildAvailableAudioTracks(allSources);
+  const subtitles = [
+    {
+      id: "sub-en",
+      language: "English",
+      url: `https://zxcstream.cc/backend/subtitles/${mediaType}/${cleanId}?lang=en`
+    }
+  ];
+  const durationMs = Date.now() - startTime;
+  if (allSources.length === 0) {
+    return {
+      success: false,
+      tmdbId: Number(cleanId),
+      title: animeTitle,
+      mediaType,
+      season,
+      episode,
+      sources: [],
+      subtitles,
+      availableAudioTracks,
+      error: `No authorized playback streams available for "${animeTitle}" S${season}E${episode}.`,
+      diagnostics: {
+        durationMs,
+        sourcesCount: 0
+      }
+    };
+  }
+  return {
+    success: true,
+    tmdbId: Number(cleanId),
+    title: animeTitle,
+    mediaType,
+    season,
+    episode,
+    sources: allSources,
+    subtitles,
+    availableAudioTracks,
+    diagnostics: {
+      resolvedProvider: allSources[0]?.provider,
+      durationMs,
+      sourcesCount: allSources.length
+    }
+  };
+}
+
 // serverApp.ts
 var app = express();
 app.use(cors({ origin: true, credentials: true }));
@@ -1739,6 +2587,68 @@ var FIELD_MAP = {
   date: "e16493139e5814b3027",
   latestDate: "e953416ad739e5814b3027"
 };
+var lastFieldMapDiscoveryAt = 0;
+var fieldMapDiscoveryPromise = null;
+async function refreshFieldMapFromUpstream() {
+  const now = Date.now();
+  if (now - lastFieldMapDiscoveryAt < 6e4) return false;
+  if (fieldMapDiscoveryPromise) return fieldMapDiscoveryPromise;
+  fieldMapDiscoveryPromise = (async () => {
+    try {
+      lastFieldMapDiscoveryAt = Date.now();
+      const pageRes = await fetch("https://zxcstream.cc/player/movie/128", {
+        headers: {
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+        }
+      });
+      if (!pageRes.ok) return false;
+      const html = await pageRes.text();
+      const chunkMatches = Array.from(
+        new Set(html.match(/\/_next\/static\/chunks\/[a-zA-Z0-9_.~-]+\.js/g) || [])
+      );
+      for (const chunkPath of chunkMatches) {
+        try {
+          const chunkRes = await fetch(`https://zxcstream.cc${chunkPath}`, {
+            headers: {
+              "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+            }
+          });
+          if (!chunkRes.ok) continue;
+          const js = await chunkRes.text();
+          if (!js.includes("generateFrontendToken") && !js.includes("latestDate:")) continue;
+          const mapMatch = js.match(
+            /\{id:"([a-f0-9]+)",fToken:"([a-f0-9]+)",ts:"([a-f0-9]+)",token:"([a-f0-9]+)",title:"([a-f0-9]+)",year:"([a-f0-9]+)",season:"([a-f0-9]+)",episode:"([a-f0-9]+)",imdbId:"([a-f0-9]+)",path:"([a-f0-9]+)",mediaType:"([a-f0-9]+)",date:"([a-f0-9]+)",latestDate:"([a-f0-9]+)"\}/
+          );
+          if (mapMatch) {
+            FIELD_MAP = {
+              id: mapMatch[1],
+              fToken: mapMatch[2],
+              ts: mapMatch[3],
+              token: mapMatch[4],
+              title: mapMatch[5],
+              year: mapMatch[6],
+              season: mapMatch[7],
+              episode: mapMatch[8],
+              imdbId: mapMatch[9],
+              path: mapMatch[10],
+              mediaType: mapMatch[11],
+              date: mapMatch[12],
+              latestDate: mapMatch[13]
+            };
+            return true;
+          }
+        } catch {
+        }
+      }
+      return false;
+    } catch {
+      return false;
+    } finally {
+      fieldMapDiscoveryPromise = null;
+    }
+  })();
+  return fieldMapDiscoveryPromise;
+}
 var DECRYPTION_KEY = "7f4c9e2a81d63b05c4f7a9e8126d3b50e1a8c7f23d9465ab0c6e9f1d4a7b832c";
 function decryptCryptoJS(cipherBase64, passphrase) {
   try {
@@ -1771,7 +2681,7 @@ async function fetchTmdbDetailsWithFallback(mediaType, tmdbId, language = "en-US
   const tryTypeOnHost = async (host, type) => {
     try {
       const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 4500);
+      const timer = setTimeout(() => controller.abort(), 3e3);
       const res = await fetch(
         `${host}/backend/tmdb/details/${encodeURIComponent(type)}/${encodeURIComponent(tmdbId)}?language=${encodeURIComponent(language)}`,
         {
@@ -1797,9 +2707,7 @@ async function fetchTmdbDetailsWithFallback(mediaType, tmdbId, language = "en-US
     }
   };
   const tryType = async (type) => {
-    const resZxc = await tryTypeOnHost("https://zxcstream.cc", type);
-    if (resZxc) return resZxc;
-    return await tryTypeOnHost("https://vidstuck.cc", type);
+    return await tryTypeOnHost("https://zxcstream.cc", type);
   };
   const primary = await tryType(mediaType);
   if (primary) return primary;
@@ -1839,26 +2747,26 @@ async function resolveForServer(targetServer, options) {
   } = options;
   const queryProvider = async (baseHost, tokenEndpoint, sourcesPrefix, serverKey) => {
     const refererUrl = `${baseHost}/player/${mediaType}/${tmdbId}${mediaType === "tv" ? `/${season}/${episode}` : ""}`;
-    const tokenBody = {
-      [FIELD_MAP.id]: String(tmdbId),
-      [FIELD_MAP.mediaType]: mediaType,
-      [FIELD_MAP.path]: serverKey
-    };
-    if (mediaType === "tv") {
-      tokenBody[FIELD_MAP.season] = Number(season) || 1;
-      tokenBody[FIELD_MAP.episode] = Number(episode) || 1;
-    }
     let sourceData = null;
     let lastError = "Request failed";
-    const tokenEndpoints = tokenEndpoint ? [tokenEndpoint] : ["/backend/wtfnigga", "/backend/fucku"];
+    const tokenEndpoints = tokenEndpoint ? [tokenEndpoint] : ["/backend/wtfnigga"];
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
+        const tokenBody = {
+          [FIELD_MAP.id]: String(tmdbId),
+          [FIELD_MAP.mediaType]: mediaType,
+          [FIELD_MAP.path]: serverKey
+        };
+        if (mediaType === "tv") {
+          tokenBody[FIELD_MAP.season] = Number(season) || 1;
+          tokenBody[FIELD_MAP.episode] = Number(episode) || 1;
+        }
         let tokenData = null;
         let tokenStatus = 0;
         for (const ep of tokenEndpoints) {
           try {
             const tokenController = new AbortController();
-            const tokenTimer = setTimeout(() => tokenController.abort(), 4500);
+            const tokenTimer = setTimeout(() => tokenController.abort(), 3500);
             const tokenRes = await fetch(`${baseHost}${ep}`, {
               method: "POST",
               headers: {
@@ -1883,8 +2791,12 @@ async function resolveForServer(targetServer, options) {
         }
         if (!tokenData || !tokenData.token) {
           lastError = tokenStatus ? `Token HTTP ${tokenStatus}` : "Token failed";
+          if (attempt === 0 && tokenStatus === 400) {
+            const refreshed = await refreshFieldMapFromUpstream();
+            if (refreshed) continue;
+          }
           if (attempt === 0 && (tokenStatus >= 500 || tokenStatus === 429)) {
-            await new Promise((r) => setTimeout(r, 200));
+            await new Promise((r) => setTimeout(r, 150));
             continue;
           }
           return { success: false, server: targetServer, error: lastError, links: [], dubs: [] };
@@ -1910,7 +2822,7 @@ async function resolveForServer(targetServer, options) {
           query.set("dubType", dubType !== "" ? String(dubType) : "0");
         }
         const srcController = new AbortController();
-        const srcTimer = setTimeout(() => srcController.abort(), 5e3);
+        const srcTimer = setTimeout(() => srcController.abort(), 4e3);
         const sourceRes = await fetch(
           `${baseHost}${sourcesPrefix}/${encodeURIComponent(serverKey)}?${query.toString()}`,
           {
@@ -1926,7 +2838,7 @@ async function resolveForServer(targetServer, options) {
         if (!sourceRes.ok) {
           lastError = `HTTP ${sourceRes.status}`;
           if (attempt === 0 && (sourceRes.status >= 500 || sourceRes.status === 429)) {
-            await new Promise((r) => setTimeout(r, 250));
+            await new Promise((r) => setTimeout(r, 150));
             continue;
           }
           return { success: false, server: targetServer, error: lastError, links: [], dubs: [] };
@@ -1936,7 +2848,7 @@ async function resolveForServer(targetServer, options) {
       } catch (err) {
         lastError = err?.message || "Network error";
         if (attempt === 0) {
-          await new Promise((r) => setTimeout(r, 200));
+          await new Promise((r) => setTimeout(r, 150));
           continue;
         }
         return { success: false, server: targetServer, error: lastError, links: [], dubs: [] };
@@ -1963,7 +2875,7 @@ async function resolveForServer(targetServer, options) {
       if (isDash) {
         try {
           const controller = new AbortController();
-          const timer = setTimeout(() => controller.abort(), 4500);
+          const timer = setTimeout(() => controller.abort(), 3500);
           const mpdRes = await fetch(item.link, {
             headers: {
               "User-Agent": COMMON_HEADERS["User-Agent"],
@@ -1983,13 +2895,20 @@ async function resolveForServer(targetServer, options) {
             (c) => !c.includes("mp4a") && !c.includes("ac-3") && !c.includes("ec-3")
           );
           const onlyHevc = videoCodecs.length > 0 && videoCodecs.every((c) => c.includes("hev1") || c.includes("hvc1"));
-          verifiedLinks.push({ ...item, type: "dash", onlyHevc, hasAudio });
+          const audioAdaptationMatch = mpdText.match(
+            /<AdaptationSet[^>]*contentType=["']audio["'][\s\S]*?<\/AdaptationSet>/i
+          );
+          const audioInitMatch = (audioAdaptationMatch ? audioAdaptationMatch[0] : mpdText).match(
+            /initialization=["']([^"'?]+)/i
+          );
+          const audioStreamKey = audioInitMatch ? audioInitMatch[1] : "";
+          verifiedLinks.push({ ...item, type: "dash", onlyHevc, hasAudio, audioStreamKey });
         } catch {
         }
       } else if (isWorkerUrl) {
         try {
           const controller = new AbortController();
-          const timer = setTimeout(() => controller.abort(), 3e3);
+          const timer = setTimeout(() => controller.abort(), 2e3);
           const probeRes = await fetch(item.link, {
             method: "HEAD",
             headers: {
@@ -2008,56 +2927,23 @@ async function resolveForServer(targetServer, options) {
         verifiedLinks.push({ ...item, onlyHevc: false, hasAudio: true });
       }
     }
-    const verifiedAudioLink = verifiedLinks.find((l) => l.hasAudio !== false)?.link || verifiedLinks[0]?.link || null;
+    const verifiedAudioItem = verifiedLinks.find((l) => l.hasAudio !== false) || verifiedLinks[0] || null;
+    const verifiedAudioLink = verifiedAudioItem?.link || null;
     return {
       ...sourceData,
       success: verifiedLinks.length > 0,
       links: verifiedLinks,
       dubAudioUrl: verifiedAudioLink,
+      audioStreamKey: verifiedAudioItem?.audioStreamKey || "",
       server: targetServer
     };
   };
-  const primaryRes = await queryProvider(
+  return await queryProvider(
     "https://zxcstream.cc",
     "/backend/wtfnigga",
     "/backend_/sources",
     targetServer
   );
-  if (primaryRes.links && primaryRes.links.length > 0) {
-    return primaryRes;
-  }
-  const legacyRes = await queryProvider(
-    "https://zxcstream.cc",
-    "/backend/fucku",
-    "/backend_/sources",
-    targetServer
-  );
-  if (legacyRes.links && legacyRes.links.length > 0) {
-    return legacyRes;
-  }
-  const vidstuckMap = {
-    orion: "orion",
-    valstrax: "andromeda",
-    atlas: "atlas",
-    ursa: "ursa",
-    alatreon: "atlas",
-    daedalus: "daedalus"
-  };
-  const mappedKey = vidstuckMap[targetServer] || targetServer;
-  const fallbackRes = await queryProvider(
-    "https://vidstuck.cc",
-    "/backend/qwerty",
-    "/backend/servers",
-    mappedKey
-  );
-  if (fallbackRes.links && fallbackRes.links.length > 0) {
-    return {
-      ...fallbackRes,
-      dubs: Array.isArray(primaryRes.dubs) && primaryRes.dubs.length > 0 ? primaryRes.dubs : fallbackRes.dubs,
-      server: targetServer
-    };
-  }
-  return primaryRes.error ? primaryRes : legacyRes;
 }
 var apiRouter = express.Router();
 apiRouter.get("/status", (_req, res) => {
@@ -2914,7 +3800,7 @@ var NXSHA_COMMON_HEADERS = {
 };
 function extractHscowAssetKey(url) {
   if (!url) return null;
-  const m = url.match(/(?:hscow\.com|fcxmb\.com)\/(?:my)?hls(?:_mps)?\/(?:(\d{4}\/\d+yue\/[A-Za-z0-9]+)|([A-Za-z0-9]{6,}))/i);
+  const m = url.match(/(?:hscow\.com|fcxmb\.com)\/(?:my)?hls(?:_mps)?\/(?:(\d{4}\/\d+yue\/(?:\d+\/)?[A-Za-z0-9]+)|([A-Za-z0-9]{6,}))/i);
   if (!m) return null;
   const raw = m[1] || m[2] || "";
   return raw.split("_")[0].toLowerCase();
@@ -3066,9 +3952,24 @@ async function fetchNxshaSources(provider, tmdbId, mediaType, season = 1, episod
       const rawUrl = src.url;
       const labelToDetect = `${src.label || ""} ${src.quality || ""}`;
       const lang = detectNxshaLanguage(labelToDetect);
+      const allLangs = detectAllStreamLanguages(labelToDetect);
       if (lang) {
         src.lang = lang.code;
         src.langName = lang.name;
+      }
+      if (allLangs.length > 1) {
+        src.multiLangs = allLangs.map((l) => l.code);
+        for (const l of allLangs) {
+          if (!dubsMap.has(l.code)) {
+            dubsMap.set(l.code, {
+              type: 0,
+              lang: l.code,
+              name: `${l.name} dub`,
+              label: l.name,
+              original: false
+            });
+          }
+        }
       }
       if (needsNxshaProxy(rawUrl)) {
         src.org_uri = rawUrl;
@@ -3148,6 +4049,7 @@ apiRouter.options("/nxsha/proxy", (_req, res) => {
 });
 apiRouter.get("/nxsha/proxy", async (req, res) => {
   const targetUrl = String(req.query.url || "").trim();
+  const reqLang = String(req.query.lang || "").trim().toLowerCase();
   if (!targetUrl || !targetUrl.startsWith("http") || !isTrustedNxshaMediaUrl(targetUrl)) {
     return res.status(400).send("Invalid or untrusted target URL");
   }
@@ -3195,6 +4097,7 @@ apiRouter.get("/nxsha/proxy", async (req, res) => {
     const contentType = (upstream.headers.get("content-type") || "").toLowerCase();
     const finalUrl = currentUrl;
     const isM3u8 = contentType.includes("mpegurl") || contentType.includes("x-mpegurl") || finalUrl.includes(".m3u8");
+    const langSuffix = reqLang ? `&lang=${encodeURIComponent(reqLang)}` : "";
     if (isM3u8) {
       const text = await upstream.text();
       if (text.trimStart().startsWith("#EXTM3U")) {
@@ -3211,11 +4114,11 @@ apiRouter.get("/nxsha/proxy", async (req, res) => {
           if (trimmed.startsWith("#")) {
             return line.replace(/URI="([^"]+)"/g, (_m, uriVal) => {
               const absUri = resolveAgainstBase(uriVal);
-              return `URI="/api/nxsha/proxy?url=${encodeURIComponent(absUri)}"`;
+              return `URI="/api/nxsha/proxy?url=${encodeURIComponent(absUri)}${langSuffix}"`;
             });
           }
           const absUrl = resolveAgainstBase(trimmed);
-          return `/api/nxsha/proxy?url=${encodeURIComponent(absUrl)}`;
+          return `/api/nxsha/proxy?url=${encodeURIComponent(absUrl)}${langSuffix}`;
         }).join("\n");
         res.setHeader("Content-Type", "application/vnd.apple.mpegurl");
         return res.status(200).send(rewritten);
@@ -3225,9 +4128,11 @@ apiRouter.get("/nxsha/proxy", async (req, res) => {
     if (contentType) res.setHeader("Content-Type", contentType);
     const contentRange = upstream.headers.get("content-range");
     if (contentRange) res.setHeader("Content-Range", contentRange);
-    const contentLength = upstream.headers.get("content-length");
-    if (contentLength) res.setHeader("Content-Length", contentLength);
     const buffer = Buffer.from(await upstream.arrayBuffer());
+    if (reqLang && buffer.length >= 188) {
+      inspectAndSelectMpegTsAudioTrack(buffer, reqLang);
+    }
+    res.setHeader("Content-Length", String(buffer.length));
     return res.send(buffer);
   } catch (err) {
     clearTimeout(timeout);
@@ -3409,28 +4314,24 @@ var handleNxshaResolve = async (req, res) => {
         return { valid: sources.length > 0, sources };
       }
       const citadelRes = await getCitadelSources().catch(() => ({ sources: [] }));
-      if (citadelRes.sources.length > 0) {
-        if (candidateProviders.includes("rive-citadel") && preferredServer !== "castle") {
-          await new Promise((r) => setTimeout(r, 5));
-        }
-        const verifiedAssetKeys = new Set(
-          citadelRes.sources.map((s) => extractHscowAssetKey(s.url)).filter((k) => Boolean(k))
-        );
-        if (verifiedAssetKeys.size > 0) {
-          const filtered = sources.filter((s) => {
-            const key = extractHscowAssetKey(s.url);
-            return key ? verifiedAssetKeys.has(key) : true;
-          });
-          if (filtered.length > 0) {
-            return { valid: true, sources: filtered };
-          }
-        }
+      if (citadelRes.sources.length > 0 && candidateProviders.includes("rive-citadel") && preferredServer !== "castle") {
+        await new Promise((r) => setTimeout(r, 5));
       }
-      return { valid: sources.length > 0, sources };
+      const verifiedAssetKeys = new Set(
+        citadelRes.sources.map((s) => extractHscowAssetKey(s.url)).filter((k) => Boolean(k))
+      );
+      const filtered = sources.filter((s) => {
+        const key = extractHscowAssetKey(s.url);
+        if (!key) return true;
+        return verifiedAssetKeys.has(key);
+      });
+      return { valid: filtered.length > 0, sources: filtered };
     },
     isPreferredMatch: (_provider, sources) => {
       if (!requestedDub || requestedDub === "orig") return true;
-      return sources.some((s) => s.lang === requestedDub);
+      return sources.some(
+        (s) => s.lang === requestedDub || Array.isArray(s.multiLangs) && s.multiLangs.includes(requestedDub)
+      );
     }
   });
   for (const d of raceResult.allDiscoveredDubs) {
@@ -3599,6 +4500,82 @@ var handleNxshaResolve = async (req, res) => {
 };
 apiRouter.post("/nxsha/resolve", handleNxshaResolve);
 apiRouter.get("/nxsha/resolve", handleNxshaResolve);
+apiRouter.get("/anime/validate/:tmdbId", async (req, res) => {
+  const { tmdbId } = req.params;
+  const cleanId = String(tmdbId || "").trim();
+  const explicitType = req.query.type === "movie" ? "movie" : req.query.type === "tv" ? "tv" : void 0;
+  try {
+    let details = await fetchTmdbDetailsWithFallback(explicitType || "tv", cleanId);
+    if (!details || !details.title && !details.name) {
+      const fallbackMeta = getMediaByTmdbId(explicitType || "tv", cleanId);
+      if (fallbackMeta) {
+        details = {
+          id: Number(cleanId),
+          title: fallbackMeta.title,
+          name: fallbackMeta.title,
+          original_language: "ja",
+          genres: fallbackMeta.genres.map((g, i) => ({ id: i === 0 ? 16 : i + 1, name: g })),
+          release_date: `${fallbackMeta.releaseYear}-01-01`,
+          overview: fallbackMeta.overview
+        };
+      }
+    }
+    let validation = validateAnimeTmdbMetadata(details, explicitType);
+    if (!validation.isValidAnime) {
+      const altType = (explicitType || "tv") === "movie" ? "tv" : "movie";
+      const altDetails = await fetchTmdbDetailsWithFallback(altType, cleanId);
+      if (altDetails && (altDetails.title || altDetails.name)) {
+        const altValidation = validateAnimeTmdbMetadata(altDetails, altType);
+        if (altValidation.isValidAnime) {
+          validation = altValidation;
+        }
+      }
+    }
+    if (!validation.isValidAnime) {
+      return res.status(400).json({
+        isValidAnime: false,
+        isAnime: false,
+        error: validation.rejectionReason,
+        rejectionReason: validation.rejectionReason,
+        classifiedCategory: validation.classifiedCategory,
+        title: validation.title,
+        genres: validation.genres,
+        originalLanguage: validation.originalLanguage
+      });
+    }
+    return res.json(validation);
+  } catch (err) {
+    return res.status(500).json({
+      isValidAnime: false,
+      isAnime: false,
+      error: err.message || "Validation service error"
+    });
+  }
+});
+var handleAnimeResolve = async (req, res) => {
+  const params = {
+    ...req.query,
+    ...req.body
+  };
+  try {
+    const result = await resolveAnimeContent(params, {
+      fetchTmdbDetailsWithFallback,
+      resolveForServer
+    });
+    if (!result.success) {
+      const isValidationRejection = result.error?.includes("Anime Core") || result.error?.includes("dedicated to Anime") || result.error?.includes("Western Animation") || result.error?.includes("Live-Action");
+      return res.status(isValidationRejection ? 400 : 404).json(result);
+    }
+    return res.json(result);
+  } catch (err) {
+    return res.status(500).json({
+      success: false,
+      error: err.message || "Error resolving anime stream sources"
+    });
+  }
+};
+apiRouter.post("/anime/resolve", handleAnimeResolve);
+apiRouter.get("/anime/resolve", handleAnimeResolve);
 app.use("/api", apiRouter);
 app.use("/api/index", apiRouter);
 app.use(apiRouter);
@@ -3612,3 +4589,7 @@ export {
   nxshaEncrypt,
   resolveForServer
 };
+/**
+ * @license
+ * SPDX-License-Identifier: Apache-2.0
+ */

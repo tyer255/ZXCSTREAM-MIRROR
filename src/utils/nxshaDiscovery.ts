@@ -1,4 +1,4 @@
-import { detectSingleStreamLanguage, parseResolutionHeight } from './urlBuilder.js';
+import { detectAllStreamLanguages, detectSingleStreamLanguage, parseResolutionHeight } from './urlBuilder.js';
 
 export const ALLOWED_NXSHA_PROVIDERS = [
   'rive-citadel',
@@ -174,6 +174,7 @@ export interface ValidatedNxshaSource {
   headers?: Record<string, string>;
   lang?: string;
   langName?: string;
+  multiLangs?: string[];
 }
 
 /**
@@ -257,6 +258,7 @@ export function validatePlayableNxshaSource(source: any): {
 
   const labelToDetect = `${source.label || ''} ${source.quality || ''}`;
   const detectedLang = detectSingleStreamLanguage(labelToDetect);
+  const allLangs = detectAllStreamLanguages(labelToDetect);
 
   const normalizedSource: ValidatedNxshaSource = {
     ...source,
@@ -264,6 +266,12 @@ export function validatePlayableNxshaSource(source: any): {
     type: normalizedType === 'm3u8' ? 'hls' : normalizedType === 'video/mp4' ? 'mp4' : normalizedType,
     lang: source.lang || detectedLang?.code || undefined,
     langName: source.langName || detectedLang?.name || undefined,
+    multiLangs:
+      Array.isArray(source.multiLangs) && source.multiLangs.length > 0
+        ? source.multiLangs
+        : allLangs.length > 1
+        ? allLangs.map((l) => l.code)
+        : undefined,
   };
 
   return { valid: true, normalizedSource };

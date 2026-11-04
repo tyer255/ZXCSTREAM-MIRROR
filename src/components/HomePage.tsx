@@ -3,7 +3,6 @@ import {
   Eclipse,
   ArrowRight,
   SlidersVertical,
-  TvMinimal,
   Film,
   Tv,
   Copy,
@@ -11,6 +10,7 @@ import {
   ExternalLink,
   Code,
   ShieldCheck,
+  Play,
 } from 'lucide-react';
 import {
   DUB_LANGUAGES,
@@ -21,7 +21,16 @@ import {
   buildEmbedIframeCode,
 } from '../utils/urlBuilder';
 import { CustomPlayerView } from './CustomPlayerView';
+import { AnimePlayer } from '../anime/AnimePlayer';
 import { AnnouncementModal } from './AnnouncementModal';
+
+export const ANIME_PRESETS = [
+  { id: '85937', type: 'tv' as MediaType, season: '1', ep: '1', title: 'Demon Slayer', badge: 'TV • S1E1' },
+  { id: '1429', type: 'tv' as MediaType, season: '1', ep: '1', title: 'Attack on Titan', badge: 'TV • S1E1' },
+  { id: '95479', type: 'tv' as MediaType, season: '1', ep: '1', title: 'Jujutsu Kaisen', badge: 'TV • S1E1' },
+  { id: '128', type: 'movie' as MediaType, season: '1', ep: '1', title: 'Princess Mononoke', badge: 'Movie' },
+  { id: '372058', type: 'movie' as MediaType, season: '1', ep: '1', title: 'Your Name', badge: 'Movie' },
+];
 
 export interface HomePageProps {
   announcementOpen: boolean;
@@ -49,6 +58,24 @@ export const HomePage: React.FC<HomePageProps> = ({
   const [episode, setEpisode] = useState<string>('1');
   const [copied, setCopied] = useState<boolean>(false);
   const [copiedIframe, setCopiedIframe] = useState<boolean>(false);
+
+  const handleSelectPlayer = (nextMode: PlayerMode) => {
+    setPlayerMode(nextMode);
+    const clean = tmdbId.trim();
+    if (nextMode === 'anime') {
+      if (mediaType === 'tv' && (clean === '66732' || clean === '1396' || clean === '94997')) {
+        setTmdbId('85937');
+        setSeason('1');
+        setEpisode('1');
+      } else if (mediaType === 'movie' && (clean === '85937' || clean === '66732' || clean === '558449')) {
+        setTmdbId('128');
+      }
+    } else {
+      if (mediaType === 'movie' && clean === '85937') {
+        setTmdbId('128');
+      }
+    }
+  };
 
   const handleTmdbIdChange = (raw: string) => {
     let val = raw.trim();
@@ -111,12 +138,44 @@ export const HomePage: React.FC<HomePageProps> = ({
     window.setTimeout(() => setCopiedIframe(false), 2000);
   };
 
+  // Dynamic Brand Identity & Restrained Lighting per Player
+  const brandTitle =
+    playerMode === 'nxsha' ? 'NXSHA' : playerMode === 'anime' ? 'ANIME CORE' : 'ZXCSTREAM';
+
+  const lampRgba =
+    playerMode === 'nxsha'
+      ? 'rgba(8, 145, 178, 0.7)'
+      : playerMode === 'anime'
+      ? 'rgba(225, 29, 72, 0.65)'
+      : 'rgba(37, 99, 235, 0.7)';
+
+  const lampGlowSoftClass =
+    playerMode === 'nxsha'
+      ? 'bg-cyan-600/10'
+      : playerMode === 'anime'
+      ? 'bg-rose-600/10'
+      : 'bg-blue-600/10';
+
+  const lampBarClass =
+    playerMode === 'nxsha'
+      ? 'bg-cyan-600/70'
+      : playerMode === 'anime'
+      ? 'bg-rose-600/70'
+      : 'bg-blue-600/70';
+
+  const activeButtonClass =
+    playerMode === 'nxsha'
+      ? 'bg-cyan-900 text-white shadow-md scale-100'
+      : playerMode === 'anime'
+      ? 'bg-rose-900 text-white shadow-md scale-100'
+      : 'bg-blue-900 text-white shadow-md scale-100';
+
   return (
     <div className="min-h-screen bg-zinc-950 text-zinc-50">
       {/* Important Announcement Modal */}
       <AnnouncementModal open={announcementOpen} onDismiss={onDismissAnnouncement} />
 
-      {/* Top Endpoint Notification Banner matching route-home.js */}
+      {/* Top Endpoint Notification Banner */}
       <div className="dark bg-zinc-900 px-4 py-3 text-zinc-50 border-b border-white/5 relative z-30">
         <div className="flex flex-col justify-between gap-2 md:flex-row md:items-center max-w-7xl mx-auto">
           <div className="flex items-center gap-3">
@@ -145,57 +204,61 @@ export const HomePage: React.FC<HomePageProps> = ({
         </div>
       </div>
 
-      {/* Main Lamp Spotlight Section matching route-home.js */}
+      {/* Main Lamp Spotlight Section */}
       <div className="relative flex min-h-screen flex-col items-center justify-start overflow-hidden bg-zinc-950 w-full rounded-md z-0">
-        {/* Top Sister Domains & Stream Engines Header */}
+        {/* Top Three-Player Switcher under Sample Link Banner */}
         <div className="z-20 absolute inset-x-0 top-0 flex justify-center items-center p-6">
-          <div className="flex items-center gap-3 md:gap-5 text-xs lg:text-sm font-medium">
+          <div
+            data-testid="top-player-switcher"
+            className="inline-flex items-center bg-zinc-900/90 border border-white/5 p-1 rounded-lg gap-1 text-xs lg:text-sm font-medium"
+          >
             <button
               type="button"
-              onClick={() => setPlayerMode('custom')}
+              onClick={() => handleSelectPlayer('custom')}
               data-testid="header-engine-zxcstream"
-              className={`transition-colors cursor-pointer font-semibold ${
+              className={`px-3.5 py-1.5 rounded-md transition-all duration-300 cursor-pointer font-semibold ${
                 playerMode === 'custom'
-                  ? 'text-blue-400 underline underline-offset-4 decoration-2'
+                  ? 'bg-blue-900 text-white shadow-xs'
                   : 'text-zinc-400 hover:text-white'
               }`}
             >
               ZXCSTREAM
             </button>
-            <span className="text-zinc-700 font-mono select-none">•</span>
             <button
               type="button"
-              onClick={() => setPlayerMode('nxsha')}
+              onClick={() => handleSelectPlayer('nxsha')}
               data-testid="header-engine-nxsha"
-              className={`transition-colors cursor-pointer font-semibold ${
+              className={`px-3.5 py-1.5 rounded-md transition-all duration-300 cursor-pointer font-semibold ${
                 playerMode === 'nxsha'
-                  ? 'text-cyan-400 underline underline-offset-4 decoration-2'
-                  : 'text-zinc-400 hover:text-cyan-300'
+                  ? 'bg-cyan-900 text-white shadow-xs'
+                  : 'text-zinc-400 hover:text-white'
               }`}
             >
-              nxsha.space
+              NXSHA
             </button>
-            <span className="text-zinc-700 font-mono select-none">•</span>
-            <a
-              href="https://vidstuck.cc"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-xs lg:text-sm font-semibold text-zinc-400 hover:text-blue-400 transition-colors"
+            <button
+              type="button"
+              onClick={() => handleSelectPlayer('anime')}
+              data-testid="header-engine-anime"
+              className={`px-3.5 py-1.5 rounded-md transition-all duration-300 cursor-pointer font-semibold ${
+                playerMode === 'anime'
+                  ? 'bg-rose-900 text-white shadow-xs'
+                  : 'text-zinc-400 hover:text-white'
+              }`}
             >
-              vidstuck.cc
-            </a>
+              ANIME CORE
+            </button>
           </div>
         </div>
 
-        {/* Lamp Conic Glow Effect */}
+        {/* Dynamic Lamp Conic Glow Effect */}
         <div className="relative flex w-full scale-y-125 items-center justify-center isolate z-0 pt-[14rem] lg:pt-[15.5rem]">
           <div
             style={{
               width: '30rem',
-              backgroundImage:
-                'conic-gradient(from 70deg at center top, rgba(37, 99, 235, 0.7), transparent, transparent)',
+              backgroundImage: `conic-gradient(from 70deg at center top, ${lampRgba}, transparent, transparent)`,
             }}
-            className="absolute inset-auto right-1/2 h-56 overflow-visible w-[30rem] text-white"
+            className="absolute inset-auto right-1/2 h-56 overflow-visible w-[30rem] text-white transition-all duration-500"
           >
             <div className="absolute w-full left-0 bg-zinc-950 h-40 bottom-0 z-20 [mask-image:linear-gradient(to_top,white,transparent)]" />
             <div className="absolute w-40 h-full left-0 bg-zinc-950 bottom-0 z-20 [mask-image:linear-gradient(to_right,white,transparent)]" />
@@ -204,10 +267,9 @@ export const HomePage: React.FC<HomePageProps> = ({
           <div
             style={{
               width: '30rem',
-              backgroundImage:
-                'conic-gradient(from 290deg at center top, transparent, transparent, rgba(37, 99, 235, 0.7))',
+              backgroundImage: `conic-gradient(from 290deg at center top, transparent, transparent, ${lampRgba})`,
             }}
-            className="absolute inset-auto left-1/2 h-56 w-[30rem] text-white"
+            className="absolute inset-auto left-1/2 h-56 w-[30rem] text-white transition-all duration-500"
           >
             <div className="absolute w-40 h-full right-0 bg-zinc-950 bottom-0 z-20 [mask-image:linear-gradient(to_left,white,transparent)]" />
             <div className="absolute w-full right-0 bg-zinc-950 h-40 bottom-0 z-20 [mask-image:linear-gradient(to_top,white,transparent)]" />
@@ -215,9 +277,15 @@ export const HomePage: React.FC<HomePageProps> = ({
 
           <div className="absolute top-1/2 h-48 w-full translate-y-12 scale-x-150 bg-zinc-950 blur-2xl" />
           <div className="absolute top-1/2 z-50 h-48 w-full bg-transparent opacity-10 backdrop-blur-md" />
-          <div className="absolute inset-auto z-50 h-36 w-[28rem] -translate-y-1/2 rounded-full bg-blue-600/10 opacity-50 blur-3xl" />
-          <div className="absolute inset-auto z-30 h-36 w-64 -translate-y-24 rounded-full bg-blue-600/10 blur-2xl" />
-          <div className="absolute inset-auto z-50 h-0.5 w-[20rem] sm:w-[30rem] -translate-y-28 bg-blue-600/70" />
+          <div
+            className={`absolute inset-auto z-50 h-36 w-[28rem] -translate-y-1/2 rounded-full ${lampGlowSoftClass} opacity-50 blur-3xl transition-colors duration-500`}
+          />
+          <div
+            className={`absolute inset-auto z-30 h-36 w-64 -translate-y-24 rounded-full ${lampGlowSoftClass} blur-2xl transition-colors duration-500`}
+          />
+          <div
+            className={`absolute inset-auto z-50 h-0.5 w-[20rem] sm:w-[30rem] -translate-y-28 ${lampBarClass} transition-colors duration-500`}
+          />
           <div className="absolute inset-auto z-40 h-44 w-full -translate-y-[12.5rem] bg-zinc-950" />
         </div>
 
@@ -229,28 +297,38 @@ export const HomePage: React.FC<HomePageProps> = ({
               href="https://discord.gg/FRHmkQWUP"
               target="_blank"
               rel="noopener noreferrer"
+              data-testid="discord-cta-button"
               className="inline-flex items-center justify-center rounded-md border border-transparent bg-zinc-800 hover:bg-zinc-800/80 px-2.5 py-1 text-xs font-medium text-zinc-50 gap-1 mb-2 transition"
             >
               <span>Join our Discord</span>
               <ArrowRight className="-mr-1 opacity-60 h-3 w-3" aria-hidden="true" />
             </a>
 
-            {/* Animated Gradient ZXCSTREAM Title */}
-            <h1 className="animate-zxc-title text-5xl lg:text-7xl font-bold leading-[1.1] tracking-tighter bg-gradient-to-r from-[rgb(237,236,233)] via-[rgb(94,84,72)] to-[rgb(172,149,119)] bg-clip-text text-transparent">
-              ZXCSTREAM
+            {/* Dynamic Animated Brand Title */}
+            <h1
+              data-testid="hero-brand-title"
+              className="animate-zxc-title text-5xl lg:text-7xl font-bold leading-[1.1] tracking-tighter bg-gradient-to-r from-[rgb(237,236,233)] via-[rgb(94,84,72)] to-[rgb(172,149,119)] bg-clip-text text-transparent transition-all duration-500"
+            >
+              {brandTitle}
             </h1>
 
             <p className="text-zinc-400 text-xs lg:text-base max-w-lg mt-2">
-              Dive into endless hours of free streaming of Movies &amp; TV Shows. A free,
-              easy-to-embed player you can drop into any website
+              {playerMode === 'anime'
+                ? 'Dedicated anime streaming player with TMDB anime verification and multi-audio Sub & Dub playback'
+                : playerMode === 'nxsha'
+                ? 'High-speed ad-free streaming engine for Movies & TV Shows with multi-server parallel discovery'
+                : 'Dive into endless hours of free streaming of Movies & TV Shows. A free, easy-to-embed player you can drop into any website'}
             </p>
 
-            {/* PLAYER Toggle */}
+            {/* Three-Player Switcher */}
             <span className="mt-8 text-xs font-mono text-zinc-400 mb-1">PLAYER</span>
-            <div className="inline-flex bg-zinc-900 p-0.5 rounded-lg flex-wrap justify-center gap-1 sm:gap-0">
+            <div
+              data-testid="main-player-switcher"
+              className="inline-flex bg-zinc-900 p-0.5 rounded-lg flex-wrap justify-center gap-1 sm:gap-0"
+            >
               <button
                 type="button"
-                onClick={() => setPlayerMode('custom')}
+                onClick={() => handleSelectPlayer('custom')}
                 data-testid="toggle-custom-player"
                 className={`flex items-center gap-2 px-5 py-2.5 rounded-lg font-medium text-xs lg:text-sm cursor-pointer transition-all duration-300 ${
                   playerMode === 'custom'
@@ -263,42 +341,31 @@ export const HomePage: React.FC<HomePageProps> = ({
               </button>
               <button
                 type="button"
-                onClick={() => setPlayerMode('nxsha')}
+                onClick={() => handleSelectPlayer('nxsha')}
                 data-testid="toggle-nxsha-player"
                 className={`flex items-center gap-2 px-5 py-2.5 rounded-lg font-medium text-xs lg:text-sm cursor-pointer transition-all duration-300 ${
                   playerMode === 'nxsha'
-                    ? 'bg-blue-900 text-white shadow-md scale-100'
+                    ? 'bg-cyan-900 text-white shadow-md scale-100'
                     : 'text-zinc-400 hover:text-zinc-50'
                 }`}
               >
-                <ShieldCheck className="w-4 h-4 text-cyan-400" />
-                <span>nxsha</span>
+                <ShieldCheck className="w-4 h-4" />
+                <span>NXSHA</span>
               </button>
               <button
                 type="button"
-                onClick={() => setPlayerMode('builtin')}
-                data-testid="toggle-builtin-player"
+                onClick={() => handleSelectPlayer('anime')}
+                data-testid="toggle-anime-player"
                 className={`flex items-center gap-2 px-5 py-2.5 rounded-lg font-medium text-xs lg:text-sm cursor-pointer transition-all duration-300 ${
-                  playerMode === 'builtin'
-                    ? 'bg-blue-900 text-white shadow-md scale-100'
+                  playerMode === 'anime'
+                    ? 'bg-rose-900 text-white shadow-md scale-100'
                     : 'text-zinc-400 hover:text-zinc-50'
                 }`}
               >
-                <TvMinimal className="w-4 h-4" />
-                <span>Built-in Player</span>
+                <Play className="w-4 h-4" />
+                <span>ANIME CORE</span>
               </button>
             </div>
-
-            {/* NXSHA Active Engine Status Banner */}
-            {playerMode === 'nxsha' && (
-              <div
-                data-testid="nxsha-status-pill"
-                className="mt-3 inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-cyan-950/70 border border-cyan-500/30 text-xs font-mono text-cyan-300"
-              >
-                <ShieldCheck className="w-3.5 h-3.5 text-cyan-400" />
-                <span>nxsha Engine Active • 100% Ad-Free • Pop-ups Blocked</span>
-              </div>
-            )}
 
             {/* MEDIA TYPE Toggle */}
             <span className="mt-6 text-xs font-mono text-zinc-400 mb-1">MEDIA TYPE</span>
@@ -307,14 +374,15 @@ export const HomePage: React.FC<HomePageProps> = ({
                 type="button"
                 onClick={() => {
                   setMediaType('movie');
-                  if (tmdbId.trim() === '66732' || tmdbId.trim() === '1396') {
+                  const clean = tmdbId.trim();
+                  if (clean === '66732' || clean === '1396' || clean === '85937' || clean === '1429' || clean === '95479') {
                     setTmdbId('128');
                   }
                 }}
                 data-testid="toggle-movie-player"
                 className={`flex items-center gap-2 px-5 py-2.5 rounded-lg font-medium text-xs lg:text-sm cursor-pointer transition-all duration-300 ${
                   mediaType === 'movie'
-                    ? 'bg-blue-900 text-white shadow-md scale-100'
+                    ? activeButtonClass
                     : 'text-zinc-400 hover:text-zinc-50'
                 }`}
               >
@@ -325,8 +393,9 @@ export const HomePage: React.FC<HomePageProps> = ({
                 type="button"
                 onClick={() => {
                   setMediaType('tv');
-                  if (tmdbId.trim() === '128' || tmdbId.trim() === '1184918') {
-                    setTmdbId('66732');
+                  const clean = tmdbId.trim();
+                  if (clean === '128' || clean === '1184918' || clean === '372058') {
+                    setTmdbId(playerMode === 'anime' ? '85937' : '66732');
                     setSeason('1');
                     setEpisode('1');
                   }
@@ -334,7 +403,7 @@ export const HomePage: React.FC<HomePageProps> = ({
                 data-testid="toggle-series-player"
                 className={`flex items-center gap-2 px-5 py-2.5 rounded-lg font-medium text-xs lg:text-sm cursor-pointer transition-all duration-300 ${
                   mediaType === 'tv'
-                    ? 'bg-blue-900 text-white shadow-md scale-100'
+                    ? activeButtonClass
                     : 'text-zinc-400 hover:text-zinc-50'
                 }`}
               >
@@ -356,7 +425,7 @@ export const HomePage: React.FC<HomePageProps> = ({
                   data-testid="tmdb-id-input"
                   value={tmdbId}
                   onChange={(e) => handleTmdbIdChange(e.target.value)}
-                  className="h-9 w-full max-w-xs rounded-md border border-zinc-700 bg-zinc-800/80 px-3 py-1 text-center text-sm text-zinc-50 placeholder:text-zinc-400 shadow-xs outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/30 transition"
+                  className="h-9 w-full max-w-xs rounded-md border border-zinc-700 bg-zinc-800/80 px-3 py-1 text-center text-sm text-zinc-50 placeholder:text-zinc-400 shadow-xs outline-none focus:border-zinc-500 focus:ring-2 focus:ring-zinc-500/20 transition"
                 />
               ) : (
                 <div className="grid grid-cols-3 gap-3 max-w-md w-full">
@@ -367,7 +436,7 @@ export const HomePage: React.FC<HomePageProps> = ({
                     data-testid="tmdb-id-input"
                     value={tmdbId}
                     onChange={(e) => handleTmdbIdChange(e.target.value)}
-                    className="h-9 w-full rounded-md border border-zinc-700 bg-zinc-800/80 px-3 py-1 text-center text-sm text-zinc-50 placeholder:text-zinc-400 shadow-xs outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/30 transition"
+                    className="h-9 w-full rounded-md border border-zinc-700 bg-zinc-800/80 px-3 py-1 text-center text-sm text-zinc-50 placeholder:text-zinc-400 shadow-xs outline-none focus:border-zinc-500 focus:ring-2 focus:ring-zinc-500/20 transition"
                   />
                   <input
                     type="number"
@@ -377,7 +446,7 @@ export const HomePage: React.FC<HomePageProps> = ({
                     min={1}
                     value={season}
                     onChange={(e) => setSeason(e.target.value)}
-                    className="h-9 w-full rounded-md border border-zinc-700 bg-zinc-800/80 px-3 py-1 text-center text-sm text-zinc-50 placeholder:text-zinc-400 shadow-xs outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/30 transition"
+                    className="h-9 w-full rounded-md border border-zinc-700 bg-zinc-800/80 px-3 py-1 text-center text-sm text-zinc-50 placeholder:text-zinc-400 shadow-xs outline-none focus:border-zinc-500 focus:ring-2 focus:ring-zinc-500/20 transition"
                   />
                   <input
                     type="number"
@@ -387,7 +456,7 @@ export const HomePage: React.FC<HomePageProps> = ({
                     min={1}
                     value={episode}
                     onChange={(e) => setEpisode(e.target.value)}
-                    className="h-9 w-full rounded-md border border-zinc-700 bg-zinc-800/80 px-3 py-1 text-center text-sm text-zinc-50 placeholder:text-zinc-400 shadow-xs outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/30 transition"
+                    className="h-9 w-full rounded-md border border-zinc-700 bg-zinc-800/80 px-3 py-1 text-center text-sm text-zinc-50 placeholder:text-zinc-400 shadow-xs outline-none focus:border-zinc-500 focus:ring-2 focus:ring-zinc-500/20 transition"
                   />
                 </div>
               )}
@@ -436,7 +505,7 @@ export const HomePage: React.FC<HomePageProps> = ({
                   </>
                 ) : (
                   <>
-                    <Code className="w-4 h-4 text-blue-400" />
+                    <Code className="w-4 h-4 text-zinc-300" />
                     <span className="hidden sm:inline">Copy Embed Code</span>
                   </>
                 )}
@@ -455,7 +524,7 @@ export const HomePage: React.FC<HomePageProps> = ({
                   }
                   data-testid="open-standalone-player"
                   title="Open Standalone Fullscreen Route"
-                  className="inline-flex items-center justify-center rounded-md px-2 py-1.5 text-xs font-medium text-blue-400 hover:bg-zinc-800 transition cursor-pointer"
+                  className="inline-flex items-center justify-center rounded-md px-2 py-1.5 text-xs font-medium text-zinc-300 hover:text-white hover:bg-zinc-800 transition cursor-pointer"
                 >
                   <ExternalLink className="w-4 h-4" />
                 </button>
@@ -464,7 +533,28 @@ export const HomePage: React.FC<HomePageProps> = ({
 
             {/* 16:9 Player Viewport */}
             <div className="mt-4 w-full max-w-4xl aspect-video rounded-xl overflow-hidden shadow-2xl shadow-black/60 border border-white/5">
-              {tmdbId.trim() ? (
+              {playerMode === 'anime' ? (
+                <AnimePlayer
+                  key={`anime-${tmdbId.trim()}-${season}-${episode}`}
+                  tmdbId={tmdbId.trim() || '85937'}
+                  season={Number.parseInt(season, 10) || 1}
+                  episode={Number.parseInt(episode, 10) || 1}
+                  mediaType={mediaType}
+                  audioPreference="ja"
+                  autoplay={true}
+                  accentColor="#e11d48"
+                  showBackButton={false}
+                  onMediaTypeResolved={(resolvedType) => {
+                    if (resolvedType !== mediaType) {
+                      setMediaType(resolvedType);
+                    }
+                  }}
+                  onEpisodeChange={(newSeason, newEpisode) => {
+                    setSeason(String(newSeason));
+                    setEpisode(String(newEpisode));
+                  }}
+                />
+              ) : tmdbId.trim() ? (
                 <CustomPlayerView
                   key={`${playerMode}-${tmdbId.trim()}-${season}-${episode}`}
                   playerMode={playerMode}
@@ -501,39 +591,106 @@ export const HomePage: React.FC<HomePageProps> = ({
             </div>
           </div>
 
+          {/* ANIME CORE Documentation Section (Clean ZXCSTREAM Style) */}
+          {playerMode === 'anime' && (
+            <div data-testid="anime-core-doc-section" className="mt-10 w-full max-w-4xl text-left">
+              <div className="space-y-5">
+                <h2 className="text-sm font-mono tracking-wider text-zinc-400 uppercase mb-6">
+                  ANIME CORE Endpoints &amp; Parameters
+                </h2>
+
+                <div className="space-y-4 text-sm border-b border-zinc-800 pb-5">
+                  <div className="font-mono text-zinc-50 text-base">Anime-Exclusive Endpoints</div>
+                  <p className="text-zinc-400 leading-relaxed">
+                    ANIME CORE validates TMDB metadata before loading streams. Only verified Japanese
+                    anime movies and series are permitted; live-action and non-anime titles are blocked.
+                  </p>
+                  <div>
+                    <div className="font-mono text-xs uppercase tracking-wider text-zinc-400 mb-2">
+                      Usage
+                    </div>
+                    <pre className="bg-zinc-900 border border-zinc-800 rounded-md p-3 text-xs font-mono overflow-x-auto text-zinc-200">
+                      {`/anime/tv/85937/1/1\n/anime/movie/128`}
+                    </pre>
+                  </div>
+                  <div>
+                    <div className="font-mono text-xs uppercase tracking-wider text-zinc-400 mb-2">
+                      Sample Verified Titles
+                    </div>
+                    <div className="flex flex-wrap gap-2 font-mono text-xs">
+                      {ANIME_PRESETS.map((p) => (
+                        <button
+                          key={`${p.id}-${p.type}`}
+                          type="button"
+                          onClick={() => {
+                            setTmdbId(p.id);
+                            setMediaType(p.type);
+                            setSeason(p.season);
+                            setEpisode(p.ep);
+                          }}
+                          className="px-2.5 py-1 rounded bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 text-zinc-300 hover:text-zinc-50 transition cursor-pointer"
+                        >
+                          #{p.id} {p.title} ({p.badge})
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-2 border-b border-zinc-800 pb-5">
+                  <div className="font-mono text-sm text-zinc-50">audio = e.g ja | en | hi</div>
+                  <div className="md:col-span-2 text-sm text-zinc-400">
+                    Sets the preferred audio language (Japanese Sub, English Dub, or Hindi Dub) when available.
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-2 border-b border-zinc-800 pb-5">
+                  <div className="font-mono text-sm text-zinc-50">color = e.g e11d48</div>
+                  <div className="md:col-span-2 text-sm text-zinc-400">
+                    Sets the primary accent color of the player using a hex value (without{' '}
+                    <code className="font-mono">#</code>).
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-2 border-b border-zinc-800 pb-5">
+                  <div className="font-mono text-sm text-zinc-50">autoplay = e.g true</div>
+                  <div className="md:col-span-2 text-sm text-zinc-400">
+                    Automatically starts playback as soon as the player finishes loading.
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-2 pb-2">
+                  <div className="font-mono text-sm text-zinc-50">back = e.g true</div>
+                  <div className="md:col-span-2 text-sm text-zinc-400">
+                    Shows a back button inside the player for easier navigation.
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* QUERY PARAMETERS Documentation Section */}
           {(playerMode === 'custom' || playerMode === 'nxsha') && (
             <div className="mt-10 w-full max-w-4xl text-left">
               <div className="space-y-5">
                 <h2 className="text-sm font-mono tracking-wider text-zinc-400 uppercase mb-6">
-                  {playerMode === 'nxsha' ? 'NXSHA Engine Info' : 'Query Parameters'}
+                  {playerMode === 'nxsha' ? 'NXSHA Engine & Parameters' : 'Query Parameters'}
                 </h2>
 
                 {playerMode === 'nxsha' && (
                   <div className="space-y-4 text-sm border-b border-zinc-800 pb-5">
-                    <div className="font-mono text-cyan-400 text-base flex items-center gap-2">
-                      <ShieldCheck className="w-5 h-5 text-cyan-400" />
-                      <span>NXSHA Reverse-Engineered Ad-Free Engine</span>
-                    </div>
-                    <p className="text-zinc-300 leading-relaxed">
-                      Original <code className="text-zinc-100 font-mono">nxsha.space/embed</code> players
-                      inject pop-up ad scripts that hijack clicks. Our reverse-engineered backend decrypts the
-                      underlying AES API endpoints directly, extracting high-speed HLS (.m3u8) streams for seamless,
-                      ad-free playback with zero pop-up interruptions.
+                    <div className="font-mono text-zinc-50 text-base">NXSHA Direct Endpoints</div>
+                    <p className="text-zinc-400 leading-relaxed">
+                      NXSHA resolves high-speed HLS streams directly across multiple providers with
+                      synchronized multi-language audio dubs and zero pop-up interruptions.
                     </p>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
-                      <div className="p-3 bg-zinc-900 border border-zinc-800 rounded-lg">
-                        <div className="font-semibold text-xs text-white">Ad-Free Direct URL</div>
-                        <div className="text-xs font-mono text-cyan-400 mt-1">
-                          {currentOrigin}/nxsha/&#123;type&#125;/&#123;id&#125;
-                        </div>
+                    <div>
+                      <div className="font-mono text-xs uppercase tracking-wider text-zinc-400 mb-2">
+                        Usage
                       </div>
-                      <div className="p-3 bg-zinc-900 border border-zinc-800 rounded-lg">
-                        <div className="font-semibold text-xs text-white">Pop-up Shield</div>
-                        <div className="text-xs text-zinc-400 mt-1">
-                          Zero third-party trackers, sandboxed embeds, full HLS quality
-                        </div>
-                      </div>
+                      <pre className="bg-zinc-900 border border-zinc-800 rounded-md p-3 text-xs font-mono overflow-x-auto text-zinc-200">
+                        {`/nxsha/movie/128\n/nxsha/tv/66732/1/1`}
+                      </pre>
                     </div>
                   </div>
                 )}
@@ -600,7 +757,7 @@ export const HomePage: React.FC<HomePageProps> = ({
                 {/* domainAd */}
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-2 border-b border-zinc-800 pb-5">
                   <div className="font-mono text-sm text-zinc-50">
-                    domainAd = e.g vidstuck.cc
+                    domainAd = e.g yourdomain.com
                   </div>
                   <div className="md:col-span-2 text-sm text-zinc-400">
                     Displays your domain watermark inside the player during playback.

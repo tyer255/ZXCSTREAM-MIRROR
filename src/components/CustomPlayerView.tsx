@@ -13,6 +13,7 @@ import {
   evaluatePlaybackSkipState,
   extractNxshaQualitiesForDub,
   filterAudioDubTracks,
+  inspectAndSelectMpegTsAudioTrack,
   matchNxshaSourceForDub,
   mergeAvailableDubs,
   normalizeSubtitleTracks,
@@ -71,9 +72,14 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
   const dashRef = useRef<dashjs.MediaPlayerClass | null>(null);
   const dubDashRef = useRef<dashjs.MediaPlayerClass | null>(null);
   const loadedStreamDubRef = useRef<string>('');
+  const targetDubRef = useRef<string>(dubLang.toLowerCase());
+  const mpegTsDiscoveredLangsRef = useRef<Set<string>>(new Set());
+  const pendingDubResumeTimeRef = useRef<number>(0);
   const nxshaSourcesRef = useRef<any[]>([]);
   const nxshaDefaultSourceRef = useRef<any | null>(null);
   const seekBarRef = useRef<HTMLDivElement>(null);
+  const [pmtVerificationTick, setPmtVerificationTick] = useState<number>(0);
+  const [activeMpegTsLang, setActiveMpegTsLang] = useState<string>('');
 
   const [activeMediaType, setActiveMediaType] = useState<MediaType>(initialMediaType);
   const [currentSeason, setCurrentSeason] = useState<number>(initialSeason || 1);
@@ -81,6 +87,7 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
 
   const [metadata, setMetadata] = useState<TmdbMetadata | null>(null);
   const [metadataError, setMetadataError] = useState<string | null>(null);
+  const [pauseLogoError, setPauseLogoError] = useState<boolean>(false);
 
   // Server probing state matching zxcstream.cc u2 component
   const activeServerList = playerMode === 'nxsha' ? NXSHA_SERVERS : PLAYER_SERVERS;
@@ -239,7 +246,9 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
   }, [autoplay]);
 
   useEffect(() => {
-    setSelectedDub(dubLang.toLowerCase());
+    const clean = dubLang.toLowerCase();
+    targetDubRef.current = clean;
+    setSelectedDub(clean);
     setSelectedDubType('0');
   }, [dubLang]);
 
@@ -366,6 +375,82 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
     return () => cleanupMediaEngines();
   }, [cleanupMediaEngines]);
 
+  const createMpegTsAudioSelectingLoader = useCallback(() => {
+    const BaseLoader = Hls.DefaultConfig.loader as any;
+    return class MpegTsAudioSelectingLoader extends BaseLoader {
+      constructor(config: any) {
+        super(config);
+      }
+      load(context: any, config: any, callbacks: any) {
+        const origOnSuccess = callbacks.onSuccess;
+        const wrappedCallbacks = {
+          ...callbacks,
+          onSuccess: (response: any, stats: any, ctx: any, networkDetails: any) => {
+            try {
+              if (
+                ctx?.frag &&
+                response?.data &&
+                (response.data instanceof ArrayBuffer || ArrayBuffer.isView(response.data))
+              ) {
+                const uint8 =
+                  response.data instanceof ArrayBuffer
+                    ? new Uint8Array(response.data)
+                    : new Uint8Array(
+                        response.data.buffer,
+                        response.data.byteOffset,
+                        response.data.byteLength
+                      );
+                const pmtRes = inspectAndSelectMpegTsAudioTrack(uint8, targetDubRef.current);
+                if (pmtRes.isMpegTs && pmtRes.audioTrackCount > 0) {
+                  if (pmtRes.selectedLang) {
+                    setActiveMpegTsLang(pmtRes.selectedLang);
+                  }
+                  if (pmtRes.discoveredLangs.length > 0) {
+                    let addedNew = false;
+                    for (const code of pmtRes.discoveredLangs) {
+                      if (!mpegTsDiscoveredLangsRef.current.has(code)) {
+                        mpegTsDiscoveredLangsRef.current.add(code);
+                        addedNew = true;
+                      }
+                    }
+                    if (addedNew && pmtRes.discoveredDubs.length > 0) {
+                      setAvailableDubs((prev) => mergeAvailableDubs(prev, pmtRes.discoveredDubs));
+                    }
+                  }
+
+                  const desiredDub = (targetDubRef.current || '').trim().toLowerCase();
+                  const isDesiredOrig =
+                    !desiredDub || desiredDub === 'orig' || desiredDub === 'original';
+
+                  if (!isDesiredOrig) {
+                    if (pmtRes.matchedTargetLang) {
+                      if (loadedStreamDubRef.current !== desiredDub) {
+                        loadedStreamDubRef.current = desiredDub;
+                        cleanupDubAudioEngine();
+                        setPmtVerificationTick((n) => n + 1);
+                      }
+                    } else if (
+                      pmtRes.discoveredLangs.length > 0 &&
+                      loadedStreamDubRef.current === desiredDub
+                    ) {
+                      // Ground-truth check: PMT has explicit language descriptors (e.g. ['en']), and desiredDub is NOT among them!
+                      loadedStreamDubRef.current = '';
+                      setPmtVerificationTick((n) => n + 1);
+                    }
+                  }
+                }
+              }
+            } catch {
+              // ignore PMT inspection errors
+            }
+            origOnSuccess(response, stats, ctx, networkDetails);
+          },
+        };
+        super.load(context, config, wrappedCallbacks);
+      }
+    };
+  }, [cleanupDubAudioEngine]);
+
   const switchNxshaSourceInPlace = useCallback(
     (sourceObj: any, targetDubCode: string) => {
       const videoEl = videoRef.current;
@@ -373,7 +458,12 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
       const resumeTime = Math.max(0, videoEl.currentTime || 0);
       const wasPaused = videoEl.paused;
       cleanupDubAudioEngine();
-      loadedStreamDubRef.current = targetDubCode;
+      const normalizedTarget =
+        !targetDubCode || targetDubCode === 'orig' || targetDubCode === 'original'
+          ? ''
+          : targetDubCode.trim().toLowerCase();
+      targetDubRef.current = normalizedTarget;
+      loadedStreamDubRef.current = normalizedTarget;
       videoEl.muted = mutedRef.current;
       videoEl.volume = volumeRef.current;
 
@@ -401,6 +491,9 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
         }
         const hls = new Hls({
           enableWorker: true,
+          progressive: false,
+          startPosition: resumeTime > 0.5 ? resumeTime : -1,
+          loader: createMpegTsAudioSelectingLoader() as any,
           maxBufferLength: 30,
           fragLoadingMaxRetry: 3,
           levelLoadingMaxRetry: 3,
@@ -414,11 +507,14 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
             .map((lvl, idx) => ({ index: idx, height: lvl.height || 0 }))
             .filter((q) => q.height > 0);
           if (qList.length <= 1) {
-            const nxshaQuals = extractNxshaQualitiesForDub(nxshaSourcesRef.current, targetDubCode);
+            const nxshaQuals = extractNxshaQualitiesForDub(
+              nxshaSourcesRef.current,
+              normalizedTarget
+            );
             if (nxshaQuals.length > 0) qList = nxshaQuals;
           }
           setQualities(qList);
-          if (resumeTime > 0.5) {
+          if (resumeTime > 0.5 && Math.abs(videoEl.currentTime - resumeTime) > 1) {
             try {
               videoEl.currentTime = resumeTime;
             } catch {
@@ -436,14 +532,14 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
             lang: t.lang,
           }));
           setAudioTracks(mapped);
-          if (targetDubCode) {
+          if (normalizedTarget) {
             const matchedAudioTrack = mapped.find((t) => {
               const detected =
                 detectSingleStreamLanguage(t.lang || '') ||
                 detectSingleStreamLanguage(t.label || '');
               return (
-                (t.lang && t.lang.toLowerCase() === targetDubCode) ||
-                detected?.code === targetDubCode
+                (t.lang && t.lang.toLowerCase() === normalizedTarget) ||
+                detected?.code === normalizedTarget
               );
             });
             if (matchedAudioTrack) {
@@ -480,7 +576,7 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
         return true;
       }
     },
-    [cleanupDubAudioEngine]
+    [cleanupDubAudioEngine, createMpegTsAudioSelectingLoader]
   );
 
   // 1. Fetch TMDB Metadata from /api/tmdb/details/:mediaType/:tmdbId (with automatic movie<->tv fallback)
@@ -491,6 +587,7 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
     let cancelled = false;
     setMetadata(null);
     setMetadataError(null);
+    setPauseLogoError(false);
     setCanPlay(false);
     setPlaying(false);
 
@@ -920,8 +1017,13 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
       cleanupMediaEngines();
       currentPlayingProviderRef.current = providerCode;
       hasEstablishedPlaybackRef.current = false;
+      mpegTsDiscoveredLangsRef.current = new Set();
+      setActiveMpegTsLang('');
       setCanPlay(false);
       setPlaying(false);
+
+      const resumeFromServerSwitch = pendingDubResumeTimeRef.current;
+      pendingDubResumeTimeRef.current = 0;
 
       const winnerIdx = NXSHA_SERVERS.findIndex((s) => s.id === providerCode);
       if (winnerIdx >= 0) {
@@ -932,17 +1034,23 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
       nxshaDefaultSourceRef.current =
         matchNxshaSourceForDub(validSources, '') || validSources[0];
 
+      const cleanDubCode =
+        !dubCodeToUse || dubCodeToUse === 'orig' || dubCodeToUse === 'original'
+          ? ''
+          : dubCodeToUse.trim().toLowerCase();
+      targetDubRef.current = cleanDubCode;
+
       let chosenSource = nxshaDefaultSourceRef.current || validSources[0];
       let matchedSpecificDub = false;
-      if (dubCodeToUse && dubCodeToUse !== 'orig') {
-        const matchedSource = matchNxshaSourceForDub(validSources, dubCodeToUse);
+      if (cleanDubCode) {
+        const matchedSource = matchNxshaSourceForDub(validSources, cleanDubCode);
         if (matchedSource) {
           chosenSource = matchedSource;
           matchedSpecificDub = true;
         }
       }
 
-      loadedStreamDubRef.current = matchedSpecificDub ? dubCodeToUse.toLowerCase() : '';
+      loadedStreamDubRef.current = matchedSpecificDub ? cleanDubCode : '';
       const streamUrl: string = chosenSource.url;
       const streamType: string =
         chosenSource.type ||
@@ -1033,6 +1141,9 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
         if (Hls.isSupported()) {
           const hls = new Hls({
             enableWorker: true,
+            progressive: false,
+            startPosition: resumeFromServerSwitch > 0.5 ? resumeFromServerSwitch : -1,
+            loader: createMpegTsAudioSelectingLoader() as any,
             maxBufferLength: 30,
             fragLoadingMaxRetry: 2,
             levelLoadingMaxRetry: 2,
@@ -1060,6 +1171,13 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
               if (nxshaQuals.length > 0) qList = nxshaQuals;
             }
             setQualities(qList);
+            if (resumeFromServerSwitch > 0.5 && Math.abs(videoEl.currentTime - resumeFromServerSwitch) > 1) {
+              try {
+                videoEl.currentTime = resumeFromServerSwitch;
+              } catch {
+                // ignore
+              }
+            }
             if (autoplay) {
               videoEl.play().catch(() => {
                 videoEl.muted = true;
@@ -1082,20 +1200,20 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
               lang: t.lang,
             }));
             setAudioTracks(mapped);
-            if (dubCodeToUse && dubCodeToUse !== 'orig') {
+            if (cleanDubCode) {
               const matchedAudioTrack = mapped.find((t) => {
                 const detected =
                   detectSingleStreamLanguage(t.lang || '') ||
                   detectSingleStreamLanguage(t.label || '');
                 return (
-                  (t.lang && t.lang.toLowerCase() === dubCodeToUse) ||
-                  detected?.code === dubCodeToUse
+                  (t.lang && t.lang.toLowerCase() === cleanDubCode) ||
+                  detected?.code === cleanDubCode
                 );
               });
               if (matchedAudioTrack) {
                 hls.audioTrack = matchedAudioTrack.id;
                 setSelectedAudioTrack(matchedAudioTrack.id);
-                loadedStreamDubRef.current = dubCodeToUse.toLowerCase();
+                loadedStreamDubRef.current = cleanDubCode;
               }
             }
           });
@@ -1140,7 +1258,7 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
         if (autoplay) videoEl.play().catch(() => {});
       }
     },
-    [autoplay, cleanupMediaEngines]
+    [autoplay, cleanupMediaEngines, createMpegTsAudioSelectingLoader]
   );
 
   const runNxshaVerifiedFallback = useCallback(
@@ -2006,6 +2124,7 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
     currentEpisode,
     selectedDub,
     selectedDubType,
+    pmtVerificationTick,
     cleanupDubAudioEngine,
     showDubFallbackBanner,
   ]);
@@ -2475,6 +2594,8 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
   // Dub language selection handler
   const handleSelectDub = (langCode: string, dubTypeVal: number | string = 0) => {
     const cleanCode = langCode.trim().toLowerCase();
+    const isOrig = !cleanCode || cleanCode === 'orig' || cleanCode === 'original';
+    targetDubRef.current = isOrig ? '' : cleanCode;
     setDubFallbackNotice(null);
     // Selecting a dub is a direct user interaction: if autoplay policy muted initial load, unmute so audio is heard
     if (mutedRef.current) {
@@ -2496,12 +2617,17 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
     if (playerMode === 'nxsha') {
       const preferredHeight = selectedQuality >= 1000 ? selectedQuality - 1000 : null;
       // 0. Switching back to Original Audio
-      if (!cleanCode || cleanCode === 'orig' || cleanCode === 'original') {
+      if (isOrig) {
         cleanupDubAudioEngine();
         const origSource =
           matchNxshaSourceForDub(nxshaSourcesRef.current, '', preferredHeight) ||
-          nxshaDefaultSourceRef.current;
-        if (loadedStreamDubRef.current !== '' && origSource) {
+          nxshaDefaultSourceRef.current ||
+          nxshaSourcesRef.current[0];
+        if (
+          (loadedStreamDubRef.current !== '' ||
+            (activeMpegTsLang && activeMpegTsLang !== 'en')) &&
+          origSource
+        ) {
           switchNxshaSourceInPlace(origSource, '');
         } else {
           loadedStreamDubRef.current = '';
@@ -2513,7 +2639,7 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
         return;
       }
 
-      // 1. Check if current HLS stream has an embedded audio track for this language
+      // 1. Check if current HLS stream has an embedded #EXT-X-MEDIA audio track for this language
       if (hlsRef.current && audioTracks.length > 1) {
         const matchedTrack = audioTracks.find((t) => {
           const detected =
@@ -2537,18 +2663,49 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
         }
       }
 
-      // 2. Check if NXSHA resolved sources have a verified native stream for this exact language
-      const matchedSource = matchNxshaSourceForDub(
-        nxshaSourcesRef.current,
-        cleanCode,
-        preferredHeight
-      );
+      // 2. Check if current NXSHA server has a native stream OR muxed MPEG-TS PMT audio track for this language
+      const matchedSource =
+        matchNxshaSourceForDub(nxshaSourcesRef.current, cleanCode, preferredHeight) ||
+        (mpegTsDiscoveredLangsRef.current.has(cleanCode)
+          ? nxshaDefaultSourceRef.current || nxshaSourcesRef.current[0]
+          : null);
       if (matchedSource) {
         switchNxshaSourceInPlace(matchedSource, cleanCode);
         return;
       }
 
-      // 3. Otherwise, ensure the base video is Original Audio if it was previously switched to a different native dub,
+      // 3. Check if another already-validated AVAILABLE NXSHA server in this session has a native source for this language
+      if (metadata && activeSessionIdRef.current) {
+        const machine = nxshaStateMachineRef.current;
+        const availableNativeDubServer = machine
+          .getVisibleServers(activeSessionIdRef.current)
+          .find(
+            (srv) =>
+              srv.state === 'AVAILABLE' &&
+              srv.sources.length > 0 &&
+              matchNxshaSourceForDub(srv.sources, cleanCode, preferredHeight) !== null
+          );
+        if (availableNativeDubServer) {
+          const selRes = machine.selectServer(
+            activeSessionIdRef.current,
+            availableNativeDubServer.code
+          );
+          if (selRes.selected && selRes.entry && selRes.entry.sources.length > 0) {
+            pendingDubResumeTimeRef.current = Math.max(0, videoRef.current?.currentTime || 0);
+            syncNxshaStateMachineToUi(activeSessionIdRef.current);
+            attachNxshaPlayback(
+              activeSessionIdRef.current,
+              availableNativeDubServer.code,
+              selRes.entry.sources,
+              cleanCode,
+              metadata
+            );
+            return;
+          }
+        }
+      }
+
+      // 4. Otherwise, ensure the base video is Original Audio if it was previously switched to a different native dub,
       // and let the External Dub Audio Sync useEffect load Orion's synchronized dubbed audio track over the NXSHA video!
       if (loadedStreamDubRef.current !== '' && nxshaDefaultSourceRef.current) {
         switchNxshaSourceInPlace(nxshaDefaultSourceRef.current, '');
@@ -2573,6 +2730,11 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
   const activeServerStatus = activeServerObj?.status || 'checking';
   const backdropPath = metadata?.backdropPaths?.[0] || null;
   const logoPath = metadata?.logoPaths?.[0] || null;
+  const pauseLogoUrl = logoPath
+    ? logoPath.startsWith('http') || logoPath.startsWith('data:')
+      ? logoPath
+      : `https://image.tmdb.org/t/p/w780${logoPath.startsWith('/') ? logoPath : `/${logoPath}`}`
+    : null;
   const genreLabel = metadata?.genres?.[0] || (activeMediaType === 'tv' ? 'Drama' : 'Feature');
   const statusLabel = metadata?.status || 'Released';
 
@@ -2937,6 +3099,8 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
       data-timing-source={resolvedTiming.source ?? ''}
       data-discovery-winner={nxshaDiagnostics?.winningProvider ?? ''}
       data-discovery-time-ms={nxshaDiagnostics?.timeToFirstValidSourceMs ?? ''}
+      data-mpegts-audio-lang={activeMpegTsLang}
+      data-loaded-stream-dub={loadedStreamDubRef.current}
       onMouseMove={wakeControls}
       onClick={wakeControls}
       className={`relative bg-black overflow-hidden select-none font-sans text-white ${
@@ -3310,34 +3474,25 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
         />
       )}
 
-      {canPlay && !playing && pausedIdleOverlay && metadata && (
-        <div
-          onClick={wakeControls}
-          className="absolute inset-0 bg-black/70 z-20 flex items-center pl-8 lg:pl-24 pointer-events-auto transition-opacity duration-500"
-        >
-          <div className="space-y-4 max-w-xl">
-            <div className="space-y-1">
-              <div className="flex items-center gap-2">
-                <div
-                  style={{ backgroundColor: normalizedColor }}
-                  className="w-1.5 h-6 rounded-full"
-                />
-                <span className="text-sm lg:text-base text-zinc-300 font-medium">
-                  You&apos;re Watching
-                </span>
-              </div>
-              <h2 className="text-3xl lg:text-6xl font-extrabold tracking-tight text-white">
-                {metadata.title}{' '}
-                {activeMediaType === 'tv' ? `S${currentSeason}E${currentEpisode}` : ''}{' '}
-                {metadata.year ? `(${metadata.year})` : ''}
-              </h2>
-              <p className="text-xs lg:text-sm text-zinc-300 font-medium">
-                {activeMediaType === 'tv' ? 'TV Show' : 'Movie'} / {genreLabel} / {statusLabel}
-              </p>
-            </div>
-          </div>
-        </div>
-      )}
+      {canPlay &&
+        !playing &&
+        !settingsOpen &&
+        !showServersOverlay &&
+        !showEpisodeDrawer &&
+        pauseLogoUrl &&
+        !pauseLogoError && (
+          <img
+            data-testid="player-pause-tmdb-logo"
+            src={pauseLogoUrl}
+            alt=""
+            onError={() => setPauseLogoError(true)}
+            className={`absolute left-6 sm:left-10 lg:left-12 z-20 max-h-12 sm:max-h-16 lg:max-h-24 max-w-[180px] sm:max-w-[260px] lg:max-w-[360px] w-auto h-auto object-contain pointer-events-none select-none transition-all duration-300 ${
+              controlsVisible && !pausedIdleOverlay
+                ? 'bottom-24 sm:bottom-28 lg:bottom-32'
+                : 'bottom-8 sm:bottom-10 lg:bottom-12'
+            }`}
+          />
+        )}
 
       {canPlay && activeMediaType === 'tv' && showEpisodeDrawer && (
         <PlayerEpisodeDrawer

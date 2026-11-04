@@ -14,6 +14,7 @@ import {
 import { HomePage } from './components/HomePage';
 import { DownloadPage } from './components/DownloadPage';
 import { CustomPlayerView } from './components/CustomPlayerView';
+import { AnimePlayer } from './anime/AnimePlayer';
 
 export default function App() {
   const [route, setRoute] = useState<AppRoute>(() => parseAppRoute(window.location.pathname));
@@ -47,6 +48,29 @@ export default function App() {
         onSelectMedia={(newMediaType: MediaType, newTmdbId: string) =>
           navigateTo(`/download/${newMediaType}/${newTmdbId}`)
         }
+      />
+    );
+  }
+
+  if (route.page === 'anime') {
+    return (
+      <AnimePlayer
+        tmdbId={route.tmdbId}
+        season={route.season}
+        episode={route.episode}
+        mediaType={route.mediaType}
+        audioPreference={queryParams.dubLang || 'ja'}
+        autoplay={queryParams.autoplay !== false}
+        accentColor={queryParams.color || '#e11d48'}
+        showBackButton={true}
+        onBack={() => navigateTo('/')}
+        onEpisodeChange={(newSeason, newEpisode) => {
+          if (route.mediaType === 'movie') {
+            navigateTo(`/anime/movie/${route.tmdbId}`, search);
+          } else {
+            navigateTo(`/anime/tv/${route.tmdbId}/${newSeason}/${newEpisode}`, search);
+          }
+        }}
       />
     );
   }
@@ -93,6 +117,14 @@ export default function App() {
         season: string,
         episode: string
       ) => {
+        if (playerMode === 'anime') {
+          const path =
+            mediaType === 'tv'
+              ? `/anime/tv/${tmdbId}/${season || '1'}/${episode || '1'}`
+              : `/anime/movie/${tmdbId}`;
+          navigateTo(path);
+          return;
+        }
         const endpoint =
           playerMode === 'nxsha'
             ? 'nxsha'

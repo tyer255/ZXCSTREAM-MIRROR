@@ -18,9 +18,12 @@ import {
   evaluatePlaybackSkipState,
   normalizeIntervalSeconds,
   detectSingleStreamLanguage,
+  detectAllStreamLanguages,
   matchNxshaSourceForDub,
   extractNxshaQualitiesForDub,
   normalizeSubtitleTracks,
+  inspectAndSelectMpegTsAudioTrack,
+  mpeg2Crc32,
 } from './urlBuilder.ts';
 import { getEpisodeTimingMetadata, getCatalogSeasonEpisodes, getSeriesImdbId } from '../data/tmdbCatalog.ts';
 
@@ -89,6 +92,28 @@ describe('ZXC[STREAM] URL Builder & Route Utilities', () => {
         queryParams: { dubLang: 'tl' },
       }),
       'https://zxcstream.cc/player/tv/66732/1/2?dubLang=tl'
+    );
+
+    assert.equal(
+      buildPlayerUrl({
+        baseOrigin: 'https://zxcstream-mirror.vercel.app',
+        playerMode: 'anime',
+        mediaType: 'tv',
+        tmdbId: '85937',
+        season: '1',
+        episode: '1',
+      }),
+      'https://zxcstream-mirror.vercel.app/anime/tv/85937/1/1'
+    );
+
+    assert.equal(
+      buildPlayerUrl({
+        baseOrigin: 'https://zxcstream-mirror.vercel.app',
+        playerMode: 'anime',
+        mediaType: 'movie',
+        tmdbId: '12',
+      }),
+      'https://zxcstream-mirror.vercel.app/anime/movie/12'
     );
   });
 
@@ -725,7 +750,151 @@ describe('ZXC[STREAM] URL Builder & Route Utilities', () => {
     assert.equal(normSubs[1].url, 'https://dl.opensubtitles.org/hi');
     assert.equal(normSubs[2].language, 'Spanish');
   });
+
+  it('detects all stream languages from multi-language bracket labels', () => {
+    const langs = detectAllStreamLanguages('[Hindi, English, Tamil, Telugu] - 720P');
+    assert.deepEqual(langs.map((l) => l.code), ['hi', 'en', 'ta', 'te']);
+
+    const sources = [
+      {
+        label: '[Hindi, English, Tamil, Telugu] - 720P',
+        quality: '720p',
+        url: 'https://cdn.example/multi_720.m3u8',
+        multiLangs: ['hi', 'en', 'ta', 'te'],
+      },
+    ];
+
+    const matchHi = matchNxshaSourceForDub(sources, 'hi');
+    assert.equal(matchHi?.url, 'https://cdn.example/multi_720.m3u8');
+
+    const matchTa = matchNxshaSourceForDub(sources, 'ta');
+    assert.equal(matchTa?.url, 'https://cdn.example/multi_720.m3u8');
+
+    const matchOrig = matchNxshaSourceForDub(sources, '');
+    assert.equal(matchOrig?.url, 'https://cdn.example/multi_720.m3u8');
+  });
+
+  it('inspects and selects audio track in MPEG-TS PMT packets in-place', () => {
+    // Construct a synthetic 188-byte MPEG-TS packet containing PAT and PMT with eng (PID 257) and hin (PID 258)
+    const patPkt = new Uint8Array(188).fill(0xff);
+    patPkt[0] = 0x47;
+    patPkt[1] = 0x40; // pusi=1, pid=0 (PAT)
+    patPkt[2] = 0x00;
+    patPkt[3] = 0x10; // no adapt, payload only
+    patPkt[4] = 0x00; // pointer field
+    // PAT table (table_id 0x00, section_length 13, program 1 -> PMT PID 0x1000)
+    patPkt[5] = 0x00; // table_id = 0x00
+    patPkt[6] = 0xb0; // section_syntax=1, 0, 11, length high
+    patPkt[7] = 0x0d; // section_length = 13
+    patPkt[8] = 0x00; // transport_stream_id
+    patPkt[9] = 0x01;
+    patPkt[10] = 0xc1; // version 0, current_next 1
+    patPkt[11] = 0x00; // section_number
+    patPkt[12] = 0x00; // last_section_number
+    patPkt[13] = 0x00; // program_number 1
+    patPkt[14] = 0x01;
+    patPkt[15] = 0xf0; // PMT PID 0x1000 (4096)
+    patPkt[16] = 0x00;
+    // PAT CRC
+    const patCrc = mpeg2Crc32(patPkt.subarray(5, 17));
+    patPkt[17] = (patCrc >>> 24) & 0xff;
+    patPkt[18] = (patCrc >>> 16) & 0xff;
+    patPkt[19] = (patCrc >>> 8) & 0xff;
+    patPkt[20] = patCrc & 0xff;
+
+    // PMT packet: PID 0x1000, 1 video stream (PID 256, H.264), 2 audio streams (PID 257 eng, PID 258 hin)
+    const pmtPkt = new Uint8Array(188).fill(0xff);
+    pmtPkt[0] = 0x47;
+    pmtPkt[1] = 0x50; // pusi=1, pid=0x1000
+    pmtPkt[2] = 0x00;
+    pmtPkt[3] = 0x10; // payload only
+    pmtPkt[4] = 0x00; // pointer field
+
+    // PMT table body
+    let idx = 5;
+    pmtPkt[idx++] = 0x02; // table_id = 0x02
+    pmtPkt[idx++] = 0xb0; // section_syntax
+    const secLenIdx = idx++; // fill section_length later
+    pmtPkt[idx++] = 0x00; // program_number = 1
+    pmtPkt[idx++] = 0x01;
+    pmtPkt[idx++] = 0xc1; // version 0, current_next 1
+    pmtPkt[idx++] = 0x00; // section_number
+    pmtPkt[idx++] = 0x00; // last_section_number
+    pmtPkt[idx++] = 0xe1; // PCR_PID = 256
+    pmtPkt[idx++] = 0x00;
+    pmtPkt[idx++] = 0xf0; // program_info_length = 0
+    pmtPkt[idx++] = 0x00;
+
+    // Stream 1: Video (0x1b H.264, PID 256)
+    pmtPkt[idx++] = 0x1b;
+    pmtPkt[idx++] = 0xe1;
+    pmtPkt[idx++] = 0x00;
+    pmtPkt[idx++] = 0xf0; // es_info_length = 0
+    pmtPkt[idx++] = 0x00;
+
+    // Stream 2: Audio 1 (0x0f AAC, PID 257, lang: 'eng')
+    pmtPkt[idx++] = 0x0f;
+    pmtPkt[idx++] = 0xe1;
+    pmtPkt[idx++] = 0x01;
+    pmtPkt[idx++] = 0xf0;
+    pmtPkt[idx++] = 0x06; // es_info_length = 6
+    pmtPkt[idx++] = 0x0a; // ISO_639_language_descriptor tag
+    pmtPkt[idx++] = 0x04; // descriptor_length = 4
+    pmtPkt[idx++] = 0x65; // 'e'
+    pmtPkt[idx++] = 0x6e; // 'n'
+    pmtPkt[idx++] = 0x67; // 'g'
+    pmtPkt[idx++] = 0x00; // audio_type = 0
+
+    // Stream 3: Audio 2 (0x0f AAC, PID 258, lang: 'hin')
+    pmtPkt[idx++] = 0x0f;
+    pmtPkt[idx++] = 0xe1;
+    pmtPkt[idx++] = 0x02;
+    pmtPkt[idx++] = 0xf0;
+    pmtPkt[idx++] = 0x06; // es_info_length = 6
+    pmtPkt[idx++] = 0x0a; // ISO_639_language_descriptor tag
+    pmtPkt[idx++] = 0x04; // descriptor_length = 4
+    pmtPkt[idx++] = 0x68; // 'h'
+    pmtPkt[idx++] = 0x69; // 'i'
+    pmtPkt[idx++] = 0x6e; // 'n'
+    pmtPkt[idx++] = 0x00; // audio_type = 0
+
+    // Compute section_length (bytes from program_number to end of CRC)
+    const secLen = idx - 8 + 4;
+    pmtPkt[secLenIdx] = secLen;
+    const pmtCrc = mpeg2Crc32(pmtPkt.subarray(5, idx));
+    pmtPkt[idx++] = (pmtCrc >>> 24) & 0xff;
+    pmtPkt[idx++] = (pmtCrc >>> 16) & 0xff;
+    pmtPkt[idx++] = (pmtCrc >>> 8) & 0xff;
+    pmtPkt[idx++] = pmtCrc & 0xff;
+
+    // Concat PAT + PMT into single segment buffer
+    const segmentBuffer = new Uint8Array(376);
+    segmentBuffer.set(patPkt, 0);
+    segmentBuffer.set(pmtPkt, 188);
+
+    // Initial inspection: discovers both English and Hindi audio tracks
+    const inspection = inspectAndSelectMpegTsAudioTrack(new Uint8Array(segmentBuffer), 'orig');
+    assert.equal(inspection.isMpegTs, true);
+    assert.equal(inspection.audioTrackCount, 2);
+    assert.deepEqual(inspection.discoveredLangs, ['en', 'hi']);
+    assert.equal(inspection.selectedLang, 'en');
+    assert.equal(inspection.modified, true);
+
+    // Target Hindi: rewrites the PMT so ONLY the Hindi audio track (PID 258) remains in PMT
+    const testHinBuf = new Uint8Array(segmentBuffer);
+    const hinSelect = inspectAndSelectMpegTsAudioTrack(testHinBuf, 'hi');
+    assert.equal(hinSelect.isMpegTs, true);
+    assert.equal(hinSelect.selectedLang, 'hi');
+    assert.equal(hinSelect.matchedTargetLang, true);
+    assert.equal(hinSelect.modified, true);
+
+    // Verify rewritten PMT now only contains the video stream and PID 258 (Hindi)
+    const secondScan = inspectAndSelectMpegTsAudioTrack(testHinBuf, 'hi');
+    assert.equal(secondScan.audioTrackCount, 1);
+    assert.equal(secondScan.selectedLang, 'hi');
+  });
 });
+
 
 
 
