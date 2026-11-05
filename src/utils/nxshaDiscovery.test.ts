@@ -316,8 +316,12 @@ describe('NXSHA Parallel Source Discovery & First-Valid-Source Racing Engine', (
 
   it('Scenario 8: Security & SSRF URL validation rejects private IPs, metadata endpoints, and non-HTTP schemes', () => {
     assert.equal(isAuthorizedNxshaProvider('rive-citadel'), true);
+    assert.equal(isAuthorizedNxshaProvider('vegamovies'), true);
+    assert.equal(isAuthorizedNxshaProvider('orion'), true);
+    assert.equal(isAuthorizedNxshaProvider('rousav'), true);
+    assert.equal(isAuthorizedNxshaProvider('apollo'), true);
     assert.equal(isAuthorizedNxshaProvider('evil-provider'), false);
-    assert.equal(ALLOWED_NXSHA_PROVIDERS.length, 9);
+    assert.equal(ALLOWED_NXSHA_PROVIDERS.length, 41);
 
     assert.equal(isPrivateOrLoopbackHost('localhost'), true);
     assert.equal(isPrivateOrLoopbackHost('127.0.0.1'), true);

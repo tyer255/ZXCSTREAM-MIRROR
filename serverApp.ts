@@ -29,6 +29,13 @@ import {
 } from './src/utils/nxshaDiscovery.js';
 import { validateAnimeTmdbMetadata } from './src/anime/AnimeMetadata.js';
 import { resolveAnimeContent } from './src/anime/AnimeServerResolver.js';
+import {
+  VEGAMOVIES_BASE_URL,
+  parseVegaSearchHtml,
+  resolveVegaMoviesDirect,
+  VegaResolvedSource,
+  VegaSearchCard,
+} from './src/utils/vegamoviesResolver.js';
 
 const app = express();
 
@@ -75,6 +82,8 @@ app.use((req, _res, next) => {
   }
   next();
 });
+
+let CURRENT_TOKEN_ENDPOINT = '/backend/getthefuckoutniiguh';
 
 let FIELD_MAP: Record<string, string> = {
   id: 'a7f39c821d604e5b91e57b',
@@ -124,25 +133,50 @@ async function refreshFieldMapFromUpstream(): Promise<boolean> {
           });
           if (!chunkRes.ok) continue;
           const js = await chunkRes.text();
-          if (!js.includes('generateFrontendToken') && !js.includes('latestDate:')) continue;
-          const mapMatch = js.match(
-            /\{id:"([a-f0-9]+)",fToken:"([a-f0-9]+)",ts:"([a-f0-9]+)",token:"([a-f0-9]+)",title:"([a-f0-9]+)",year:"([a-f0-9]+)",season:"([a-f0-9]+)",episode:"([a-f0-9]+)",imdbId:"([a-f0-9]+)",path:"([a-f0-9]+)",mediaType:"([a-f0-9]+)",date:"([a-f0-9]+)",latestDate:"([a-f0-9]+)"\}/
-          );
-          if (mapMatch) {
+
+          // Dynamically detect any updated token endpoint (e.g. /backend/getthefuckoutniiguh or future rotations)
+          const postMatch = js.match(/post\(["'](\/backend\/[a-zA-Z0-9_~-]+)["']/);
+          if (postMatch && postMatch[1]) {
+            CURRENT_TOKEN_ENDPOINT = postMatch[1];
+          }
+
+          if (!js.includes('generateFrontendToken') && !js.includes('latestDate:') && !js.includes('FIELD_MAP')) continue;
+
+          // Robust, key-order-independent FIELD_MAP extractor
+          const extractField = (key: string) => {
+            const m = js.match(new RegExp(`${key}:"([a-f0-9]+)"`));
+            return m ? m[1] : null;
+          };
+
+          const id = extractField('id');
+          const fToken = extractField('fToken');
+          const ts = extractField('ts');
+          const token = extractField('token');
+          const title = extractField('title');
+          const year = extractField('year');
+          const season = extractField('season');
+          const episode = extractField('episode');
+          const imdbId = extractField('imdbId');
+          const path = extractField('path');
+          const mediaType = extractField('mediaType');
+          const date = extractField('date');
+          const latestDate = extractField('latestDate');
+
+          if (id && ts && token && path && mediaType) {
             FIELD_MAP = {
-              id: mapMatch[1],
-              fToken: mapMatch[2],
-              ts: mapMatch[3],
-              token: mapMatch[4],
-              title: mapMatch[5],
-              year: mapMatch[6],
-              season: mapMatch[7],
-              episode: mapMatch[8],
-              imdbId: mapMatch[9],
-              path: mapMatch[10],
-              mediaType: mapMatch[11],
-              date: mapMatch[12],
-              latestDate: mapMatch[13],
+              id,
+              fToken: fToken || FIELD_MAP.fToken,
+              ts,
+              token,
+              title: title || FIELD_MAP.title,
+              year: year || FIELD_MAP.year,
+              season: season || FIELD_MAP.season,
+              episode: episode || FIELD_MAP.episode,
+              imdbId: imdbId || FIELD_MAP.imdbId,
+              path,
+              mediaType,
+              date: date || FIELD_MAP.date,
+              latestDate: latestDate || FIELD_MAP.latestDate,
             };
             return true;
           }
@@ -293,6 +327,39 @@ async function resolveForServer(
     dubType = '',
   } = options;
 
+  if (targetServer === 'vegamovies') {
+    const vegaRes = await resolveVegaMoviesCombined({
+      tmdbId: String(tmdbId),
+      mediaType: mediaType === 'tv' ? 'tv' : 'movie',
+      season: Number(season) || 1,
+      episode: Number(episode) || 1,
+      title,
+      releaseYear,
+      imdbId,
+    });
+    const links = vegaRes.sources.map((s) => ({
+      link: s.url,
+      type: s.type || (s.url.includes('.m3u8') ? 'hls' : s.url.includes('.mpd') ? 'dash' : 'hls'),
+      quality: s.quality || '1080p',
+      label: s.label || 'Vegamovies | 1080p FHD [Hindi-Eng]',
+      lang: s.lang || 'hi',
+      onlyHevc: false,
+      hasAudio: true,
+    }));
+    const primary = links[0] || null;
+    return {
+      success: links.length > 0,
+      server: 'vegamovies',
+      links,
+      link: primary?.link || null,
+      type: primary?.type || 'hls',
+      dubs: vegaRes.dubs,
+      subtitles: vegaRes.subtitles,
+      matchedPost: vegaRes.matchedPost,
+      indStreamImdbId: vegaRes.indStreamImdbId,
+    };
+  }
+
   const queryProvider = async (
     baseHost: string,
     tokenEndpoint: string,
@@ -306,7 +373,16 @@ async function resolveForServer(
     let sourceData: any = null;
     let lastError = 'Request failed';
 
-    const tokenEndpoints = tokenEndpoint ? [tokenEndpoint] : ['/backend/wtfnigga'];
+    const tokenEndpoints = Array.from(
+      new Set([
+        CURRENT_TOKEN_ENDPOINT,
+        tokenEndpoint,
+        '/backend/getthefuckoutniiguh',
+        '/backend/wtfnigga',
+        '/backend/fucku',
+        '/backend/token',
+      ])
+    ).filter(Boolean);
 
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
@@ -344,6 +420,7 @@ async function resolveForServer(
               const parsed = await tokenRes.json();
               if (parsed?.token) {
                 tokenData = parsed;
+                CURRENT_TOKEN_ENDPOINT = ep;
                 break;
               }
             }
@@ -354,7 +431,7 @@ async function resolveForServer(
 
         if (!tokenData || !tokenData.token) {
           lastError = tokenStatus ? `Token HTTP ${tokenStatus}` : 'Token failed';
-          if (attempt === 0 && tokenStatus === 400) {
+          if (attempt === 0 && (tokenStatus === 400 || tokenStatus === 404 || !tokenData?.token)) {
             const refreshed = await refreshFieldMapFromUpstream();
             if (refreshed) continue;
           }
@@ -528,7 +605,7 @@ async function resolveForServer(
 
   return await queryProvider(
     'https://zxcstream.cc',
-    '/backend/wtfnigga',
+    CURRENT_TOKEN_ENDPOINT,
     '/backend_/sources',
     targetServer
   );
@@ -738,7 +815,7 @@ apiRouter.post('/stream/resolve', async (req, res) => {
 
     const shouldFallback = autoFallback || (!req.body.strictSingleServer && (!result.links || result.links.length === 0));
     if ((!result.links || result.links.length === 0) && shouldFallback) {
-      const fallbackServers = ['valstrax', 'atlas', 'ursa', 'alatreon', 'daedalus', 'orion'].filter(
+      const fallbackServers = ['valstrax', 'vegamovies', 'atlas', 'ursa', 'alatreon', 'daedalus', 'orion'].filter(
         (s) => s !== serverPath
       );
       for (const alt of fallbackServers) {
@@ -827,7 +904,7 @@ apiRouter.post('/subtitles/resolve', async (req, res) => {
     }
 
     let tokenData: any = null;
-    for (const ep of ['/backend/wtfnigga', '/backend/fucku']) {
+    for (const ep of [CURRENT_TOKEN_ENDPOINT, '/backend/getthefuckoutniiguh', '/backend/wtfnigga', '/backend/fucku']) {
       try {
         const tokenRes = await fetch(`https://zxcstream.cc${ep}`, {
           method: 'POST',
@@ -912,7 +989,7 @@ apiRouter.get('/subtitles', async (req, res) => {
     }
 
     let tokenData: any = null;
-    for (const ep of ['/backend/wtfnigga', '/backend/fucku']) {
+    for (const ep of [CURRENT_TOKEN_ENDPOINT, '/backend/getthefuckoutniiguh', '/backend/wtfnigga', '/backend/fucku']) {
       try {
         const tokenRes = await fetch(`https://zxcstream.cc${ep}`, {
           method: 'POST',
@@ -1706,8 +1783,12 @@ function extractHscowAssetKey(url: string): string | null {
 
 function needsNxshaProxy(url: string): boolean {
   if (!url) return false;
+  if (url.startsWith('/api/nxsha/proxy') || url.startsWith('/api/stream/proxy')) return false;
   const lower = url.toLowerCase();
-  return lower.includes('itsnitrox.tech') || lower.includes('finepulfe.xyz');
+  if (lower.includes('vidstuck.cc') || lower.includes('zxcstream.cc')) {
+    return false;
+  }
+  return true;
 }
 
 function wrapInNxshaProxy(url: string): string {
@@ -1812,6 +1893,363 @@ async function fetchNxshaSubtitles(
   }
 }
 
+const AETHO_SERVER_DEFINITIONS: Record<
+  string,
+  { name: string; desc: string; zxcUpstream: 'alatreon' | 'valstrax' | 'ursa' | 'atlas'; preferRousav?: boolean }
+> = {
+  orion: { name: 'AethoOrion', desc: 'Multi-Audio Master • Hindi, Tamil, Telugu, EN (1080p)', zxcUpstream: 'alatreon', preferRousav: true },
+  vega: { name: 'AethoVega', desc: 'Hindi / Tamil / Telugu / English Direct HLS Master', zxcUpstream: 'valstrax' },
+  callisto: { name: 'AethoCallisto', desc: '16-Language Global & Hindi Bridge • 1080p', zxcUpstream: 'alatreon', preferRousav: true },
+  sirius: { name: 'AethoSirius', desc: 'Ultra-Fast Direct HLS Master • Hindi / EN (1080p)', zxcUpstream: 'ursa' },
+  bharat: { name: 'AethoBharat', desc: 'Dedicated Hindi & South Indian Multi-Audio Node', zxcUpstream: 'alatreon', preferRousav: true },
+  indus: { name: 'AethoIndus', desc: 'India Edge • Hindi, Tamil, Telugu & English HLS', zxcUpstream: 'valstrax', preferRousav: true },
+  bolly: { name: 'AethoBolly', desc: 'Bollywood & Hollywood Dual-Audio Hindi Server', zxcUpstream: 'alatreon', preferRousav: true },
+  kuro: { name: 'AethoKuro', desc: 'Anime & Series Multi-Audio (Hindi / Sub / Dub)', zxcUpstream: 'ursa', preferRousav: true },
+  quantum: { name: 'AethoQuantum', desc: 'Adaptive 1080p/720p/360p Master HLS', zxcUpstream: 'atlas' },
+  rousav: { name: 'AethoRousav', desc: '22-Language Multi-Track HLS + Embedded Subs', zxcUpstream: 'alatreon', preferRousav: true },
+  atlas: { name: 'AethoAtlas', desc: 'Fast Edge H.264 HLS • Universal', zxcUpstream: 'atlas' },
+  ursa: { name: 'AethoUrsa', desc: 'Low-Latency Edge H.264 HLS', zxcUpstream: 'ursa' },
+  andromeda: { name: 'AethoAndromeda', desc: 'Smooth Playback & Ultra HD Stream', zxcUpstream: 'valstrax' },
+  valstrax: { name: 'AethoValstrax', desc: 'High-Bitrate 1080p HD Stream', zxcUpstream: 'valstrax' },
+  alatreon: { name: 'AethoAlatreon', desc: 'Extended Movie & TV Library Node', zxcUpstream: 'alatreon' },
+  resshin: { name: 'AethoResshin', desc: 'Multi-Resolution & Hindi Dub Stream', zxcUpstream: 'alatreon', preferRousav: true },
+  centaurus: { name: 'AethoCentaurus', desc: 'Multi-Resolution 1080p/720p/480p Stream', zxcUpstream: 'ursa' },
+  daedalus: { name: 'AethoDaedalus', desc: 'Global CDN Mirror HLS', zxcUpstream: 'ursa' },
+  quasar: { name: 'AethoQuasar', desc: 'High-Speed India & Asia CDN Node', zxcUpstream: 'valstrax', preferRousav: true },
+  zenith: { name: 'AethoZenith', desc: 'Multi-Language 1080p Cinema Bridge', zxcUpstream: 'alatreon', preferRousav: true },
+  nebula: { name: 'AethoNebula', desc: 'Dual-Audio Hindi/English Express Node', zxcUpstream: 'valstrax', preferRousav: true },
+  zxc_pulse: { name: 'AethoPulse', desc: 'Secondary Multi-Audio Cluster', zxcUpstream: 'alatreon', preferRousav: true },
+  zxc_atlas: { name: 'AethoVortex', desc: 'Fast Edge HLS Cluster', zxcUpstream: 'atlas' },
+  zxc_ursa: { name: 'AethoApex', desc: 'Global Backup HLS Node', zxcUpstream: 'ursa' },
+  hyperion: { name: 'AethoHyperion', desc: 'Cloud Fabric 1080p Node', zxcUpstream: 'atlas' },
+  vidfast: { name: 'AethoFlash', desc: 'Ultra-Fast Instant Start Cluster', zxcUpstream: 'ursa' },
+  vaplayer: { name: 'AethoPrism', desc: 'European Edge Cinema Node', zxcUpstream: 'ursa' },
+  kronos: { name: 'AethoKronos', desc: 'Multi-CDN Aggregated Stream', zxcUpstream: 'alatreon', preferRousav: true },
+  pegasus: { name: 'AethoPegasus', desc: 'Zero-Buffer Adaptive HLS (Hindi/EN)', zxcUpstream: 'valstrax', preferRousav: true },
+  nova: { name: 'AethoNova', desc: 'High-Contrast Cinema 1080p Multi-Audio', zxcUpstream: 'alatreon', preferRousav: true },
+  apollo: { name: 'AethoApollo', desc: 'Universal Failover Stream Node', zxcUpstream: 'valstrax' },
+};
+
+interface AethoSharedCacheEntry {
+  rousavSources: NxshaSource[];
+  zxcByUpstream: Record<string, NxshaSource[]>;
+  subtitles: any[];
+  dubs: RawOrionDub[];
+}
+
+const aethoSharedCache = new Map<
+  string,
+  { expiresAt: number; promise: Promise<AethoSharedCacheEntry> }
+>();
+
+async function getAethoSharedData(params: {
+  tmdbId: string;
+  mediaType: 'movie' | 'tv';
+  season: number;
+  episode: number;
+  imdbId?: string;
+}): Promise<AethoSharedCacheEntry> {
+  const cleanId = String(params.tmdbId || '128').trim();
+  const mediaType = params.mediaType === 'tv' ? 'tv' : 'movie';
+  const season = Math.max(1, Number(params.season) || 1);
+  const episode = Math.max(1, Number(params.episode) || 1);
+  const cacheKey = `${mediaType}:${cleanId}:${season}:${episode}`;
+  const now = Date.now();
+
+  const cached = aethoSharedCache.get(cacheKey);
+  if (cached && cached.expiresAt > now) {
+    return cached.promise;
+  }
+
+  const runSharedExtract = async (): Promise<AethoSharedCacheEntry> => {
+    let title = '';
+    let releaseYear = '';
+    let imdbId = String(
+      params.imdbId || tmdbImdbCache.get(cleanId) || getSeriesImdbId(cleanId) || ''
+    ).trim();
+
+    try {
+      const details = await fetchTmdbDetailsWithFallback(mediaType, cleanId);
+      if (details) {
+        title = String(details.title || details.name || '').trim();
+        const dateStr = String(details.release_date || details.first_air_date || '').trim();
+        if (dateStr) releaseYear = dateStr.slice(0, 4);
+        if (!imdbId && details.imdb_id) {
+          imdbId = String(details.imdb_id).trim();
+          tmdbImdbCache.set(cleanId, imdbId);
+        }
+      }
+    } catch {
+      // fallback below
+    }
+
+    if (!title) {
+      const cat = getMediaByTmdbId(mediaType, cleanId);
+      title = cat?.title || (mediaType === 'tv' ? 'Series' : 'Movie');
+      if (!releaseYear && cat?.releaseYear) releaseYear = String(cat.releaseYear);
+    }
+
+    // 1. Query embed.aethoflix.world/api/extract once per title to harvest direct CORS-enabled rousav.tech multi-audio HLS streams and subtitles
+    const aethoApiPromise = (async () => {
+      try {
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), 3600);
+        const qs = new URLSearchParams({
+          tmdbId: cleanId,
+          mediaType,
+          server: 'callisto',
+          ...(mediaType === 'tv' ? { season: String(season), episode: String(episode) } : {}),
+        });
+        const res = await fetch(`https://embed.aethoflix.world/api/extract?${qs.toString()}`, {
+          headers: {
+            'User-Agent': NXSHA_COMMON_HEADERS['User-Agent'],
+            Accept: 'application/json',
+            Referer: `https://embed.aethoflix.world/embed/${mediaType}/${cleanId}`,
+          },
+          signal: ctrl.signal,
+        });
+        clearTimeout(timer);
+        if (!res.ok) return { rousavSources: [] as NxshaSource[], subtitles: [] as any[], dubs: [] as RawOrionDub[] };
+        const data: any = await res.json();
+        const rawSources: any[] = Array.isArray(data?.sources) ? data.sources : [];
+        const byServer = data?.byServer && typeof data.byServer === 'object' ? data.byServer : {};
+        for (const srvList of Object.values(byServer)) {
+          if (Array.isArray(srvList)) {
+            rawSources.push(...srvList);
+          }
+        }
+
+        const rousavSources: NxshaSource[] = [];
+        const seen = new Set<string>();
+        for (const item of rawSources) {
+          let rawUrl = typeof item?.url === 'string' ? item.url.trim() : '';
+          if (!rawUrl) continue;
+          // Unwrap /api/proxy-m3u8?url=...
+          if (rawUrl.includes('proxy-m3u8?')) {
+            try {
+              const parsed = new URL(rawUrl, 'https://embed.aethoflix.world');
+              const inner = parsed.searchParams.get('url');
+              if (inner) rawUrl = inner.trim();
+            } catch {
+              // ignore
+            }
+          }
+          if (!rawUrl.startsWith('http') || seen.has(rawUrl)) continue;
+          const lower = rawUrl.toLowerCase();
+          // Only keep direct CORS-enabled H.264 HLS streams (e.g. img.rousav.tech); skip 403 vidbolt & HEVC-only worker links
+          if (
+            lower.includes('vidbolt.xyz') ||
+            lower.includes('workers.dev') ||
+            lower.includes('_h265_') ||
+            lower.includes('googleusercontent.com') ||
+            lower.includes('.mkv') ||
+            !isTrustedNxshaMediaUrl(rawUrl)
+          ) {
+            continue;
+          }
+          seen.add(rawUrl);
+          rousavSources.push({
+            id: `aetho-direct-${rousavSources.length + 1}`,
+            url: rawUrl,
+            quality: item?.quality || '1080p',
+            label: item?.label || 'Aetho Direct Multi-Audio HLS (1080p)',
+            type: 'hls',
+            lang: 'hi',
+            langName: 'Hindi',
+            multiLangs: ['hi', 'en'],
+          });
+        }
+
+        const subtitles = normalizeSubtitleTracks([], Array.isArray(data?.subtitles) ? data.subtitles : []);
+        const dubs: RawOrionDub[] = [];
+        if (Array.isArray(data?.dubs)) {
+          for (const d of data.dubs) {
+            const langCode = String(d?.lang || '').trim().toLowerCase();
+            if (!langCode) continue;
+            dubs.push({
+              type: 0,
+              lang: langCode,
+              name: String(d?.name || d?.label || langCode),
+              label: String(d?.label || d?.name || langCode),
+              original: Boolean(d?.original),
+            });
+          }
+        }
+        return { rousavSources, subtitles, dubs };
+      } catch {
+        return { rousavSources: [] as NxshaSource[], subtitles: [] as any[], dubs: [] as RawOrionDub[] };
+      }
+    })();
+
+    // 2. Resolve verified seekable H.264 HLS/DASH streams from our ZXC upstreams (alatreon, valstrax, ursa, atlas)
+    const upstreams: Array<'alatreon' | 'valstrax' | 'ursa' | 'atlas'> = [
+      'alatreon',
+      'valstrax',
+      'ursa',
+      'atlas',
+    ];
+    const zxcByUpstream: Record<string, NxshaSource[]> = {
+      alatreon: [],
+      valstrax: [],
+      ursa: [],
+      atlas: [],
+    };
+
+    const zxcPromises = upstreams.map(async (upName) => {
+      try {
+        const res = await resolveForServer(upName, {
+          mediaType,
+          tmdbId: cleanId,
+          season,
+          episode,
+          title,
+          releaseYear: releaseYear || '2022',
+          date: `${releaseYear || '2022'}-01-01`,
+          imdbId,
+        });
+        const links = Array.isArray(res?.links)
+          ? res.links.filter((l: any) => l?.link && !l.onlyHevc)
+          : [];
+        zxcByUpstream[upName] = links.map((l: any, i: number) => ({
+          id: `aetho-${upName}-${i + 1}`,
+          url: l.link,
+          quality: l.quality || '1080p',
+          label: `1080p FHD [Multi-Audio]`,
+          type: l.type === 'dash' || l.link.includes('.mpd') || l.link.includes('andromeda') ? 'dash' : 'hls',
+          lang: 'hi',
+          langName: 'Hindi',
+          multiLangs: ['hi', 'en'],
+        }));
+      } catch {
+        zxcByUpstream[upName] = [];
+      }
+    });
+
+    const sharedEntry: AethoSharedCacheEntry = {
+      rousavSources: [],
+      zxcByUpstream,
+      subtitles: [],
+      dubs: [
+        {
+          type: 0,
+          lang: 'orig',
+          name: 'Original Audio',
+          label: 'Original Audio',
+          original: true,
+        },
+        {
+          type: 0,
+          lang: 'hi',
+          name: 'Hindi dub',
+          label: 'Hindi',
+          original: false,
+        },
+        {
+          type: 0,
+          lang: 'en',
+          name: 'English dub',
+          label: 'English',
+          original: false,
+        },
+      ],
+    };
+
+    // Wait for our fast, verified ZXC upstreams (~1s) while letting aethoApiPromise enrich rousavSources/subtitles/dubs as soon as it responds
+    await Promise.race([
+      Promise.all([aethoApiPromise, Promise.all(zxcPromises)]),
+      Promise.all(zxcPromises).then(
+        () => new Promise((resolve) => setTimeout(resolve, 400))
+      ),
+    ]);
+
+    void aethoApiPromise.then((aethoApiRes) => {
+      if (aethoApiRes.rousavSources.length > 0) {
+        sharedEntry.rousavSources = aethoApiRes.rousavSources;
+      }
+      if (aethoApiRes.subtitles.length > 0) {
+        sharedEntry.subtitles = aethoApiRes.subtitles;
+      }
+      if (aethoApiRes.dubs.length > 0) {
+        const dubsMap = new Map<string, RawOrionDub>();
+        for (const d of sharedEntry.dubs) dubsMap.set(d.lang, d);
+        for (const d of aethoApiRes.dubs) {
+          if (!dubsMap.has(d.lang)) dubsMap.set(d.lang, d);
+        }
+        sharedEntry.dubs = Array.from(dubsMap.values());
+      }
+    });
+
+    return sharedEntry;
+  };
+
+  const promise = runSharedExtract();
+  aethoSharedCache.set(cacheKey, { expiresAt: now + 60_000, promise });
+  return promise;
+}
+
+async function resolveAethoServerSources(params: {
+  provider: string;
+  tmdbId: string;
+  mediaType: 'movie' | 'tv';
+  season: number;
+  episode: number;
+  imdbId?: string;
+  parentSignal?: AbortSignal;
+}): Promise<{ sources: NxshaSource[]; subtitles: any[]; dubs: RawOrionDub[] }> {
+  const def = AETHO_SERVER_DEFINITIONS[params.provider];
+  if (!def) {
+    return { sources: [], subtitles: [], dubs: [] };
+  }
+  const shared = await getAethoSharedData({
+    tmdbId: params.tmdbId,
+    mediaType: params.mediaType,
+    season: params.season,
+    episode: params.episode,
+    imdbId: params.imdbId,
+  });
+
+  const orderedPool: NxshaSource[] = [];
+  const primaryZxc = shared.zxcByUpstream[def.zxcUpstream] || [];
+  const allZxc = [
+    ...primaryZxc,
+    ...(shared.zxcByUpstream.alatreon || []),
+    ...(shared.zxcByUpstream.valstrax || []),
+    ...(shared.zxcByUpstream.ursa || []),
+    ...(shared.zxcByUpstream.atlas || []),
+  ];
+
+  if (def.preferRousav && shared.rousavSources.length > 0) {
+    orderedPool.push(...shared.rousavSources, ...allZxc);
+  } else {
+    orderedPool.push(...allZxc, ...shared.rousavSources);
+  }
+
+  const seenUrls = new Set<string>();
+  const finalSources: NxshaSource[] = [];
+  for (const src of orderedPool) {
+    if (!src?.url || seenUrls.has(src.url)) continue;
+    seenUrls.add(src.url);
+    const playableUrl =
+      src.url.includes('vidstuck.cc') && !src.url.startsWith('/api/stream/proxy')
+        ? `/api/stream/proxy?url=${encodeURIComponent(src.url)}`
+        : src.url;
+    finalSources.push({
+      ...src,
+      url: playableUrl,
+      org_uri: src.url,
+      id: `${params.provider}-${finalSources.length + 1}`,
+      provider: params.provider,
+      label: `${def.name} | ${src.quality || '1080p'} [${def.desc}]`,
+    });
+  }
+
+  return {
+    sources: finalSources,
+    subtitles: shared.subtitles,
+    dubs: shared.dubs,
+  };
+}
+
 async function fetchNxshaSources(
   provider: string,
   tmdbId: string,
@@ -1826,6 +2264,32 @@ async function fetchNxshaSources(
   }
   if (parentSignal?.aborted) {
     throw new Error('Aborted before fetchNxshaSources start');
+  }
+  if (provider === 'vegamovies') {
+    const vegaRes = await resolveVegaMoviesCombined({
+      tmdbId: String(tmdbId || ''),
+      mediaType: mediaType === 'tv' ? 'tv' : 'movie',
+      season: Number(season) || 1,
+      episode: Number(episode) || 1,
+      imdbId,
+      parentSignal,
+    });
+    return {
+      sources: vegaRes.sources,
+      subtitles: vegaRes.subtitles,
+      dubs: vegaRes.dubs,
+    };
+  }
+  if (provider in AETHO_SERVER_DEFINITIONS) {
+    return resolveAethoServerSources({
+      provider,
+      tmdbId: String(tmdbId || ''),
+      mediaType: mediaType === 'tv' ? 'tv' : 'movie',
+      season: Number(season) || 1,
+      episode: Number(episode) || 1,
+      imdbId,
+      parentSignal,
+    });
   }
   try {
     const fetchWithLang = async (ex_lang: boolean) => {
@@ -2401,21 +2865,23 @@ const handleNxshaResolve = async (req: express.Request, res: express.Response) =
     const mergedSources = [...winner.sources];
     const existingUrls = new Set(mergedSources.map((s) => s.url));
 
-    // If rive-citadel has already resolved in parallel, merge its valid (unexpired) language variants and dubs
-    if (citadelState.resolved && citadelState.resolved.sources.length > 0) {
-      for (const citSrc of citadelState.resolved.sources) {
-        if (
-          citSrc?.url &&
-          !existingUrls.has(citSrc.url) &&
-          validatePlayableNxshaSource(citSrc).valid
-        ) {
-          existingUrls.add(citSrc.url);
-          mergedSources.push(citSrc);
+    // If not in strict single server mode and rive-citadel has already resolved in parallel, merge its valid language variants and dubs
+    if (!strictSingleServer && (winner.provider === 'rive-citadel' || preferredServer === 'rive-citadel')) {
+      if (citadelState.resolved && citadelState.resolved.sources.length > 0) {
+        for (const citSrc of citadelState.resolved.sources) {
+          if (
+            citSrc?.url &&
+            !existingUrls.has(citSrc.url) &&
+            validatePlayableNxshaSource(citSrc).valid
+          ) {
+            existingUrls.add(citSrc.url);
+            mergedSources.push(citSrc);
+          }
         }
-      }
-      for (const d of citadelState.resolved.dubs) {
-        if (d?.lang && !allDubsMap.has(d.lang) && mergedSources.some((s) => s.lang === d.lang)) {
-          allDubsMap.set(d.lang, d);
+        for (const d of citadelState.resolved.dubs) {
+          if (d?.lang && !allDubsMap.has(d.lang) && mergedSources.some((s) => s.lang === d.lang)) {
+            allDubsMap.set(d.lang, d);
+          }
         }
       }
     }
@@ -2523,16 +2989,23 @@ const handleNxshaResolve = async (req: express.Request, res: express.Response) =
           : [];
 
         return {
-          sources: playableLinks.map((l: any) => ({
-            id: `verified-${fallbackSrv}`,
-            provider: fallbackSrv,
-            url: l.link,
-            quality: '1080p',
-            label: '1080p | Original',
-            type: l.type === 'dash' || l.type === 'andromeda' ? 'dash' : 'hls',
-            lang: 'en',
-            langName: 'Original',
-          })),
+          sources: playableLinks.map((l: any) => {
+            const playableUrl =
+              l.link.includes('vidstuck.cc') && !l.link.startsWith('/api/stream/proxy')
+                ? `/api/stream/proxy?url=${encodeURIComponent(l.link)}`
+                : l.link;
+            return {
+              id: `verified-${fallbackSrv}`,
+              provider: fallbackSrv,
+              url: playableUrl,
+              org_uri: l.link,
+              quality: '1080p',
+              label: '1080p | Original',
+              type: l.type === 'dash' || l.type === 'andromeda' ? 'dash' : 'hls',
+              lang: 'en',
+              langName: 'Original',
+            };
+          }),
           subtitles: [],
           dubs: Array.isArray(resolved?.dubs) ? resolved.dubs : [],
         };
@@ -2655,9 +3128,14 @@ apiRouter.get('/anime/validate/:tmdbId', async (req, res) => {
 
 // Anime Stream Resolver Route
 const handleAnimeResolve = async (req: express.Request, res: express.Response) => {
-  const params = {
+  const rawParams = {
     ...req.query,
     ...req.body,
+  };
+  const params = {
+    ...rawParams,
+    tmdbId: rawParams.tmdbId || rawParams.id,
+    mediaType: rawParams.mediaType || rawParams.type || 'tv',
   };
 
   try {
@@ -2686,6 +3164,414 @@ const handleAnimeResolve = async (req: express.Request, res: express.Response) =
 
 apiRouter.post('/anime/resolve', handleAnimeResolve);
 apiRouter.get('/anime/resolve', handleAnimeResolve);
+
+// ============================================================================
+// Vegamovies (vegamovies1.co.in) Discovery, Fast-DL GoogleCDN & Multi-Server Resolver
+// ============================================================================
+interface VegaCombinedResult {
+  success: boolean;
+  sources: NxshaSource[];
+  subtitles: any[];
+  dubs: RawOrionDub[];
+  matchedPost: VegaSearchCard | null;
+  indStreamImdbId: string | null;
+}
+
+const vegaCombinedCache = new Map<
+  string,
+  { expiresAt: number; promise: Promise<VegaCombinedResult> }
+>();
+
+async function queryVegaFastDlIndex(params: {
+  tmdbId: string;
+  mediaType: 'movie' | 'tv';
+  season: number;
+  episode: number;
+  imdbId: string;
+  signal?: AbortSignal;
+}): Promise<VegaResolvedSource[]> {
+  try {
+    if (params.signal?.aborted) return [];
+    const encPayload = nxshaEncrypt({
+      ex_lang: false,
+      provider: 'hdhub4u',
+      tmdbId: String(params.tmdbId || ''),
+      imdb_id: params.imdbId || '',
+      type: params.mediaType,
+      season: params.mediaType === 'tv' ? params.season : undefined,
+      episode: params.mediaType === 'tv' ? params.episode : undefined,
+    });
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 3800);
+    if (params.signal) {
+      params.signal.addEventListener('abort', () => controller.abort(), { once: true });
+    }
+    const res = await fetch(`https://nxsha.space/api/sources?q=${encodeURIComponent(encPayload)}`, {
+      headers: {
+        ...NXSHA_COMMON_HEADERS,
+        Referer:
+          params.mediaType === 'tv'
+            ? `https://nxsha.space/embed/tv/${params.tmdbId}/${params.season}/${params.episode}`
+            : `https://nxsha.space/embed/movie/${params.tmdbId}`,
+      },
+      signal: controller.signal,
+    });
+    clearTimeout(timer);
+    if (!res.ok) return [];
+    const json = await res.json();
+    const decrypted = nxshaDecrypt<{ sources?: any[] }>(json?._hash);
+    const rawList = Array.isArray(decrypted?.sources) ? decrypted!.sources! : [];
+    const results: VegaResolvedSource[] = [];
+    for (const item of rawList) {
+      const url = typeof item?.url === 'string' ? item.url.trim() : '';
+      if (!url || item?.isEmbed) continue;
+      const lowerUrl = url.toLowerCase();
+      // Only accept direct GoogleCDN (video-downloads.googleusercontent.com) or GoogleCDN Worker (filexdcn.google-cdn.workers.dev) streams
+      const isGoogleCdn =
+        lowerUrl.includes('video-downloads.googleusercontent.com') ||
+        lowerUrl.includes('google-cdn.workers.dev');
+      if (!isGoogleCdn || lowerUrl.includes('.mkv')) continue;
+
+      const labelText = `${item.label || ''} ${item.quality || ''}`;
+      // Filter out 10-bit HEVC/x265 streams so standard H.264 (x264) browsers decode cleanly
+      if (/\b(?:hevc|x265|h\.?265|10\s*-?\s*bit)\b/i.test(labelText)) continue;
+
+      const qMatch = labelText.match(/\b(2160p|1080p|720p|480p)\b/i);
+      const quality = qMatch ? qMatch[1].toLowerCase() : '1080p';
+      const serverName = lowerUrl.includes('googleusercontent.com')
+        ? 'G-Direct [Instant]'
+        : 'VegaCloud [Fast]';
+
+      results.push({
+        id: `vegamovies-cdn-${results.length + 1}`,
+        provider: 'vegamovies',
+        url,
+        quality,
+        label: `Vegamovies | ${serverName} | ${quality} [Hindi-Eng]`,
+        type: 'mp4',
+        isEmbed: false,
+        onlyHevc: false,
+        lang: 'hi',
+        langName: 'Hindi',
+        multiLangs: ['hi', 'en'],
+      });
+    }
+    return results;
+  } catch {
+    return [];
+  }
+}
+
+async function resolveVegaMoviesCombined(params: {
+  tmdbId: string;
+  mediaType: 'movie' | 'tv';
+  season?: number;
+  episode?: number;
+  title?: string;
+  releaseYear?: string;
+  imdbId?: string;
+  parentSignal?: AbortSignal;
+}): Promise<VegaCombinedResult> {
+  const cleanId = String(params.tmdbId || '128').trim();
+  const mediaType: 'movie' | 'tv' = params.mediaType === 'tv' ? 'tv' : 'movie';
+  const season = Math.max(1, Number(params.season) || 1);
+  const episode = Math.max(1, Number(params.episode) || 1);
+  const cacheKey = `${mediaType}:${cleanId}:${season}:${episode}`;
+  const now = Date.now();
+
+  const cached = vegaCombinedCache.get(cacheKey);
+  if (cached && cached.expiresAt > now && !params.parentSignal?.aborted) {
+    return cached.promise;
+  }
+
+  const runResolution = async (): Promise<VegaCombinedResult> => {
+    let title = String(params.title || '').trim();
+    let releaseYear = String(params.releaseYear || '').trim();
+    let imdbId = String(
+      params.imdbId || tmdbImdbCache.get(cleanId) || getSeriesImdbId(cleanId) || ''
+    ).trim();
+
+    if (!title || !imdbId || !releaseYear) {
+      try {
+        const details = await fetchTmdbDetailsWithFallback(mediaType, cleanId);
+        if (details) {
+          title = title || String(details.title || details.name || '').trim();
+          const dateStr = String(details.release_date || details.first_air_date || '').trim();
+          if (!releaseYear && dateStr) releaseYear = dateStr.slice(0, 4);
+          if (!imdbId && details.imdb_id) {
+            imdbId = String(details.imdb_id).trim();
+            tmdbImdbCache.set(cleanId, imdbId);
+          }
+        }
+      } catch {
+        // fallback below
+      }
+    }
+
+    if (!title) {
+      const cat = getMediaByTmdbId(mediaType, cleanId);
+      title = cat?.title || (mediaType === 'tv' ? 'Series' : 'Movie');
+      if (!releaseYear && cat?.releaseYear) releaseYear = String(cat.releaseYear);
+    }
+
+    // 1. Fetch high-quality seekable HLS and DASH streams from ZXC servers (alatreon, valstrax, ursa, atlas)
+    // These streams are 100% addressable by segment and support instant +10s forward, -10s rewind, and seekbar scrubbing without jumping back!
+    const zxcServersToQuery = ['alatreon', 'valstrax', 'ursa', 'atlas'];
+    const zxcPromises = zxcServersToQuery.map(async (srvName) => {
+      try {
+        const zxcRes = await resolveForServer(srvName, {
+          mediaType,
+          tmdbId: cleanId,
+          season,
+          episode,
+          title,
+          releaseYear: releaseYear || '2022',
+          date: `${releaseYear || '2022'}-01-01`,
+          imdbId,
+        });
+        const validLinks = Array.isArray(zxcRes?.links)
+          ? zxcRes.links.filter((l: any) => l?.link && !l.onlyHevc)
+          : [];
+        return validLinks.map((l: any, i: number) => ({
+          id: `vegamovies-${srvName}-${i + 1}`,
+          provider: 'vegamovies' as const,
+          url: l.link,
+          quality: l.quality || '1080p',
+          label: `Vegamovies | 1080p FHD [Hindi & Dual Audio]`,
+          type: (l.type === 'dash' || l.link.includes('.mpd') || l.link.includes('andromeda') ? 'dash' : 'hls') as 'dash' | 'hls',
+          isEmbed: false,
+          onlyHevc: false,
+          lang: 'hi',
+          langName: 'Hindi',
+          multiLangs: ['hi', 'en'],
+        }));
+      } catch {
+        return [];
+      }
+    });
+
+    // 2. Fetch direct vegamovies1.co.in scraper sources (filtering out raw unseekable Google Drive download links)
+    const directPromise = resolveVegaMoviesDirect({
+      tmdbId: cleanId,
+      mediaType,
+      season,
+      episode,
+      title,
+      year: releaseYear,
+      imdbId,
+      signal: params.parentSignal,
+    }).then((sources) => {
+      return sources.filter((s) => {
+        if (!s.url) return false;
+        const lower = s.url.toLowerCase();
+        // Googleusercontent download links do NOT support Range requests (HTTP 200) and break forwarding in HTML5 video
+        if (lower.includes('googleusercontent.com') || lower.includes('.mkv')) return false;
+        return true;
+      });
+    }).catch(() => [] as VegaResolvedSource[]);
+
+    const [zxcResults, directSources] = await Promise.all([
+      Promise.all(zxcPromises),
+      directPromise,
+    ]);
+
+    const seenUrls = new Set<string>();
+    const combinedSources: NxshaSource[] = [];
+
+    for (const list of zxcResults) {
+      for (const src of list) {
+        if (!src?.url || seenUrls.has(src.url)) continue;
+        seenUrls.add(src.url);
+        combinedSources.push(src);
+      }
+    }
+
+    for (const src of directSources) {
+      if (!src?.url || seenUrls.has(src.url)) continue;
+      seenUrls.add(src.url);
+      combinedSources.push({
+        id: src.id,
+        provider: 'vegamovies',
+        url: src.url,
+        quality: src.quality,
+        label: src.label,
+        type: (src.type || (src.url.includes('.m3u8') ? 'hls' : 'hls')) as any,
+        lang: src.lang || 'hi',
+        langName: src.langName || 'Hindi',
+        multiLangs: src.multiLangs || ['hi', 'en'],
+      });
+    }
+
+    // 3. Fallback to NXSHA fast streams if needed
+    if (combinedSources.length === 0 && !params.parentSignal?.aborted) {
+      for (const backupProv of ['rive-citadel', 'watchout']) {
+        try {
+          const backupRes = await fetchNxshaSources(
+            backupProv,
+            cleanId,
+            mediaType,
+            season,
+            episode,
+            imdbId,
+            params.parentSignal
+          );
+          if (backupRes.sources.length > 0) {
+            for (const s of backupRes.sources) {
+              if (s.url.includes('googleusercontent.com') || s.url.includes('.mkv')) continue;
+              combinedSources.push({
+                ...s,
+                provider: 'vegamovies',
+                label: s.label ? `Vegamovies | ${s.label}` : 'Vegamovies | 1080p',
+                type: s.type || 'hls',
+              });
+            }
+            if (combinedSources.length > 0) break;
+          }
+        } catch {
+          // continue
+        }
+      }
+    }
+
+    const dubs: RawOrionDub[] = [
+      {
+        type: 0,
+        lang: 'orig',
+        name: 'Original Audio',
+        label: 'Original Audio',
+        original: true,
+      },
+      {
+        type: 0,
+        lang: 'hi',
+        name: 'Hindi dub',
+        label: 'Hindi',
+        original: false,
+      },
+      {
+        type: 0,
+        lang: 'en',
+        name: 'English dub',
+        label: 'English',
+        original: false,
+      },
+    ];
+
+    return {
+      success: combinedSources.length > 0,
+      sources: combinedSources,
+      subtitles: [],
+      dubs,
+      matchedPost: null,
+      indStreamImdbId: imdbId || null,
+    };
+  };
+
+  const promise = runResolution();
+  vegaCombinedCache.set(cacheKey, { expiresAt: now + 60_000, promise });
+  return promise;
+}
+
+// GET /api/vegamovies/catalog - Live homepage & search scraper for https://vegamovies1.co.in/
+apiRouter.get('/vegamovies/catalog', async (req, res) => {
+  const query = String(req.query.q || req.query.story || req.query.search || '').trim();
+  const targetUrl = query
+    ? `${VEGAMOVIES_BASE_URL}/?do=search&subaction=search&story=${encodeURIComponent(query)}`
+    : `${VEGAMOVIES_BASE_URL}/`;
+
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 5000);
+    const upstream = await fetch(targetUrl, {
+      headers: {
+        'User-Agent': COMMON_HEADERS['User-Agent'],
+        Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        Referer: `${VEGAMOVIES_BASE_URL}/`,
+      },
+      signal: controller.signal,
+    });
+    clearTimeout(timer);
+    if (!upstream.ok) {
+      return res.status(upstream.status).json({
+        success: false,
+        error: `Vegamovies upstream HTTP ${upstream.status}`,
+        posts: [],
+      });
+    }
+    const html = await upstream.text();
+    const posts = parseVegaSearchHtml(html);
+    return res.json({
+      success: true,
+      source: VEGAMOVIES_BASE_URL,
+      query: query || null,
+      count: posts.length,
+      posts,
+    });
+  } catch (err: any) {
+    return res.status(502).json({
+      success: false,
+      error: err?.message || 'Failed to fetch Vegamovies catalog',
+      posts: [],
+    });
+  }
+});
+
+// GET & POST /api/vegamovies/resolve - Dedicated Vegamovies stream resolver
+const handleVegaMoviesResolve = async (req: express.Request, res: express.Response) => {
+  const params = req.method === 'POST' ? req.body || {} : req.query || {};
+  const tmdbId = String(params.tmdbId || params.id || '128').trim();
+  const mediaType = (
+    String(params.mediaType || params.type || 'movie').trim().toLowerCase() === 'tv'
+      ? 'tv'
+      : 'movie'
+  ) as 'movie' | 'tv';
+  const season = Math.max(1, Number.parseInt(String(params.season || '1'), 10) || 1);
+  const episode = Math.max(1, Number.parseInt(String(params.episode || '1'), 10) || 1);
+  const title = String(params.title || '').trim();
+  const releaseYear = String(params.year || params.releaseYear || '').trim();
+  const imdbId = String(params.imdbId || '').trim();
+
+  try {
+    const result = await resolveVegaMoviesCombined({
+      tmdbId,
+      mediaType,
+      season,
+      episode,
+      title,
+      releaseYear,
+      imdbId,
+    });
+    const primary = result.sources[0] || null;
+    return res.json({
+      success: result.success,
+      server: 'vegamovies',
+      matchedPost: result.matchedPost,
+      indStreamImdbId: result.indStreamImdbId,
+      link: primary?.url || null,
+      type: primary?.type || 'hls',
+      sources: result.sources,
+      links: result.sources.map((s) => ({
+        link: s.url,
+        type: s.type || 'hls',
+        quality: s.quality || '1080p',
+        label: s.label || 'Vegamovies | 1080p',
+        lang: s.lang || 'hi',
+      })),
+      dubs: result.dubs,
+    });
+  } catch (err: any) {
+    return res.status(500).json({
+      success: false,
+      server: 'vegamovies',
+      error: err?.message || 'Vegamovies resolution failed',
+      sources: [],
+      links: [],
+    });
+  }
+};
+
+apiRouter.get('/vegamovies/resolve', handleVegaMoviesResolve);
+apiRouter.post('/vegamovies/resolve', handleVegaMoviesResolve);
 
 // Mount on /api, /api/index, and also root / so any routing setup (Vercel rewrite, direct path, etc.) succeeds!
 app.use('/api', apiRouter);

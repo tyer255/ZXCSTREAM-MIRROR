@@ -94,31 +94,39 @@ export const STREAM_SERVERS = [
   {
     id: 2,
     number: 3,
-    name: 'Atlas III',
+    name: 'Vegamovies III',
+    badge: 'Hindi & Dual Audio',
+    quality: '1080p FHD',
+    latencyMs: 48,
+  },
+  {
+    id: 3,
+    number: 4,
+    name: 'Atlas IV',
     badge: 'Fast & Stable',
     quality: '4K UHD',
     latencyMs: 36,
   },
   {
-    id: 3,
-    number: 4,
-    name: 'Ursa IV',
+    id: 4,
+    number: 5,
+    name: 'Ursa V',
     badge: 'Alternative',
     quality: '1080p FHD',
     latencyMs: 74,
   },
   {
-    id: 4,
-    number: 5,
-    name: 'Alatreon V',
+    id: 5,
+    number: 6,
+    name: 'Alatreon VI',
     badge: 'Extensive Movie & TV Library',
     quality: '1080p FHD',
     latencyMs: 65,
   },
   {
-    id: 5,
-    number: 6,
-    name: 'Daedalus VI',
+    id: 6,
+    number: 7,
+    name: 'Daedalus VII',
     badge: 'Alternative',
     quality: '720p HD',
     latencyMs: 89,
@@ -243,10 +251,11 @@ export function calculateStarRating(voteAverage?: number | null): number {
 export const PLAYER_SERVERS = [
   { index: 0, id: 'orion', label: 'Orion I' },
   { index: 1, id: 'valstrax', label: 'Valstrax II' },
-  { index: 2, id: 'atlas', label: 'Atlas III' },
-  { index: 3, id: 'ursa', label: 'Ursa IV' },
-  { index: 4, id: 'alatreon', label: 'Alatreon V' },
-  { index: 5, id: 'daedalus', label: 'Daedalus VI' },
+  { index: 2, id: 'vegamovies', label: 'Vegamovies III' },
+  { index: 3, id: 'atlas', label: 'Atlas IV' },
+  { index: 4, id: 'ursa', label: 'Ursa V' },
+  { index: 5, id: 'alatreon', label: 'Alatreon VI' },
+  { index: 6, id: 'daedalus', label: 'Daedalus VII' },
 ] as const;
 
 export const NXSHA_SERVERS = [
@@ -259,6 +268,38 @@ export const NXSHA_SERVERS = [
   { index: 6, id: 'purstream', label: 'PurStream (Fast)' },
   { index: 7, id: 'vixolity', label: 'Vixolity (UHD)' },
   { index: 8, id: 'rive-primevids', label: 'PrimeVids (Backup)' },
+  { index: 9, id: 'vegamovies', label: 'Vegamovies (Hindi & Dual)' },
+  { index: 10, id: 'orion', label: 'AethoOrion (Multi-Audio Master)' },
+  { index: 11, id: 'vega', label: 'AethoVega (Direct HLS Master)' },
+  { index: 12, id: 'callisto', label: 'AethoCallisto (16-Lang Global & Hindi)' },
+  { index: 13, id: 'sirius', label: 'AethoSirius (Ultra-Fast Hindi/EN)' },
+  { index: 14, id: 'bharat', label: 'AethoBharat (Hindi & South Multi-Audio)' },
+  { index: 15, id: 'indus', label: 'AethoIndus (India Edge HLS)' },
+  { index: 16, id: 'bolly', label: 'AethoBolly (Dual-Audio Hindi)' },
+  { index: 17, id: 'kuro', label: 'AethoKuro (Anime & Series Multi-Audio)' },
+  { index: 18, id: 'quantum', label: 'AethoQuantum (Adaptive Master HLS)' },
+  { index: 19, id: 'rousav', label: 'AethoRousav (22-Lang Multi-Track)' },
+  { index: 20, id: 'atlas', label: 'AethoAtlas (Fast Edge H.264)' },
+  { index: 21, id: 'ursa', label: 'AethoUrsa (Low-Latency Edge)' },
+  { index: 22, id: 'andromeda', label: 'AethoAndromeda (Ultra HD Stream)' },
+  { index: 23, id: 'valstrax', label: 'AethoValstrax (High-Bitrate 1080p)' },
+  { index: 24, id: 'alatreon', label: 'AethoAlatreon (Extended Library)' },
+  { index: 25, id: 'resshin', label: 'AethoResshin (Multi-Res & Hindi Dub)' },
+  { index: 26, id: 'centaurus', label: 'AethoCentaurus (Multi-Res 1080p)' },
+  { index: 27, id: 'daedalus', label: 'AethoDaedalus (Global CDN Mirror)' },
+  { index: 28, id: 'quasar', label: 'AethoQuasar (High-Speed India/Asia)' },
+  { index: 29, id: 'zenith', label: 'AethoZenith (Multi-Lang Cinema Bridge)' },
+  { index: 30, id: 'nebula', label: 'AethoNebula (Dual-Audio Express)' },
+  { index: 31, id: 'zxc_pulse', label: 'AethoPulse (Secondary Multi-Audio)' },
+  { index: 32, id: 'zxc_atlas', label: 'AethoVortex (Fast Edge Cluster)' },
+  { index: 33, id: 'zxc_ursa', label: 'AethoApex (Global Backup HLS)' },
+  { index: 34, id: 'hyperion', label: 'AethoHyperion (Cloud Fabric 1080p)' },
+  { index: 35, id: 'vidfast', label: 'AethoFlash (Instant Start Cluster)' },
+  { index: 36, id: 'vaplayer', label: 'AethoPrism (European Edge Node)' },
+  { index: 37, id: 'kronos', label: 'AethoKronos (Multi-CDN Stream)' },
+  { index: 38, id: 'pegasus', label: 'AethoPegasus (Zero-Buffer Hindi/EN)' },
+  { index: 39, id: 'nova', label: 'AethoNova (Cinema 1080p Multi-Audio)' },
+  { index: 40, id: 'apollo', label: 'AethoApollo (Universal Failover)' },
 ] as const;
 
 export const PLAYER_HINTS = [
@@ -312,7 +353,7 @@ export function parsePlayerQueryParams(search: string): ParsedPlayerQuery {
   let server: number | undefined;
   if (rawServer !== null && rawServer.trim() !== '') {
     const parsed = Number.parseInt(rawServer, 10);
-    if (!Number.isNaN(parsed) && parsed >= 0 && parsed <= 10) {
+    if (!Number.isNaN(parsed) && parsed >= 0 && parsed <= 50) {
       server = parsed;
     }
   }

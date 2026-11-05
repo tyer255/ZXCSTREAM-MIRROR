@@ -397,6 +397,7 @@ const SERVER_SUBTITLES: Record<string, string> = {
   ursa: 'Alternative',
   alatreon: 'Extensive Movie & TV Library',
   daedalus: 'Alternative',
+  vegamovies: 'Hindi & Dual Audio',
   'rive-citadel': 'Hindi & Multi Audio',
   castle: 'Multi-Language HLS',
   watchout: 'Fast HLS',
@@ -406,6 +407,31 @@ const SERVER_SUBTITLES: Record<string, string> = {
   purstream: 'Fast Multi-Audio',
   vixolity: 'UHD Direct',
   'rive-primevids': 'Backup Mirror',
+  vega: 'Hindi / Tamil / Telugu / English Direct HLS Master',
+  callisto: '16-Language Global & Hindi Bridge • 1080p',
+  sirius: 'Ultra-Fast Direct HLS Master • Hindi / EN (1080p)',
+  bharat: 'Dedicated Hindi & South Indian Multi-Audio Node',
+  indus: 'India Edge • Hindi, Tamil, Telugu & English HLS',
+  bolly: 'Bollywood & Hollywood Dual-Audio Hindi Server',
+  kuro: 'Anime & Series Multi-Audio (Hindi / Sub / Dub)',
+  quantum: 'Adaptive 1080p/720p/360p Master HLS',
+  rousav: '22-Language Multi-Track HLS + Embedded Subs',
+  andromeda: 'Smooth Playback & Ultra HD Stream',
+  resshin: 'Multi-Resolution & Hindi Dub Stream',
+  centaurus: 'Multi-Resolution 1080p/720p/480p Stream',
+  quasar: 'High-Speed India & Asia CDN Node',
+  zenith: 'Multi-Language 1080p Cinema Bridge',
+  nebula: 'Dual-Audio Hindi/English Express Node',
+  zxc_pulse: 'Secondary Multi-Audio Cluster',
+  zxc_atlas: 'Fast Edge HLS Cluster',
+  zxc_ursa: 'Global Backup HLS Node',
+  hyperion: 'Cloud Fabric 1080p Node',
+  vidfast: 'Ultra-Fast Instant Start Cluster',
+  vaplayer: 'European Edge Cinema Node',
+  kronos: 'Multi-CDN Aggregated Stream',
+  pegasus: 'Zero-Buffer Adaptive HLS (Hindi/EN)',
+  nova: 'High-Contrast Cinema 1080p Multi-Audio',
+  apollo: 'Universal Failover Stream Node',
 };
 
 export const PlayerServerCarousel: React.FC<{
@@ -415,17 +441,28 @@ export const PlayerServerCarousel: React.FC<{
   onClose: () => void;
   onSelectServer: (index: number) => void;
 }> = ({ canPlay, servers, currentServerIndex, onClose, onSelectServer }) => {
+  const containerRef = useRef<HTMLDivElement | null>(null);
   const itemRefs = useRef<Map<number, HTMLDivElement | null>>(new Map());
 
   // Show all servers so the original server list is preserved with its distinct status badges and subtitles
   const visibleServers = servers;
 
-  // Keep the selected server centered smoothly inside the scrollable container when selection changes
+  // Keep the selected server centered smoothly STRICTLY inside the server scroll container.
+  // NEVER call native window-level scrollIntoView which causes the browser window to scroll and shifts the movie player view in portrait mode!
   useEffect(() => {
+    const container = containerRef.current;
     const selectedEl = itemRefs.current.get(currentServerIndex);
-    if (selectedEl && typeof selectedEl.scrollIntoView === 'function') {
+    if (container && selectedEl) {
       try {
-        selectedEl.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        const containerRect = container.getBoundingClientRect();
+        const elRect = selectedEl.getBoundingClientRect();
+        const currentScrollTop = container.scrollTop;
+        const elOffsetTop = elRect.top - containerRect.top + currentScrollTop;
+        const targetScrollTop = elOffsetTop - (container.clientHeight / 2) + (selectedEl.clientHeight / 2);
+        container.scrollTo({
+          top: Math.max(0, targetScrollTop),
+          behavior: 'smooth',
+        });
       } catch {
         // ignore in headless/older browsers
       }
@@ -445,6 +482,7 @@ export const PlayerServerCarousel: React.FC<{
       }`}
     >
       <div
+        ref={containerRef}
         data-testid="zxc-server-scroll-container"
         onClick={(e) => e.stopPropagation()}
         className="relative max-h-[85vh] w-auto min-w-[240px] max-w-sm sm:max-w-md overflow-y-auto overscroll-contain scroll-smooth pointer-events-auto px-4 sm:px-6 lg:px-8 py-8 sm:py-12 my-auto mr-2 sm:mr-6 lg:mr-12 flex flex-col no-scrollbar"

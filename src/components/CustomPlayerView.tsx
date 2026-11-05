@@ -1255,7 +1255,43 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
         const nxshaQuals = extractNxshaQualitiesForDub(validSources, loadedStreamDubRef.current);
         setQualities(nxshaQuals);
         videoEl.src = streamUrl;
-        if (autoplay) videoEl.play().catch(() => {});
+        if (resumeFromServerSwitch > 0.5) {
+          const onLoadedMeta = () => {
+            videoEl.removeEventListener('loadedmetadata', onLoadedMeta);
+            if (Math.abs(videoEl.currentTime - resumeFromServerSwitch) > 1) {
+              try {
+                videoEl.currentTime = resumeFromServerSwitch;
+              } catch {
+                // ignore
+              }
+            }
+          };
+          videoEl.addEventListener('loadedmetadata', onLoadedMeta);
+        }
+        const onDirectError = () => {
+          videoEl.removeEventListener('error', onDirectError);
+          if (
+            !machine.isCurrentSession(sessionId) ||
+            machine.getSelectedProviderCode(sessionId) !== providerCode
+          ) {
+            return;
+          }
+          handleNxshaPlaybackFailureRef.current(
+            sessionId,
+            providerCode,
+            meta,
+            dubCodeToUse,
+            'Direct MP4 playback error'
+          );
+        };
+        videoEl.addEventListener('error', onDirectError, { once: true });
+        if (autoplay) {
+          videoEl.play().catch(() => {
+            videoEl.muted = true;
+            setMuted(true);
+            videoEl.play().catch(() => {});
+          });
+        }
       }
     },
     [autoplay, cleanupMediaEngines, createMpegTsAudioSelectingLoader]
@@ -1452,134 +1488,52 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
         })
         .catch(() => {});
 
-      // Launch discovery requests concurrently across all eligible NXSHA providers
-      for (const srv of orderedServers) {
+      // Launch discovery requests across all eligible NXSHA providers with a bounded concurrency pool (max 4 concurrent requests)
+      // so the winning server starts immediately and background server probing never starves video segment requests.
+      const runSingleServerDiscovery = async (srv: (typeof orderedServers)[number]) => {
         const reqId = requestIdsByProvider.get(srv.id);
-        if (!reqId) continue;
+        if (!reqId || !machine.isCurrentSession(sessionId)) return;
 
         const ctrl = new AbortController();
         nxshaProviderControllersRef.current.set(srv.id, ctrl);
 
-        void (async () => {
-          try {
-            const res = await fetch('/api/nxsha/resolve', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              signal: ctrl.signal,
-              body: JSON.stringify({
-                tmdbId: String(meta.id),
-                mediaType: meta.mediaType,
-                season: meta.mediaType === 'tv' ? currentSeason : 1,
-                episode: meta.mediaType === 'tv' ? currentEpisode : 1,
-                preferredServer: srv.id,
-                strictSingleServer: true,
-                allowFallback: false,
-                excludeServers: machine.getFailedProviderCodes(sessionId),
-                imdbId: meta.imdbId,
-                dubCode: dubCodeToUse,
-                dubLang: dubCodeToUse,
-              }),
-            });
+        try {
+          const res = await fetch('/api/nxsha/resolve', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            signal: ctrl.signal,
+            body: JSON.stringify({
+              tmdbId: String(meta.id),
+              mediaType: meta.mediaType,
+              season: meta.mediaType === 'tv' ? currentSeason : 1,
+              episode: meta.mediaType === 'tv' ? currentEpisode : 1,
+              preferredServer: srv.id,
+              strictSingleServer: true,
+              allowFallback: false,
+              excludeServers: machine.getFailedProviderCodes(sessionId),
+              imdbId: meta.imdbId,
+              dubCode: dubCodeToUse,
+              dubLang: dubCodeToUse,
+            }),
+          });
 
-            if (!machine.isCurrentSession(sessionId)) return;
-            const data = await res.json().catch(() => null);
-            if (!machine.isCurrentSession(sessionId)) return;
+          if (!machine.isCurrentSession(sessionId)) return;
+          const data = await res.json().catch(() => null);
+          if (!machine.isCurrentSession(sessionId)) return;
 
-            if (Array.isArray(data?.dubs) && data.dubs.length > 0) {
-              setAvailableDubs((prev) => mergeAvailableDubs(prev, data.dubs));
-            }
-            if (Array.isArray(data?.subtitles) && data.subtitles.length > 0) {
-              setSubtitles((prev) => normalizeSubtitleTracks(prev, data.subtitles));
-            }
+          if (Array.isArray(data?.dubs) && data.dubs.length > 0) {
+            setAvailableDubs((prev) => mergeAvailableDubs(prev, data.dubs));
+          }
+          if (Array.isArray(data?.subtitles) && data.subtitles.length > 0) {
+            setSubtitles((prev) => normalizeSubtitleTracks(prev, data.subtitles));
+          }
 
-            const rawSources = Array.isArray(data?.sources) ? data.sources : [];
-            if (!res.ok || !data?.success || rawSources.length === 0) {
-              const failRes = machine.markProviderFailed(
-                sessionId,
-                srv.id,
-                data?.error || 'No valid playable sources',
-                { requestId: reqId }
-              );
-              syncNxshaStateMachineToUi(sessionId);
-
-              if (failRes.wasSelected) {
-                handleNxshaPlaybackFailure(
-                  sessionId,
-                  srv.id,
-                  meta,
-                  dubCodeToUse,
-                  'Selected provider returned no valid sources'
-                );
-              } else if (machine.getVisibleServers(sessionId).length === 0) {
-                void runNxshaVerifiedFallback(sessionId, meta, dubCodeToUse);
-              }
-              return;
-            }
-
-            const successRes = machine.resolveProviderSuccess(
-              sessionId,
-              srv.id,
-              {
-                sources: rawSources,
-                subtitles: data.subtitles,
-                dubs: data.dubs,
-              },
-              { requestId: reqId, autoSelectIfNoWinner: true }
-            );
-            syncNxshaStateMachineToUi(sessionId);
-
-            if (!successRes.applied) return;
-
-            if (successRes.state === 'FAILED') {
-              if (machine.getVisibleServers(sessionId).length === 0) {
-                void runNxshaVerifiedFallback(sessionId, meta, dubCodeToUse);
-              }
-              return;
-            }
-
-            if (
-              successRes.becameSelected &&
-              successRes.state === 'SELECTED' &&
-              currentPlayingProviderRef.current !== srv.id
-            ) {
-              if (!recordedFirstWinnerTime) {
-                recordedFirstWinnerTime = true;
-                const elapsedMs = Number(
-                  Math.max(
-                    0,
-                    (typeof performance !== 'undefined' && performance.now
-                      ? performance.now()
-                      : Date.now()) - sessionStartMs
-                  ).toFixed(2)
-                );
-                const diag: NxshaDiscoveryDiagnostics = {
-                  discoveryStartTimeMs: Number(sessionStartMs.toFixed(2)),
-                  timeToFirstValidSourceMs:
-                    data?.diagnostics?.timeToFirstValidSourceMs ?? elapsedMs,
-                  totalDiscoveryDurationMs: elapsedMs,
-                  winningProvider: srv.id,
-                  totalProvidersQueried: orderedServers.length,
-                  totalFailedProviders: machine.getFailedProviderCodes(sessionId).length,
-                  cancelledProvidersCount: 0,
-                  lateIgnoredCount: 0,
-                  providerTimings: data?.diagnostics?.providerTimings || [],
-                };
-                setNxshaDiagnostics(diag);
-                if (typeof window !== 'undefined') {
-                  (window as any).__NXSHA_LAST_DIAGNOSTICS__ = diag;
-                }
-              }
-
-              attachNxshaPlayback(sessionId, srv.id, successRes.validSources, dubCodeToUse, meta);
-            }
-          } catch {
-            if (!machine.isCurrentSession(sessionId)) return;
-            if (ctrl.signal.aborted) return;
-
+          const rawSources = Array.isArray(data?.sources) ? data.sources : [];
+          if (!res.ok || !data?.success || rawSources.length === 0) {
             const failRes = machine.markProviderFailed(
               sessionId,
               srv.id,
-              'Network request failed',
+              data?.error || 'No valid playable sources',
               { requestId: reqId }
             );
             syncNxshaStateMachineToUi(sessionId);
@@ -1590,13 +1544,110 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
                 srv.id,
                 meta,
                 dubCodeToUse,
-                'Selected provider network request failed'
+                'Selected provider returned no valid sources'
               );
             } else if (machine.getVisibleServers(sessionId).length === 0) {
               void runNxshaVerifiedFallback(sessionId, meta, dubCodeToUse);
             }
+            return;
           }
-        })();
+
+          const successRes = machine.resolveProviderSuccess(
+            sessionId,
+            srv.id,
+            {
+              sources: rawSources,
+              subtitles: data.subtitles,
+              dubs: data.dubs,
+            },
+            { requestId: reqId, autoSelectIfNoWinner: true }
+          );
+          syncNxshaStateMachineToUi(sessionId);
+
+          if (!successRes.applied) return;
+
+          if (successRes.state === 'FAILED') {
+            if (machine.getVisibleServers(sessionId).length === 0) {
+              void runNxshaVerifiedFallback(sessionId, meta, dubCodeToUse);
+            }
+            return;
+          }
+
+          if (
+            successRes.becameSelected &&
+            successRes.state === 'SELECTED' &&
+            currentPlayingProviderRef.current !== srv.id
+          ) {
+            if (!recordedFirstWinnerTime) {
+              recordedFirstWinnerTime = true;
+              const elapsedMs = Number(
+                Math.max(
+                  0,
+                  (typeof performance !== 'undefined' && performance.now
+                    ? performance.now()
+                    : Date.now()) - sessionStartMs
+                ).toFixed(2)
+              );
+              const diag: NxshaDiscoveryDiagnostics = {
+                discoveryStartTimeMs: Number(sessionStartMs.toFixed(2)),
+                timeToFirstValidSourceMs:
+                  data?.diagnostics?.timeToFirstValidSourceMs ?? elapsedMs,
+                totalDiscoveryDurationMs: elapsedMs,
+                winningProvider: srv.id,
+                totalProvidersQueried: orderedServers.length,
+                totalFailedProviders: machine.getFailedProviderCodes(sessionId).length,
+                cancelledProvidersCount: 0,
+                lateIgnoredCount: 0,
+                providerTimings: data?.diagnostics?.providerTimings || [],
+              };
+              setNxshaDiagnostics(diag);
+              if (typeof window !== 'undefined') {
+                (window as any).__NXSHA_LAST_DIAGNOSTICS__ = diag;
+              }
+            }
+
+            attachNxshaPlayback(sessionId, srv.id, successRes.validSources, dubCodeToUse, meta);
+          }
+        } catch {
+          if (!machine.isCurrentSession(sessionId)) return;
+          if (ctrl.signal.aborted) return;
+
+          const failRes = machine.markProviderFailed(
+            sessionId,
+            srv.id,
+            'Network request failed',
+            { requestId: reqId }
+          );
+          syncNxshaStateMachineToUi(sessionId);
+
+          if (failRes.wasSelected) {
+            handleNxshaPlaybackFailure(
+              sessionId,
+              srv.id,
+              meta,
+              dubCodeToUse,
+              'Selected provider network request failed'
+            );
+          } else if (machine.getVisibleServers(sessionId).length === 0) {
+            void runNxshaVerifiedFallback(sessionId, meta, dubCodeToUse);
+          }
+        }
+      };
+
+      let cursor = 0;
+      const CONCURRENCY_LIMIT = 4;
+      const runDiscoveryWorker = async () => {
+        while (cursor < orderedServers.length && machine.isCurrentSession(sessionId)) {
+          const nextIdx = cursor++;
+          const srv = orderedServers[nextIdx];
+          if (srv) {
+            await runSingleServerDiscovery(srv);
+          }
+        }
+      };
+
+      for (let w = 0; w < Math.min(CONCURRENCY_LIMIT, orderedServers.length); w++) {
+        void runDiscoveryWorker();
       }
     },
     [
@@ -1694,7 +1745,7 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
 
         connectWatchdogTimerRef.current = window.setTimeout(() => {
           if (probeRunIdRef.current !== runId) return;
-          if (!videoRef.current || videoRef.current.readyState < 2) {
+          if (!videoRef.current || (videoRef.current.readyState < 1 && !hasEstablishedPlaybackRef.current)) {
             advanceToNextServer();
           }
         }, 14000);
@@ -1808,8 +1859,18 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
           }
         } else {
           videoEl.src = streamUrl;
+          const onDirectError = () => {
+            videoEl.removeEventListener('error', onDirectError);
+            if (probeRunIdRef.current !== runId) return;
+            advanceToNextServer();
+          };
+          videoEl.addEventListener('error', onDirectError, { once: true });
           if (autoplay) {
-            videoEl.play().catch(() => {});
+            videoEl.play().catch(() => {
+              videoEl.muted = true;
+              setMuted(true);
+              videoEl.play().catch(() => {});
+            });
           }
         }
       } catch {
@@ -2159,12 +2220,99 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
             metadata
           );
         } else {
-          // Server is currently PROCESSING in-flight; wait for its active request to complete without sending a duplicate request
+          // Immediately fetch the user-selected server directly so it starts playing without waiting behind the concurrency queue!
           cleanupMediaEngines();
           currentPlayingProviderRef.current = null;
           hasEstablishedPlaybackRef.current = false;
           setCanPlay(false);
           setPlaying(false);
+
+          const immediateCtrl = new AbortController();
+          const existingCtrl = nxshaProviderControllersRef.current.get(targetDef.id);
+          if (existingCtrl) existingCtrl.abort();
+          nxshaProviderControllersRef.current.set(targetDef.id, immediateCtrl);
+
+          void (async () => {
+            try {
+              const res = await fetch('/api/nxsha/resolve', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                signal: immediateCtrl.signal,
+                body: JSON.stringify({
+                  tmdbId: String(metadata.id),
+                  mediaType: metadata.mediaType,
+                  season: metadata.mediaType === 'tv' ? currentSeason : 1,
+                  episode: metadata.mediaType === 'tv' ? currentEpisode : 1,
+                  preferredServer: targetDef.id,
+                  strictSingleServer: true,
+                  allowFallback: false,
+                  imdbId: metadata.imdbId,
+                  dubCode: selectedDub,
+                  dubLang: selectedDub,
+                }),
+              });
+
+              if (!machine.isCurrentSession(sessionId)) return;
+              const data = await res.json().catch(() => null);
+              if (!machine.isCurrentSession(sessionId)) return;
+
+              const rawSources = Array.isArray(data?.sources) ? data.sources : [];
+              if (!res.ok || !data?.success || rawSources.length === 0) {
+                machine.markProviderFailed(
+                  sessionId,
+                  targetDef.id,
+                  data?.error || 'No video found'
+                );
+                syncNxshaStateMachineToUi(sessionId);
+                handleNxshaPlaybackFailure(
+                  sessionId,
+                  targetDef.id,
+                  metadata,
+                  selectedDub,
+                  'Selected server returned no playable sources'
+                );
+                return;
+              }
+
+              const successRes = machine.resolveProviderSuccess(
+                sessionId,
+                targetDef.id,
+                {
+                  sources: rawSources,
+                  subtitles: data.subtitles,
+                  dubs: data.dubs,
+                },
+                { autoSelectIfNoWinner: false }
+              );
+              syncNxshaStateMachineToUi(sessionId);
+
+              if (machine.getSelectedProviderCode(sessionId) === targetDef.id && successRes.validSources.length > 0) {
+                attachNxshaPlayback(
+                  sessionId,
+                  targetDef.id,
+                  successRes.validSources,
+                  selectedDub,
+                  metadata
+                );
+              }
+            } catch {
+              if (!machine.isCurrentSession(sessionId)) return;
+              if (immediateCtrl.signal.aborted) return;
+              machine.markProviderFailed(
+                sessionId,
+                targetDef.id,
+                'Network request failed'
+              );
+              syncNxshaStateMachineToUi(sessionId);
+              handleNxshaPlaybackFailure(
+                sessionId,
+                targetDef.id,
+                metadata,
+                selectedDub,
+                'Selected server network request failed'
+              );
+            }
+          })();
         }
         return;
       }
@@ -3111,7 +3259,6 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
         ref={videoRef}
         data-testid="zxc-video-element"
         playsInline
-        crossOrigin="anonymous"
         onClick={(e) => {
           e.stopPropagation();
           if (settingsOpen) setSettingsOpen(false);
@@ -3202,7 +3349,20 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
           const v = e.currentTarget;
           if (v.duration && Number.isFinite(v.duration) && v.duration > 0) {
             setDuration(v.duration);
+            hasEstablishedPlaybackRef.current = true;
             setCanPlay(true);
+            setWaiting(false);
+            if (playerMode === 'nxsha') {
+              nxshaStateMachineRef.current.markPlaybackEstablished(
+                activeSessionIdRef.current,
+                currentPlayingProviderRef.current ||
+                  nxshaStateMachineRef.current.getSelectedProviderCode() ||
+                  ''
+              );
+              syncNxshaStateMachineToUi(activeSessionIdRef.current);
+            } else {
+              updateServerStatus(currentServerIndex, 'available');
+            }
           }
           const t = v.currentTime || 0;
           lastReportedTimeRef.current = t;
