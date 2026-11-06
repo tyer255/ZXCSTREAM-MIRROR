@@ -1,7 +1,43 @@
 import React, { useEffect, useRef } from 'react';
-import { Check, CheckCircle, Loader, LoaderCircle, X } from 'lucide-react';
+import { Check, CheckCircle, LayoutGrid, List, Loader, LoaderCircle, Play, Search, X } from 'lucide-react';
 import { MediaType, PLAYER_HINTS, PlayerMode } from '../utils/urlBuilder.js';
 import type { NxshaServerState } from '../utils/nxshaDiscovery.js';
+
+export const Rewind10Svg = () => (
+  <span className="elf-skip10-inner">
+    <svg
+      className="elf-skip10-chev"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.4"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="m11 17-5-5 5-5" />
+      <path d="m18 17-5-5 5-5" />
+    </svg>
+    <span className="elf-skip10-num">10</span>
+  </span>
+);
+
+export const Forward10Svg = () => (
+  <span className="elf-skip10-inner">
+    <span className="elf-skip10-num">10</span>
+    <svg
+      className="elf-skip10-chev"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.4"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="m6 17 5-5-5-5" />
+      <path d="m13 17 5-5-5-5" />
+    </svg>
+  </span>
+);
 
 export const BackSvg = () => (
   <svg width="32" height="32" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -163,24 +199,22 @@ export const ServerInboxSvg = () => (
 );
 
 export const EpisodesToggleSvg = () => (
-  <svg width="32" height="32" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-    <rect
-      x="3"
-      y="4"
-      width="14"
-      height="10"
-      rx="2"
-      stroke="white"
-      strokeWidth="2.2"
-      strokeLinejoin="round"
-    />
-    <path
-      d="M7 18H19C20.1 18 21 17.1 21 16V8"
-      stroke="white"
+  <>
+    <svg
+      className="elf-episodes-icon"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
       strokeWidth="2.2"
       strokeLinecap="round"
-    />
-  </svg>
+      strokeLinejoin="round"
+    >
+      <path className="elf-episodes-chevron" d="m7 10 5-5 5 5" />
+      <path d="M22 13v5a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-5" />
+      <path d="M2 13h6l2 3h4l2-3h6" />
+    </svg>
+    <span className="elf-episodes-label">Episodes</span>
+  </>
 );
 
 export const CastConnectedSvg = () => (
@@ -294,6 +328,8 @@ export interface TmdbMetadata {
   genres: string[];
   status: string;
   seasons: TmdbSeasonSummary[];
+  overview?: string;
+  rating?: number | string;
 }
 
 export interface EpisodeItem {
@@ -600,83 +636,337 @@ export const PlayerServerCarousel: React.FC<{
   );
 };
 
-export const PlayerEpisodeDrawer: React.FC<{
+export const PlayerEpisodeDrawer = React.memo<{
   loadingEpisodes: boolean;
   seasonEpisodes: EpisodeItem[];
   selectedSeasonForDrawer: number;
   currentSeason: number;
   currentEpisode: number;
+  seasons?: TmdbSeasonSummary[];
+  fallbackBackdropPath?: string | null;
   onClose: () => void;
   onSelectEpisode: (epNum: number) => void;
-}> = ({
-  loadingEpisodes,
-  seasonEpisodes,
-  selectedSeasonForDrawer,
-  currentSeason,
-  currentEpisode,
-  onClose,
-  onSelectEpisode,
-}) => (
-  <div
-    data-testid="zxc-episode-drawer"
-    onClick={onClose}
-    className="absolute inset-0 z-30 bg-black/60 flex justify-end"
-  >
-    <div
-      onClick={(e) => e.stopPropagation()}
-      className="w-80 lg:w-96 h-full bg-zinc-950/90 backdrop-blur-md border-l border-white/10 pt-16 pb-6 px-4 overflow-y-auto space-y-3"
-    >
-      {loadingEpisodes ? (
-        <div className="flex items-center justify-center h-40">
-          <Loader className="w-6 h-6 animate-spin text-zinc-400" />
-        </div>
-      ) : seasonEpisodes.length === 0 ? (
-        <p className="text-xs text-zinc-400 text-center py-8">No episodes found.</p>
-      ) : (
-        seasonEpisodes.map((ep) => {
-          const isActive =
-            selectedSeasonForDrawer === currentSeason && ep.episode_number === currentEpisode;
-          return (
+  onSelectSeason?: (seasonNum: number) => void;
+}>(
+  ({
+    loadingEpisodes,
+    seasonEpisodes,
+    selectedSeasonForDrawer,
+    currentSeason,
+    currentEpisode,
+    seasons = [],
+    fallbackBackdropPath = null,
+    onClose,
+    onSelectEpisode,
+    onSelectSeason,
+  }) => {
+    const listRef = useRef<HTMLDivElement | null>(null);
+    const itemRefs = useRef<Map<number, HTMLButtonElement | null>>(new Map());
+    const metricsRef = useRef<
+      Array<{
+        epNum: number;
+        el: HTMLButtonElement;
+        centerY: number;
+        isActive: boolean;
+        lastR: number;
+      }>
+    >([]);
+    const clientHeightRef = useRef<number>(0);
+    const rafRef = useRef<number | null>(null);
+    const lastCenteredKeyRef = useRef<string>('');
+
+    const activeSeasonList =
+      seasons.length > 0
+        ? seasons
+        : [{ season_number: 1, episode_count: seasonEpisodes.length || 12 }];
+
+    const resolvedFallbackBackdrop = React.useMemo(() => {
+      if (!fallbackBackdropPath) return '';
+      if (fallbackBackdropPath.startsWith('http') || fallbackBackdropPath.startsWith('data:')) {
+        return fallbackBackdropPath;
+      }
+      return `https://image.tmdb.org/t/p/w300${
+        fallbackBackdropPath.startsWith('/') ? fallbackBackdropPath : `/${fallbackBackdropPath}`
+      }`;
+    }, [fallbackBackdropPath]);
+
+    // Pure write pass during scroll: uses cached offsetTop/offsetHeight so there are ZERO DOM layout reads per item
+    const syncWheelCurve = React.useCallback((forceAll = false) => {
+      const listEl = listRef.current;
+      if (!listEl) return;
+      const clientH = clientHeightRef.current || listEl.clientHeight;
+      if (!clientH) return;
+
+      const scrollTop = listEl.scrollTop;
+      const viewCenter = scrollTop + clientH * 0.5;
+      const halfH = Math.max(120, clientH * 0.52);
+
+      const items = metricsRef.current;
+      for (let i = 0; i < items.length; i++) {
+        const item = items[i];
+        const distPx = Math.abs(item.centerY - viewCenter);
+        const r = Math.min(1, distPx / halfH);
+
+        if (!forceAll && r === 1 && item.lastR === 1) {
+          continue;
+        }
+        item.lastR = r;
+
+        const shiftX = r * r * 18;
+        const scale = item.isActive ? 1.02 - r * 0.08 : 1 - r * 0.14;
+        const opacity = item.isActive ? Math.max(0.75, 1 - r * 0.25) : Math.max(0.32, 1 - r * 0.64);
+
+        item.el.style.transform = `translate3d(${shiftX.toFixed(1)}px, 0, 0) scale(${scale.toFixed(3)})`;
+        item.el.style.opacity = opacity.toFixed(2);
+      }
+    }, []);
+
+    // Pure read pass: caches static offsetTop + offsetHeight once when list renders or resizes
+    const measureWheelMetrics = React.useCallback(() => {
+      const listEl = listRef.current;
+      if (!listEl) return;
+      clientHeightRef.current = listEl.clientHeight;
+      const nextMetrics: Array<{
+        epNum: number;
+        el: HTMLButtonElement;
+        centerY: number;
+        isActive: boolean;
+        lastR: number;
+      }> = [];
+
+      seasonEpisodes.forEach((ep) => {
+        const btn = itemRefs.current.get(ep.episode_number);
+        if (!btn) return;
+        const isActive =
+          selectedSeasonForDrawer === currentSeason && ep.episode_number === currentEpisode;
+        nextMetrics.push({
+          epNum: ep.episode_number,
+          el: btn,
+          centerY: btn.offsetTop + btn.offsetHeight * 0.5,
+          isActive,
+          lastR: -1,
+        });
+      });
+
+      metricsRef.current = nextMetrics;
+      syncWheelCurve(true);
+    }, [seasonEpisodes, selectedSeasonForDrawer, currentSeason, currentEpisode, syncWheelCurve]);
+
+    const handleWheelScroll = React.useCallback(() => {
+      if (rafRef.current !== null) return;
+      rafRef.current = window.requestAnimationFrame(() => {
+        rafRef.current = null;
+        syncWheelCurve(false);
+      });
+    }, [syncWheelCurve]);
+
+    useEffect(() => {
+      const listEl = listRef.current;
+      if (!listEl || loadingEpisodes || seasonEpisodes.length === 0) return;
+
+      const centerKey = `${selectedSeasonForDrawer}:${seasonEpisodes.length}`;
+      const shouldCenterScroll = lastCenteredKeyRef.current !== centerKey;
+
+      const initFrame = window.requestAnimationFrame(() => {
+        measureWheelMetrics();
+        if (shouldCenterScroll) {
+          lastCenteredKeyRef.current = centerKey;
+          const targetEp =
+            selectedSeasonForDrawer === currentSeason
+              ? currentEpisode
+              : seasonEpisodes[0]?.episode_number || 1;
+          const targetMetric =
+            metricsRef.current.find((m) => m.epNum === targetEp) || metricsRef.current[0];
+          if (targetMetric && listEl) {
+            const targetScroll = targetMetric.centerY - listEl.clientHeight * 0.5;
+            listEl.scrollTop = Math.max(0, targetScroll);
+          }
+        }
+        syncWheelCurve(true);
+      });
+
+      let ro: ResizeObserver | null = null;
+      if (typeof ResizeObserver !== 'undefined') {
+        ro = new ResizeObserver(() => {
+          measureWheelMetrics();
+        });
+        ro.observe(listEl);
+      }
+
+      return () => {
+        window.cancelAnimationFrame(initFrame);
+        if (ro) ro.disconnect();
+        if (rafRef.current !== null) {
+          window.cancelAnimationFrame(rafRef.current);
+          rafRef.current = null;
+        }
+      };
+    }, [
+      loadingEpisodes,
+      seasonEpisodes,
+      selectedSeasonForDrawer,
+      currentSeason,
+      currentEpisode,
+      measureWheelMetrics,
+      syncWheelCurve,
+    ]);
+
+    return (
+      <div
+        data-testid="zxc-episode-drawer"
+        onClick={onClose}
+        className="elf-ep-wheel-overlay"
+      >
+        <div
+          onClick={(e) => e.stopPropagation()}
+          className="elf-ep-wheel-stage"
+        >
+          <div className="elf-ep-wheel-head">
+            <span className="elf-ep-wheel-heading">Episodes</span>
             <button
-              key={ep.id || ep.episode_number}
               type="button"
-              onClick={() => onSelectEpisode(ep.episode_number)}
-              className={`w-full text-left rounded-lg overflow-hidden border transition cursor-pointer flex gap-3 p-2 ${
-                isActive
-                  ? 'bg-white/15 border-white/40'
-                  : 'bg-zinc-900/70 border-white/5 hover:bg-white/10'
-              }`}
+              aria-label="Close episodes"
+              onClick={onClose}
+              className="elf-ep-wheel-close"
             >
-              <div className="relative w-28 aspect-video rounded overflow-hidden bg-zinc-800 shrink-0">
-                {ep.still_path ? (
-                  <img
-                    src={`https://image.tmdb.org/t/p/w300${ep.still_path}`}
-                    alt={ep.name}
-                    className="w-full h-full object-cover"
-                  />
-                ) : (
-                  <div className="w-full h-full flex items-center justify-center text-xs text-zinc-500">
-                    EP {ep.episode_number}
-                  </div>
-                )}
-                <span className="absolute bottom-1 left-1 bg-black/80 px-1.5 py-0.5 rounded text-[10px] font-bold">
-                  E{ep.episode_number}
-                </span>
-              </div>
-              <div className="flex-1 min-w-0">
-                <div className="text-xs lg:text-sm font-semibold text-white truncate">
-                  {ep.episode_number}. {ep.name || `Episode ${ep.episode_number}`}
-                </div>
-                <p className="text-[11px] text-zinc-400 line-clamp-2 mt-0.5">
-                  {ep.overview || 'Click to play this episode.'}
-                </p>
-              </div>
+              <svg
+                viewBox="0 0 24 24"
+                width="18"
+                height="18"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2.4"
+                strokeLinecap="round"
+              >
+                <path d="M18 6 6 18M6 6l12 12" />
+              </svg>
             </button>
-          );
-        })
-      )}
-    </div>
-  </div>
+          </div>
+
+          <div className="elf-ep-wheel-seasons">
+            {activeSeasonList.map((s) => {
+              const isSelected = s.season_number === selectedSeasonForDrawer;
+              return (
+                <button
+                  key={s.season_number}
+                  type="button"
+                  data-on={isSelected ? 'true' : 'false'}
+                  onClick={() => onSelectSeason?.(s.season_number)}
+                  className={`elf-ep-season-pill ${isSelected ? 'active' : ''}`}
+                >
+                  S{s.season_number}
+                </button>
+              );
+            })}
+          </div>
+
+          <div
+            ref={listRef}
+            onScroll={handleWheelScroll}
+            className="elf-ep-wheel-list"
+          >
+            <div className="elf-ep-wheel-pad" />
+            {loadingEpisodes ? (
+              <div className="flex flex-col items-center justify-center py-12 gap-3 text-zinc-300">
+                <Loader className="w-7 h-7 animate-spin text-white" />
+                <span className="text-xs font-medium">Loading episodes...</span>
+              </div>
+            ) : (
+              seasonEpisodes.map((ep) => {
+                const isActive =
+                  selectedSeasonForDrawer === currentSeason &&
+                  ep.episode_number === currentEpisode;
+                const subTitle =
+                  ep.name && ep.name !== `Episode ${ep.episode_number}`
+                    ? ep.name
+                    : `Episode ${ep.episode_number}`;
+                const rawStill = ep.still_path || (ep as any).stillPath || '';
+                const thumbUrl = rawStill
+                  ? rawStill.startsWith('http') || rawStill.startsWith('data:')
+                    ? rawStill
+                    : `https://image.tmdb.org/t/p/w300${
+                        rawStill.startsWith('/') ? rawStill : `/${rawStill}`
+                      }`
+                  : resolvedFallbackBackdrop;
+
+                return (
+                  <button
+                    key={ep.id || ep.episode_number}
+                    ref={(el) => {
+                      if (el) itemRefs.current.set(ep.episode_number, el);
+                      else itemRefs.current.delete(ep.episode_number);
+                    }}
+                    type="button"
+                    data-testid={`episode-item-${ep.episode_number}`}
+                    data-playing={isActive ? 'true' : 'false'}
+                    onClick={() => onSelectEpisode(ep.episode_number)}
+                    className={`elf-ep-wheel-item ${isActive ? 'active' : ''}`}
+                  >
+                    <div className="elf-epw-thumb">
+                      <span className="elf-epw-thumb-fallback">{ep.episode_number}</span>
+                      {thumbUrl && (
+                        <img
+                          src={thumbUrl}
+                          alt={`Episode ${ep.episode_number} - ${subTitle}`}
+                          loading="lazy"
+                          decoding="async"
+                          onError={(e) => {
+                            const img = e.currentTarget;
+                            if (
+                              resolvedFallbackBackdrop &&
+                              img.src !== resolvedFallbackBackdrop
+                            ) {
+                              img.src = resolvedFallbackBackdrop;
+                            } else {
+                              img.style.display = 'none';
+                            }
+                          }}
+                        />
+                      )}
+                    </div>
+                    <div className="elf-epw-copy">
+                      <div className="elf-epw-title">Episode {ep.episode_number}</div>
+                      <div className="elf-epw-sub">{subTitle}</div>
+                      <div className="elf-epw-status">
+                        {isActive ? (
+                          <span className="elf-epw-live">
+                            Playing
+                            <svg
+                              className="elf-epw-ico"
+                              viewBox="0 0 24 24"
+                              width="13"
+                              height="13"
+                              fill="none"
+                              stroke="currentColor"
+                              strokeWidth="2.2"
+                            >
+                              <rect x="2" y="4" width="20" height="14" rx="2" />
+                              <path d="M8 21h8" />
+                            </svg>
+                          </span>
+                        ) : (
+                          <span className="elf-epw-queue">Queue —</span>
+                        )}
+                      </div>
+                    </div>
+                  </button>
+                );
+              })
+            )}
+            <div className="elf-ep-wheel-pad" />
+          </div>
+        </div>
+      </div>
+    );
+  },
+  (prev, next) =>
+    prev.loadingEpisodes === next.loadingEpisodes &&
+    prev.selectedSeasonForDrawer === next.selectedSeasonForDrawer &&
+    prev.currentSeason === next.currentSeason &&
+    prev.currentEpisode === next.currentEpisode &&
+    prev.fallbackBackdropPath === next.fallbackBackdropPath &&
+    prev.seasonEpisodes === next.seasonEpisodes &&
+    (prev.seasons?.length || 0) === (next.seasons?.length || 0)
 );
 
 export const PlayerSubtitleSettingsModal: React.FC<{

@@ -17,10 +17,12 @@ import {
 import {
   BackSvg,
   EpisodesToggleSvg,
+  Forward10Svg,
   FullscreenEnterSvg,
   FullscreenExitSvg,
   PauseSvg,
   PlaySvg,
+  Rewind10Svg,
   SettingsGearSvg,
   VolumeHighSvg,
   VolumeMutedSvg,
@@ -156,6 +158,8 @@ export const AnimePlayerControls: React.FC<AnimePlayerControlsProps> = ({
 }) => {
   const [settingsTab, setSettingsTab] = useState<'main' | 'audio' | 'quality' | 'subtitles' | 'speed'>('main');
   const [subtitleSearch, setSubtitleSearch] = useState<string>('');
+  const [kickLeft, setKickLeft] = useState(false);
+  const [kickRight, setKickRight] = useState(false);
 
   const activeAudioTrack =
     availableAudioTracks.find((t) => t.code === audioPreference) ||
@@ -169,7 +173,9 @@ export const AnimePlayerControls: React.FC<AnimePlayerControlsProps> = ({
     <div
       data-testid="anime-controls-overlay"
       className={`absolute inset-0 z-25 flex flex-col justify-between p-4 lg:p-6 pointer-events-none transition-opacity duration-300 ${
-        canPlay && (controlsVisible || !playing) ? 'opacity-100' : 'opacity-0'
+        canPlay && !episodeDrawerOpen && controlsVisible
+          ? 'opacity-100'
+          : 'opacity-0 pointer-events-none'
       }`}
     >
       {/* Top Bar - Identical layout to ZX Stream & NXSHA */}
@@ -190,22 +196,7 @@ export const AnimePlayerControls: React.FC<AnimePlayerControlsProps> = ({
           )}
         </div>
 
-        <div className="flex items-center gap-3">
-          {episodeDrawerOpen && mediaType === 'tv' && (
-            <select
-              aria-label="Select Season"
-              value={selectedSeasonForDrawer}
-              onChange={(e) => onSelectSeasonForDrawer(Number(e.target.value))}
-              className="bg-zinc-900/90 text-white text-xs lg:text-sm px-3 py-1.5 rounded-md border border-white/15 outline-none cursor-pointer"
-            >
-              {Array.from({ length: Math.max(1, totalSeasons) }, (_, i) => i + 1).map((sNum) => (
-                <option key={sNum} value={sNum}>
-                  Season {sNum}
-                </option>
-              ))}
-            </select>
-          )}
-        </div>
+        <div className="flex items-center gap-3" />
       </div>
 
       {/* Bottom Bar Container with gradient - Exactly matches PlayerControlsOverlay */}
@@ -322,24 +313,32 @@ export const AnimePlayerControls: React.FC<AnimePlayerControlsProps> = ({
               type="button"
               aria-label="Rewind 10 seconds"
               data-testid="player-rewind-10"
-              onClick={() => onSkip(-10)}
-              className="cursor-pointer hover:scale-110 transition-transform flex items-center gap-0.5 text-white/90 hover:text-white"
+              onClick={() => {
+                setKickLeft(false);
+                window.requestAnimationFrame(() => setKickLeft(true));
+                window.setTimeout(() => setKickLeft(false), 380);
+                onSkip(-10);
+              }}
+              className={`elf-skip10-btn elf-skip10-back ${kickLeft ? 'kicking' : ''}`}
               title="Rewind 10 seconds"
             >
-              <RotateCcw className="w-5 h-5 lg:w-6 lg:h-6" />
-              <span className="text-[10px] lg:text-xs font-bold">10</span>
+              <Rewind10Svg />
             </button>
 
             <button
               type="button"
               aria-label="Forward 10 seconds"
               data-testid="player-forward-10"
-              onClick={() => onSkip(10)}
-              className="cursor-pointer hover:scale-110 transition-transform flex items-center gap-0.5 text-white/90 hover:text-white"
+              onClick={() => {
+                setKickRight(false);
+                window.requestAnimationFrame(() => setKickRight(true));
+                window.setTimeout(() => setKickRight(false), 380);
+                onSkip(10);
+              }}
+              className={`elf-skip10-btn elf-skip10-fwd ${kickRight ? 'kicking' : ''}`}
               title="Forward 10 seconds"
             >
-              <span className="text-[10px] lg:text-xs font-bold">10</span>
-              <RotateCw className="w-5 h-5 lg:w-6 lg:h-6" />
+              <Forward10Svg />
             </button>
 
             {mediaType === 'tv' && (
@@ -664,7 +663,8 @@ export const AnimePlayerControls: React.FC<AnimePlayerControlsProps> = ({
                 aria-label="Episodes"
                 data-testid="player-episodes-button"
                 onClick={onToggleEpisodeDrawer}
-                className="cursor-pointer hover:scale-110 transition-transform text-white"
+                className="elf-episodes-btn"
+                title="Episodes"
               >
                 <EpisodesToggleSvg />
               </button>

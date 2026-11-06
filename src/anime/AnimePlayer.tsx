@@ -99,6 +99,15 @@ export const AnimePlayer: React.FC<AnimePlayerProps> = ({
   const [usingExternalDub, setUsingExternalDub] = useState<boolean>(false);
   const [activeDubUrl, setActiveDubUrl] = useState<string>('');
 
+  useEffect(() => {
+    setCurrentSeason(initialSeason || 1);
+    setSelectedSeasonForDrawer(initialSeason || 1);
+  }, [initialSeason]);
+
+  useEffect(() => {
+    setCurrentEpisode(initialEpisode || 1);
+  }, [initialEpisode]);
+
   // Verification & Metadata State
   const [validating, setValidating] = useState<boolean>(true);
   const [validationResult, setValidationResult] = useState<AnimeValidationResult | null>(null);
@@ -137,8 +146,21 @@ export const AnimePlayer: React.FC<AnimePlayerProps> = ({
   const [hoverPercent, setHoverPercent] = useState<number>(0);
 
   // Double-tap Skip Animation (-10s / +10s)
-  const [skipFeedback, setSkipFeedback] = useState<{ dir: 'left' | 'right'; amount: number } | null>(null);
+  const [skipFeedback, setSkipFeedback] = useState<{
+    dir: 'left' | 'right';
+    amount: number;
+    tick: number;
+  } | null>(null);
   const skipTimerRef = useRef<number | null>(null);
+  const surfaceTapRef = useRef<{
+    lastTapAt: number;
+    lastZone: 'left' | 'center' | 'right' | null;
+    lastSkipByClickAt: number;
+  }>({
+    lastTapAt: 0,
+    lastZone: null,
+    lastSkipByClickAt: 0,
+  });
 
   // Settings & Qualities
   const [settingsOpen, setSettingsOpen] = useState<boolean>(false);
@@ -290,14 +312,12 @@ export const AnimePlayer: React.FC<AnimePlayerProps> = ({
     if (hideControlsTimeoutRef.current) {
       window.clearTimeout(hideControlsTimeoutRef.current);
     }
-    if (playing) {
-      hideControlsTimeoutRef.current = window.setTimeout(() => {
-        if (!settingsOpen && !episodeDrawerOpen) {
-          setControlsVisible(false);
-        }
-      }, 3500);
-    }
-  }, [playing, settingsOpen, episodeDrawerOpen]);
+    hideControlsTimeoutRef.current = window.setTimeout(() => {
+      if (!settingsOpen && !episodeDrawerOpen) {
+        setControlsVisible(false);
+      }
+    }, 3200);
+  }, [settingsOpen, episodeDrawerOpen]);
 
   // Hint cycle for loading screen
   useEffect(() => {
@@ -307,19 +327,20 @@ export const AnimePlayer: React.FC<AnimePlayerProps> = ({
     return () => clearInterval(hintTimer);
   }, []);
 
-  // Show paused idle overlay after 4 seconds of paused state
+  // Show paused idle overlay and hide controls after 3.2 seconds of paused state
   useEffect(() => {
     if (!playing && canPlay) {
       const idleTimer = window.setTimeout(() => {
         if (!playing && !settingsOpen && !episodeDrawerOpen) {
           setPausedIdleOverlay(true);
+          setControlsVisible(false);
         }
-      }, 4000);
+      }, 3200);
       return () => clearTimeout(idleTimer);
     } else {
       setPausedIdleOverlay(false);
     }
-  }, [playing, canPlay, settingsOpen, episodeDrawerOpen]);
+  }, [playing, canPlay, controlsVisible, settingsOpen, episodeDrawerOpen]);
 
   // 1. Strict Anime-Only Validation
   useEffect(() => {
@@ -1001,12 +1022,14 @@ export const AnimePlayer: React.FC<AnimePlayerProps> = ({
     }
     setCurrentTime(target);
 
-    setSkipFeedback({
-      dir: seconds > 0 ? 'right' : 'left',
-      amount: Math.abs(seconds),
-    });
+    const dir = seconds > 0 ? 'right' : 'left';
+    setSkipFeedback((prev) => ({
+      dir,
+      amount: prev && prev.dir === dir ? prev.amount + Math.abs(seconds) : Math.abs(seconds),
+      tick: (prev?.tick ?? 0) + 1,
+    }));
     if (skipTimerRef.current) window.clearTimeout(skipTimerRef.current);
-    skipTimerRef.current = window.setTimeout(() => setSkipFeedback(null), 650);
+    skipTimerRef.current = window.setTimeout(() => setSkipFeedback(null), 720);
   };
 
   // Episode Transition Helpers
@@ -1103,6 +1126,21 @@ export const AnimePlayer: React.FC<AnimePlayerProps> = ({
     }
   };
 
+  const episodeDrawerItems: EpisodeItem[] = React.useMemo(
+    () =>
+      seasonEpisodes.map((ep) => ({
+        id: ep.episodeNumber,
+        episode_number: ep.episodeNumber,
+        season_number: ep.seasonNumber,
+        name: ep.name || `Episode ${ep.episodeNumber}`,
+        overview: ep.overview || '',
+        still_path: ep.stillPath || null,
+        air_date: ep.airDate || null,
+        vote_average: 0,
+      })),
+    [seasonEpisodes]
+  );
+
   // --------------------------------------------------------------------------
   // RENDER: Loading Screen matching ZX Stream / NXSHA
   // --------------------------------------------------------------------------
@@ -1182,17 +1220,6 @@ export const AnimePlayer: React.FC<AnimePlayerProps> = ({
   const progressPercent = duration > 0 ? Math.min(100, (currentTime / duration) * 100) : 0;
   const bufferedPercent = duration > 0 ? Math.min(100, (bufferedEnd / duration) * 100) : 0;
 
-  const episodeDrawerItems: EpisodeItem[] = seasonEpisodes.map((ep) => ({
-    id: ep.episodeNumber,
-    episode_number: ep.episodeNumber,
-    season_number: ep.seasonNumber,
-    name: ep.name || `Episode ${ep.episodeNumber}`,
-    overview: ep.overview || '',
-    still_path: ep.stillPath || null,
-    air_date: ep.airDate || null,
-    vote_average: 0,
-  }));
-
   // Genuine audio tracks to display in menu
   const genuineAudioTracks =
     availableAudioTracks.length > 0
@@ -1232,17 +1259,43 @@ export const AnimePlayer: React.FC<AnimePlayerProps> = ({
         onClick={(e) => {
           e.stopPropagation();
           resetControlsTimeout();
-          const v = videoRef.current;
-          if (!v) return;
-          if (v.paused) v.play().catch(() => {});
-          else v.pause();
+          if (settingsOpen) {
+            setSettingsOpen(false);
+            return;
+          }
+          if (episodeDrawerOpen) {
+            setEpisodeDrawerOpen(false);
+            return;
+          }
+
+          const rect = e.currentTarget.getBoundingClientRect();
+          const relX = (e.clientX - rect.left) / Math.max(1, rect.width);
+          const zone: 'left' | 'center' | 'right' =
+            relX < 0.36 ? 'left' : relX > 0.64 ? 'right' : 'center';
+          const now = performance.now();
+          const delta = now - surfaceTapRef.current.lastTapAt;
+
+          if (delta > 0 && delta < 340 && surfaceTapRef.current.lastZone === zone) {
+            surfaceTapRef.current.lastTapAt = now;
+            surfaceTapRef.current.lastSkipByClickAt = now;
+            if (zone === 'left') handleSkip(-10);
+            else if (zone === 'right') handleSkip(10);
+            else toggleFullscreen();
+            return;
+          }
+
+          surfaceTapRef.current.lastTapAt = now;
+          surfaceTapRef.current.lastZone = zone;
         }}
         onDoubleClick={(e) => {
           e.stopPropagation();
+          if (performance.now() - surfaceTapRef.current.lastSkipByClickAt < 140) {
+            return;
+          }
           const rect = e.currentTarget.getBoundingClientRect();
-          const x = e.clientX - rect.left;
-          if (x < rect.width * 0.4) handleSkip(-10);
-          else if (x > rect.width * 0.6) handleSkip(10);
+          const relX = (e.clientX - rect.left) / Math.max(1, rect.width);
+          if (relX < 0.36) handleSkip(-10);
+          else if (relX > 0.64) handleSkip(10);
           else toggleFullscreen();
         }}
         onCanPlay={() => {
@@ -1272,6 +1325,7 @@ export const AnimePlayer: React.FC<AnimePlayerProps> = ({
         }}
         onPause={() => {
           setPlaying(false);
+          resetControlsTimeout();
           if (usingExternalDubRef.current && dubAudioRef.current) {
             dubAudioRef.current.pause();
           }
@@ -1407,44 +1461,118 @@ export const AnimePlayer: React.FC<AnimePlayerProps> = ({
         </div>
       )}
 
-      {/* Double Tap Skip Feedback - 1:1 match with ZX Stream & NXSHA */}
+      {/* Double Tap Skip Feedback - Elfura Ripple & Spring Pill */}
       {skipFeedback && (
         <div
-          className={`absolute inset-y-0 z-20 flex items-center justify-center pointer-events-none w-1/3 ${
-            skipFeedback.dir === 'left' ? 'left-0' : 'right-0'
+          key={`${skipFeedback.dir}-${skipFeedback.tick}`}
+          data-testid={`double-tap-feedback-${skipFeedback.dir}`}
+          className={`elf-dtap-zone ${
+            skipFeedback.dir === 'left' ? 'elf-dtap-left' : 'elf-dtap-right'
           }`}
         >
-          <div className="flex flex-col items-center justify-center bg-black/50 backdrop-blur-xs rounded-full w-20 h-20 animate-pulse">
-            {skipFeedback.dir === 'left' ? (
-              <RotateCcw className="w-7 h-7 text-white" />
-            ) : (
-              <RotateCw className="w-7 h-7 text-white" />
-            )}
-            <span className="text-xs font-bold mt-1 text-white">
+          <div className="elf-dtap-ripple" />
+          <div className="elf-dtap-content">
+            <div className="elf-dtap-chevs">
+              {skipFeedback.dir === 'left' ? (
+                <svg
+                  viewBox="0 0 36 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2.8"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <path className="elf-c2" d="M15 18l-6-6 6-6" />
+                  <path className="elf-c1" d="M25 18l-6-6 6-6" />
+                </svg>
+              ) : (
+                <svg
+                  viewBox="0 0 36 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2.8"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <path className="elf-c1" d="M11 18l6-6-6-6" />
+                  <path className="elf-c2" d="M21 18l6-6-6-6" />
+                </svg>
+              )}
+            </div>
+            <div className="elf-dtap-label">
               {skipFeedback.dir === 'left' ? `-${skipFeedback.amount}s` : `+${skipFeedback.amount}s`}
-            </span>
+            </div>
           </div>
         </div>
       )}
 
-      {/* Transparent TMDB Logo on Video Pause */}
+      {/* Pause Screen Overlay (TMDB Non-Background Logo + PAUSED + Facts + Overview) */}
       {canPlay &&
         !playing &&
         !settingsOpen &&
-        !episodeDrawerOpen &&
-        validationResult.logoPath &&
-        !pauseLogoError && (
-          <img
-            data-testid="player-pause-tmdb-logo"
-            src={validationResult.logoPath}
-            alt=""
-            onError={() => setPauseLogoError(true)}
-            className={`absolute left-6 sm:left-10 lg:left-12 z-20 max-h-12 sm:max-h-16 lg:max-h-24 max-w-[180px] sm:max-w-[260px] lg:max-w-[360px] w-auto h-auto object-contain pointer-events-none select-none transition-all duration-300 ${
-              controlsVisible && !pausedIdleOverlay
-                ? 'bottom-24 sm:bottom-28 lg:bottom-32'
-                : 'bottom-8 sm:bottom-10 lg:bottom-12'
-            }`}
-          />
+        !episodeDrawerOpen && (
+          <div
+            data-testid="player-pause-overlay"
+            data-controls-visible={controlsVisible ? 'true' : 'false'}
+            className="elf-pause-screen pointer-events-none"
+          >
+            <div className="elf-pause-card pointer-events-none">
+              {validationResult.logoPath && !pauseLogoError ? (
+                <img
+                  data-testid="player-pause-tmdb-logo"
+                  src={validationResult.logoPath}
+                  alt={validationResult.title || ''}
+                  onError={() => setPauseLogoError(true)}
+                  className="elf-title-logo elf-title-logo--pause"
+                />
+              ) : (
+                <h2 className="elf-title-cartoon elf-title-cartoon--pause">
+                  {validationResult.title || 'Anime'}
+                </h2>
+              )}
+
+              <div className="elf-pause-word">PAUSED</div>
+
+              <div className="elf-pause-facts">
+                <span>
+                  {validationResult.releaseDate
+                    ? validationResult.releaseDate.slice(0, 4)
+                    : '2026'}
+                </span>
+                <span className="elf-pf-dot">•</span>
+                <span className="elf-pf-rating">
+                  <svg className="elf-pf-star" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" />
+                  </svg>
+                  9.6
+                </span>
+                <span className="elf-pf-dot">•</span>
+                {validationResult.mediaType === 'tv' ? (
+                  <span className="elf-pf-ep">
+                    S{currentSeason} E{currentEpisode}
+                    {(() => {
+                      const activeEp = seasonEpisodes.find(
+                        (e) => e.episodeNumber === currentEpisode
+                      );
+                      return activeEp?.name && activeEp.name !== `Episode ${currentEpisode}`
+                        ? ` · ${activeEp.name}`
+                        : '';
+                    })()}
+                  </span>
+                ) : (
+                  <span className="elf-pf-genre">
+                    {validationResult.genres?.join(', ') || 'Action, Anime'}
+                  </span>
+                )}
+              </div>
+
+              <p className="elf-pause-overview">
+                {seasonEpisodes.find((e) => e.episodeNumber === currentEpisode)?.overview ||
+                  validationResult.overview ||
+                  `Watching ${validationResult.title} in high definition with multi-language audio and subtitle support.`}
+              </p>
+            </div>
+          </div>
         )}
 
       {/* Floating Smart Playback Controls (Skip Intro, Skip Outro, Next Episode card) */}
@@ -1506,6 +1634,12 @@ export const AnimePlayer: React.FC<AnimePlayerProps> = ({
           selectedSeasonForDrawer={selectedSeasonForDrawer}
           currentSeason={currentSeason}
           currentEpisode={currentEpisode}
+          seasons={Array.from({ length: Math.max(1, validationResult.totalSeasons || 1) }, (_, i) => ({
+            season_number: i + 1,
+            episode_count: episodeDrawerItems.length || 12,
+          }))}
+          fallbackBackdropPath={validationResult.backdropPath || null}
+          onSelectSeason={(sNum) => setSelectedSeasonForDrawer(sNum)}
           onClose={() => setEpisodeDrawerOpen(false)}
           onSelectEpisode={(epNum) => {
             setCurrentSeason(selectedSeasonForDrawer);

@@ -31,12 +31,14 @@ export default function App() {
     return () => window.removeEventListener('popstate', handlePopState);
   }, []);
 
-  const navigateTo = (newPath: string, newSearch = '') => {
+  const navigateTo = (newPath: string, newSearch = '', scrollToTop = true) => {
     const fullUrl = newSearch ? `${newPath}?${newSearch.replace(/^\?/, '')}` : newPath;
     window.history.pushState({}, '', fullUrl);
     setRoute(parseAppRoute(newPath));
     setSearch(newSearch);
-    window.scrollTo({ top: 0, behavior: 'smooth' });
+    if (scrollToTop) {
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
   };
 
   if (route.page === 'download') {
@@ -66,9 +68,9 @@ export default function App() {
         onBack={() => navigateTo('/')}
         onEpisodeChange={(newSeason, newEpisode) => {
           if (route.mediaType === 'movie') {
-            navigateTo(`/anime/movie/${route.tmdbId}`, search);
+            navigateTo(`/anime/movie/${route.tmdbId}`, search, false);
           } else {
-            navigateTo(`/anime/tv/${route.tmdbId}/${newSeason}/${newEpisode}`, search);
+            navigateTo(`/anime/tv/${route.tmdbId}/${newSeason}/${newEpisode}`, search, false);
           }
         }}
       />
@@ -97,7 +99,7 @@ export default function App() {
               : route.playerMode === 'custom'
               ? 'player'
               : 'embed';
-          navigateTo(`/${endpoint}/tv/${route.tmdbId}/${newSeason}/${newEpisode}`, search);
+          navigateTo(`/${endpoint}/tv/${route.tmdbId}/${newSeason}/${newEpisode}`, search, false);
         }}
       />
     );

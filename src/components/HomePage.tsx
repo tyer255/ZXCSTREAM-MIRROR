@@ -535,7 +535,7 @@ export const HomePage: React.FC<HomePageProps> = ({
             <div className="mt-4 w-full max-w-4xl aspect-video rounded-xl overflow-hidden shadow-2xl shadow-black/60 border border-white/5">
               {playerMode === 'anime' ? (
                 <AnimePlayer
-                  key={`anime-${tmdbId.trim()}-${season}-${episode}`}
+                  key={`anime-${tmdbId.trim()}`}
                   tmdbId={tmdbId.trim() || '85937'}
                   season={Number.parseInt(season, 10) || 1}
                   episode={Number.parseInt(episode, 10) || 1}
@@ -556,7 +556,7 @@ export const HomePage: React.FC<HomePageProps> = ({
                 />
               ) : tmdbId.trim() ? (
                 <CustomPlayerView
-                  key={`${playerMode}-${tmdbId.trim()}-${season}-${episode}`}
+                  key={`${playerMode}-${tmdbId.trim()}`}
                   playerMode={playerMode}
                   mediaType={mediaType}
                   tmdbId={tmdbId.trim()}

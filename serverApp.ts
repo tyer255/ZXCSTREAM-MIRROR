@@ -236,27 +236,38 @@ async function fetchTmdbDetailsWithFallback(mediaType: string, tmdbId: string, l
   const tryTypeOnHost = async (host: string, type: string) => {
     try {
       const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 3000);
-      const res = await fetch(
+      const timer = setTimeout(() => controller.abort(), 2500);
+      const endpointsToTry = [
+        `${host}/backend/imdb/details/${encodeURIComponent(type)}/${encodeURIComponent(tmdbId)}?language=${encodeURIComponent(language)}`,
         `${host}/backend/tmdb/details/${encodeURIComponent(type)}/${encodeURIComponent(tmdbId)}?language=${encodeURIComponent(language)}`,
-        {
-          headers: {
-            ...COMMON_HEADERS,
-            Origin: host,
-            Referer: `${host}/player/${type}/${tmdbId}`,
-          },
-          signal: controller.signal,
+      ];
+      for (const ep of endpointsToTry) {
+        try {
+          const res = await fetch(ep, {
+            headers: {
+              ...COMMON_HEADERS,
+              Origin: host,
+              Referer: `${host}/player/${type}/${tmdbId}`,
+            },
+            signal: controller.signal,
+          });
+          if (res.ok) {
+            const data = await res.json();
+            const raw = data?.data || data;
+            if (raw && (raw.title || raw.name || raw.id)) {
+              clearTimeout(timer);
+              if (raw.imdb_id) {
+                tmdbImdbCache.set(String(tmdbId).trim(), String(raw.imdb_id).trim());
+              }
+              return { ...raw, resolvedMediaType: type };
+            }
+          }
+        } catch {
+          // try next endpoint
         }
-      );
-      clearTimeout(timer);
-      if (!res.ok) return null;
-      const data = await res.json();
-      const raw = data?.data || data;
-      if (!raw || (!raw.title && !raw.name && !raw.id)) return null;
-      if (raw.imdb_id) {
-        tmdbImdbCache.set(String(tmdbId).trim(), String(raw.imdb_id).trim());
       }
-      return { ...raw, resolvedMediaType: type };
+      clearTimeout(timer);
+      return null;
     } catch {
       return null;
     }
@@ -690,16 +701,28 @@ apiRouter.get('/tmdb/season/:tmdbId/season/:seasonNumber', async (req, res) => {
   const { tmdbId, seasonNumber } = req.params;
   const seasonNum = Number(seasonNumber) || 1;
   try {
-    const response = await fetch(
+    let response: Response | null = null;
+    const seasonUrls = [
+      `https://zxcstream.cc/backend/imdb/season/${encodeURIComponent(tmdbId)}/season/${encodeURIComponent(seasonNumber)}`,
       `https://zxcstream.cc/backend/tmdb/season/${encodeURIComponent(tmdbId)}/season/${encodeURIComponent(seasonNumber)}`,
-      {
-        headers: {
-          ...COMMON_HEADERS,
-          Referer: `https://zxcstream.cc/player/tv/${tmdbId}/${seasonNumber}/1`,
-        },
+    ];
+    for (const u of seasonUrls) {
+      try {
+        const r = await fetch(u, {
+          headers: {
+            ...COMMON_HEADERS,
+            Referer: `https://zxcstream.cc/player/tv/${tmdbId}/${seasonNumber}/1`,
+          },
+        });
+        if (r.ok) {
+          response = r;
+          break;
+        }
+      } catch {
+        // try next
       }
-    );
-    if (!response.ok) {
+    }
+    if (!response || !response.ok) {
       const fallbackEps = getCatalogSeasonEpisodes(tmdbId, seasonNum);
       return res.json({ episodes: fallbackEps });
     }
@@ -3126,6 +3149,8 @@ apiRouter.get('/anime/validate/:tmdbId', async (req, res) => {
   }
 });
 
+const animeResolveCache = new Map<string, { expiresAt: number; data: any }>();
+
 // Anime Stream Resolver Route
 const handleAnimeResolve = async (req: express.Request, res: express.Response) => {
   const rawParams = {
@@ -3134,9 +3159,16 @@ const handleAnimeResolve = async (req: express.Request, res: express.Response) =
   };
   const params = {
     ...rawParams,
-    tmdbId: rawParams.tmdbId || rawParams.id,
+    tmdbId: String(rawParams.tmdbId || rawParams.id || '').trim(),
     mediaType: rawParams.mediaType || rawParams.type || 'tv',
   };
+
+  const cacheKey = `${params.mediaType}:${params.tmdbId}:${params.season || 1}:${params.episode || 1}:${params.preferredAudio || 'ja'}`;
+  const now = Date.now();
+  const cached = animeResolveCache.get(cacheKey);
+  if (cached && cached.expiresAt > now) {
+    return res.json(cached.data);
+  }
 
   try {
     const result = await resolveAnimeContent(params, {
@@ -3151,6 +3183,14 @@ const handleAnimeResolve = async (req: express.Request, res: express.Response) =
         result.error?.includes('Western Animation') ||
         result.error?.includes('Live-Action');
       return res.status(isValidationRejection ? 400 : 404).json(result);
+    }
+
+    if (result.success && result.sources && result.sources.length > 0) {
+      animeResolveCache.set(cacheKey, { expiresAt: now + 5 * 60 * 1000, data: result });
+      if (animeResolveCache.size > 200) {
+        const oldestKey = animeResolveCache.keys().next().value;
+        if (oldestKey) animeResolveCache.delete(oldestKey);
+      }
     }
 
     return res.json(result);
@@ -3315,20 +3355,22 @@ async function resolveVegaMoviesCombined(params: {
     }
 
     // 1. Fetch high-quality seekable HLS and DASH streams from ZXC servers (alatreon, valstrax, ursa, atlas)
-    // These streams are 100% addressable by segment and support instant +10s forward, -10s rewind, and seekbar scrubbing without jumping back!
     const zxcServersToQuery = ['alatreon', 'valstrax', 'ursa', 'atlas'];
     const zxcPromises = zxcServersToQuery.map(async (srvName) => {
       try {
-        const zxcRes = await resolveForServer(srvName, {
-          mediaType,
-          tmdbId: cleanId,
-          season,
-          episode,
-          title,
-          releaseYear: releaseYear || '2022',
-          date: `${releaseYear || '2022'}-01-01`,
-          imdbId,
-        });
+        const zxcRes = await Promise.race([
+          resolveForServer(srvName, {
+            mediaType,
+            tmdbId: cleanId,
+            season,
+            episode,
+            title,
+            releaseYear: releaseYear || '2022',
+            date: `${releaseYear || '2022'}-01-01`,
+            imdbId,
+          }),
+          new Promise<any>((r) => setTimeout(() => r(null), 1500)),
+        ]);
         const validLinks = Array.isArray(zxcRes?.links)
           ? zxcRes.links.filter((l: any) => l?.link && !l.onlyHevc)
           : [];
@@ -3364,15 +3406,29 @@ async function resolveVegaMoviesCombined(params: {
       return sources.filter((s) => {
         if (!s.url) return false;
         const lower = s.url.toLowerCase();
-        // Googleusercontent download links do NOT support Range requests (HTTP 200) and break forwarding in HTML5 video
         if (lower.includes('googleusercontent.com') || lower.includes('.mkv')) return false;
         return true;
       });
     }).catch(() => [] as VegaResolvedSource[]);
 
-    const [zxcResults, directSources] = await Promise.all([
+    // 3. Concurrently fetch high-speed multi-audio anime/movie streams from rive-citadel
+    const citadelPromise = Promise.race([
+      fetchNxshaSources(
+        'rive-citadel',
+        cleanId,
+        mediaType,
+        season,
+        episode,
+        imdbId,
+        params.parentSignal
+      ),
+      new Promise<any>((r) => setTimeout(() => r({ sources: [] }), 1500)),
+    ]).catch(() => ({ sources: [] as NxshaSource[] }));
+
+    const [zxcResults, directSources, citadelRes] = await Promise.all([
       Promise.all(zxcPromises),
       directPromise,
+      citadelPromise,
     ]);
 
     const seenUrls = new Set<string>();
@@ -3402,9 +3458,22 @@ async function resolveVegaMoviesCombined(params: {
       });
     }
 
-    // 3. Fallback to NXSHA fast streams if needed
+    if (Array.isArray(citadelRes?.sources)) {
+      for (const s of citadelRes.sources) {
+        if (!s?.url || seenUrls.has(s.url)) continue;
+        if (s.url.includes('googleusercontent.com') || s.url.includes('.mkv')) continue;
+        seenUrls.add(s.url);
+        combinedSources.push({
+          ...s,
+          provider: 'vegamovies',
+          label: s.label ? `Vegamovies | ${s.label}` : 'Vegamovies | 1080p',
+          type: s.type || 'hls',
+        });
+      }
+    }
+
     if (combinedSources.length === 0 && !params.parentSignal?.aborted) {
-      for (const backupProv of ['rive-citadel', 'watchout']) {
+      for (const backupProv of ['watchout']) {
         try {
           const backupRes = await fetchNxshaSources(
             backupProv,

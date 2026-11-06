@@ -650,7 +650,7 @@ interface SeriesTimingSpec {
   episodes: Record<string, VerifiedInterval>; // "S:E" -> exact verified episode timing in seconds
 }
 
-const SERIES_TIMING_REGISTRY: Record<string, SeriesTimingSpec> = {
+export const SERIES_TIMING_REGISTRY: Record<string, SeriesTimingSpec> = {
   // Stranger Things (TMDB 66732 / IMDb tt4574334)
   '66732': {
     imdbId: 'tt4574334',
@@ -1142,7 +1142,7 @@ export function getCatalogSeasonEpisodes(tmdbId: string | number, seasonNumber: 
       episode_number: ep,
       name: customTitle || `Episode ${ep}`,
       overview: `Season ${seasonNumber}, Episode ${ep} of ${catalogEntry?.title || `Series #${cleanId}`}.`,
-      still_path: null,
+      still_path: catalogEntry?.backdropUrl || null,
       runtime: catalogEntry?.runtimeMinutes || 48,
       ...(timing || {}),
     });

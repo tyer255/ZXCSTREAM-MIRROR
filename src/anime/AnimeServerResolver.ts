@@ -5,7 +5,7 @@
 
 import { validateAnimeTmdbMetadata, AnimeValidationResult } from './AnimeMetadata.js';
 import { AnimeResolveResponse, AnimeStreamSource } from './AnimeSourceResolver.js';
-import { getMediaByTmdbId, getEpisodeTimingMetadata } from '../data/tmdbCatalog.js';
+import { getMediaByTmdbId, getEpisodeTimingMetadata, SERIES_TIMING_REGISTRY } from '../data/tmdbCatalog.js';
 
 export type FetchTmdbDetailsFn = (mediaType: string, tmdbId: string, language?: string) => Promise<any>;
 export type ResolveServerFn = (server: string, params: any) => Promise<any>;
@@ -329,7 +329,7 @@ export async function resolveAnimeContent(params: {
   const allSources: AnimeStreamSource[] = [];
   const discoveredLangs = new Set<string>(['ja']);
 
-  // Launch AnimeSalt search and scrape in background with a strict 1400ms cap so Vercel serverless never times out
+  // Launch AnimeSalt search and scrape in background with a strict 400ms cap so it never stalls playback
   const animeSaltPromise = Promise.race([
     (async () => {
       try {
@@ -346,27 +346,30 @@ export async function resolveAnimeContent(params: {
       }
       return [] as AnimeStreamSource[];
     })(),
-    new Promise<AnimeStreamSource[]>((resolve) => setTimeout(() => resolve([]), 1400)),
+    new Promise<AnimeStreamSource[]>((resolve) => setTimeout(() => resolve([]), 400)),
   ]);
 
   let orionOrigResponse: any = null;
 
-  // Fast concurrent query across verified anime stream providers (Alatreon, Ursa & Atlas for universal H.264 HLS)
-  const providersToRace = ['alatreon', 'ursa', 'atlas', 'orion', 'valstrax'];
+  // Fast concurrent query across verified anime stream providers including Vegamovies, Alatreon, Ursa, Atlas, Orion, Valstrax
+  const providersToRace = ['vegamovies', 'alatreon', 'ursa', 'atlas', 'orion', 'valstrax'];
   const providerPromises = providersToRace.map(async (provider) => {
     try {
-      const resolved = await resolveForServer(provider, {
-        mediaType,
-        tmdbId: cleanId,
-        season,
-        episode,
-        title: animeTitle,
-        releaseYear,
-        date,
-        imdbId,
-        dubCode: '',
-        dubType: '0',
-      });
+      const resolved = await Promise.race([
+        resolveForServer(provider, {
+          mediaType,
+          tmdbId: cleanId,
+          season,
+          episode,
+          title: animeTitle,
+          releaseYear,
+          date,
+          imdbId,
+          dubCode: '',
+          dubType: '0',
+        }),
+        new Promise<any>((r) => setTimeout(() => r(null), 2000)),
+      ]);
 
       if (provider === 'orion' && resolved) {
         orionOrigResponse = resolved;
@@ -377,17 +380,24 @@ export async function resolveAnimeContent(params: {
         const playable = nonHevc.length > 0 ? nonHevc : resolved.links.filter((l: any) => l?.link);
         return playable.map((l: any, idx: number): AnimeStreamSource => {
           const isDash = l.type === 'dash' || l.type === 'andromeda';
+          const linkLang = String(l.lang || '').toLowerCase().trim();
+          const isJapanese = !linkLang || linkLang === 'ja' || linkLang === 'jp' || linkLang === 'orig';
+          const audioLang = isJapanese ? 'ja' : linkLang;
+          const qual = l.quality || '1080p';
+          const audioLabel =
+            ANIME_LANG_LABELS[audioLang] ||
+            (isJapanese ? 'Japanese (Original)' : `${audioLang.toUpperCase()} (Dub)`);
           return {
             id: `${provider}-${idx}`,
             provider,
             url: l.link,
-            quality: '1080p',
-            label: `${provider.toUpperCase()} | 1080p Ultra HD`,
+            quality: qual.includes('p') ? qual : `${qual}p`,
+            label: l.label || `${provider.toUpperCase()} | ${qual} | ${audioLabel}`,
             type: isDash ? 'dash' : 'hls',
-            audioLang: 'ja',
-            audioLabel: 'Japanese (Original)',
-            isSub: true,
-            isDub: false,
+            audioLang,
+            audioLabel,
+            isSub: isJapanese,
+            isDub: !isJapanese,
             onlyHevc: Boolean(l.onlyHevc),
             audioStreamKey: l.audioStreamKey || resolved.audioStreamKey || '',
           };
@@ -399,52 +409,121 @@ export async function resolveAnimeContent(params: {
     return [];
   });
 
-  // Query Orion dub streams (Valstrax is NOT queried for dubs because Valstrax ignores dubCode and returns default audio)
-  const cleanPref = (preferredAudio || 'ja').trim().toLowerCase();
-  const dubLanguagesToQuery = Array.from(
-    new Set(['hi', 'en', ...(cleanPref && cleanPref !== 'ja' ? [cleanPref] : [])])
-  );
-
-  const rawDubPromises = dubLanguagesToQuery.map(async (dubLang) => {
-    try {
-      const orionDub = await resolveForServer('orion', {
-        mediaType,
-        tmdbId: cleanId,
-        season,
-        episode,
-        title: animeTitle,
-        releaseYear,
-        date,
-        imdbId,
-        dubCode: dubLang,
-        dubType: '0',
-      });
-      if (orionDub && orionDub.success) {
-        const link = orionDub.dubAudioUrl || orionDub.link || orionDub.links?.[0]?.link;
-        if (link) {
-          return {
-            dubLang,
-            link,
-            audioStreamKey: orionDub.audioStreamKey || orionDub.links?.[0]?.audioStreamKey || '',
-            onlyHevc: Boolean(orionDub.links?.[0]?.onlyHevc ?? true),
-            dubs: orionDub.dubs,
-          };
-        }
-      }
-    } catch {
-      // ignore
-    }
-    return null;
-  });
-
-  const [providerResults, rawDubResults, saltSources] = await Promise.all([
+  const [providerResults, saltSources] = await Promise.all([
     Promise.all(providerPromises),
-    Promise.all(rawDubPromises),
     animeSaltPromise,
   ]);
 
   for (const list of providerResults) {
     allSources.push(...list);
+  }
+
+  // Query Orion dub streams only if Orion actually returned an active dub list or if preferred audio is requested and Orion is alive
+  const cleanPref = (preferredAudio || 'ja').trim().toLowerCase();
+  const rawDubResults: any[] = [];
+  if (orionOrigResponse && orionOrigResponse.success && Array.isArray(orionOrigResponse.dubs) && orionOrigResponse.dubs.length > 0) {
+    const dubLanguagesToQuery = Array.from(
+      new Set(['hi', 'en', ...(cleanPref && cleanPref !== 'ja' ? [cleanPref] : [])])
+    );
+    const dubItems = await Promise.all(
+      dubLanguagesToQuery.map(async (dubLang) => {
+        try {
+          const orionDub = await Promise.race([
+            resolveForServer('orion', {
+              mediaType,
+              tmdbId: cleanId,
+              season,
+              episode,
+              title: animeTitle,
+              releaseYear,
+              date,
+              imdbId,
+              dubCode: dubLang,
+              dubType: '0',
+            }),
+            new Promise<any>((r) => setTimeout(() => r(null), 1000)),
+          ]);
+          if (orionDub && orionDub.success) {
+            const link = orionDub.dubAudioUrl || orionDub.link || orionDub.links?.[0]?.link;
+            if (link) {
+              return {
+                dubLang,
+                link,
+                audioStreamKey: orionDub.audioStreamKey || orionDub.links?.[0]?.audioStreamKey || '',
+                onlyHevc: Boolean(orionDub.links?.[0]?.onlyHevc ?? true),
+                dubs: orionDub.dubs,
+              };
+            }
+          }
+        } catch {}
+        return null;
+      })
+    );
+    rawDubResults.push(...dubItems.filter(Boolean));
+  }
+
+  // If no sources resolved yet and this is TV Season > 1, try absolute episode numbering fallback
+  if (allSources.length === 0 && mediaType === 'tv' && Number(season) > 1) {
+    let cumulativeEp = Number(episode);
+    const spec = SERIES_TIMING_REGISTRY[cleanId];
+    if (spec?.seasons) {
+      for (let s = 1; s < Number(season); s++) {
+        cumulativeEp += (spec.seasons[s] || 0);
+      }
+    }
+    if (cumulativeEp !== Number(episode)) {
+      const altFallbackProviders = ['vegamovies', 'alatreon', 'atlas'];
+      const altResults = await Promise.all(
+        altFallbackProviders.map(async (provider) => {
+          try {
+            const resolved = await resolveForServer(provider, {
+              mediaType: 'tv',
+              tmdbId: cleanId,
+              season: 1,
+              episode: cumulativeEp,
+              title: animeTitle,
+              releaseYear,
+              date,
+              imdbId,
+              dubCode: '',
+              dubType: '0',
+            });
+            if (resolved && resolved.success && Array.isArray(resolved.links)) {
+              const nonHevc = resolved.links.filter((l: any) => l?.link && !l.onlyHevc);
+              const playable = nonHevc.length > 0 ? nonHevc : resolved.links.filter((l: any) => l?.link);
+              return playable.map((l: any, idx: number): AnimeStreamSource => {
+                const isDash = l.type === 'dash' || l.type === 'andromeda';
+                const linkLang = String(l.lang || '').toLowerCase().trim();
+                const isJapanese = !linkLang || linkLang === 'ja' || linkLang === 'jp' || linkLang === 'orig';
+                const audioLang = isJapanese ? 'ja' : linkLang;
+                const qual = l.quality || '1080p';
+                const audioLabel =
+                  ANIME_LANG_LABELS[audioLang] ||
+                  (isJapanese ? 'Japanese (Original)' : `${audioLang.toUpperCase()} (Dub)`);
+                return {
+                  id: `${provider}-abs-${idx}`,
+                  provider,
+                  url: l.link,
+                  quality: qual.includes('p') ? qual : `${qual}p`,
+                  label: l.label || `${provider.toUpperCase()} | Ep ${cumulativeEp} | ${qual} | ${audioLabel}`,
+                  type: isDash ? 'dash' : 'hls',
+                  audioLang,
+                  audioLabel,
+                  isSub: isJapanese,
+                  isDub: !isJapanese,
+                  onlyHevc: Boolean(l.onlyHevc),
+                  audioStreamKey: l.audioStreamKey || resolved.audioStreamKey || '',
+                };
+              });
+            }
+          } catch {}
+          return [];
+        })
+      );
+      for (const list of altResults) {
+        allSources.push(...list);
+      }
+    }
   }
 
   // Extract Orion's authoritative list of supported audio dubs (type === 0 && !original) and original audioStreamKey

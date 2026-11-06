@@ -28,6 +28,8 @@ import {
   FullscreenExitSvg,
   PauseSvg,
   PlaySvg,
+  Rewind10Svg,
+  Forward10Svg,
   ServerInboxSvg,
   SettingsGearSvg,
   SubtitleTrack,
@@ -350,10 +352,16 @@ export const PlayerControlsOverlay: React.FC<PlayerControlsOverlayProps> = ({
   onSelectDub,
   isFullscreen,
   onToggleFullscreen,
-}) => (
+}) => {
+  const [kickLeft, setKickLeft] = React.useState(false);
+  const [kickRight, setKickRight] = React.useState(false);
+
+  return (
   <div
     className={`absolute inset-0 z-25 flex flex-col justify-between p-4 lg:p-6 pointer-events-none transition-opacity duration-300 ${
-      canPlay && (controlsVisible || !playing) ? 'opacity-100' : 'opacity-0'
+      canPlay && !showEpisodeDrawer && controlsVisible
+        ? 'opacity-100'
+        : 'opacity-0 pointer-events-none'
     }`}
   >
     <div className="flex items-center justify-between pointer-events-auto">
@@ -373,23 +381,6 @@ export const PlayerControlsOverlay: React.FC<PlayerControlsOverlayProps> = ({
         )}
       </div>
       <div className="flex items-center gap-3">
-        {showEpisodeDrawer && activeMediaType === 'tv' && (
-          <select
-            aria-label="Select Season"
-            value={selectedSeasonForDrawer}
-            onChange={(e) => setSelectedSeasonForDrawer(Number(e.target.value))}
-            className="bg-zinc-900/90 text-white text-xs lg:text-sm px-3 py-1.5 rounded-md border border-white/15 outline-none cursor-pointer"
-          >
-            {(metadata?.seasons?.length
-              ? metadata.seasons
-              : [{ season_number: 1, episode_count: 24 }]
-            ).map((s) => (
-              <option key={s.season_number} value={s.season_number}>
-                Season {s.season_number} ({s.episode_count})
-              </option>
-            ))}
-          </select>
-        )}
         {(playerMode === 'custom' || playerMode === 'nxsha') && (
           <button
             type="button"
@@ -489,23 +480,31 @@ export const PlayerControlsOverlay: React.FC<PlayerControlsOverlayProps> = ({
             type="button"
             aria-label="Rewind 10 seconds"
             data-testid="player-rewind-10"
-            onClick={() => onSkip(-10)}
-            className="cursor-pointer hover:scale-110 transition-transform flex items-center gap-0.5 text-white/90 hover:text-white"
+            onClick={() => {
+              setKickLeft(false);
+              window.requestAnimationFrame(() => setKickLeft(true));
+              window.setTimeout(() => setKickLeft(false), 380);
+              onSkip(-10);
+            }}
+            className={`elf-skip10-btn elf-skip10-back ${kickLeft ? 'kicking' : ''}`}
             title="Rewind 10 seconds"
           >
-            <RotateCcw className="w-5 h-5 lg:w-6 lg:h-6" />
-            <span className="text-[10px] lg:text-xs font-bold">10</span>
+            <Rewind10Svg />
           </button>
           <button
             type="button"
             aria-label="Forward 10 seconds"
             data-testid="player-forward-10"
-            onClick={() => onSkip(10)}
-            className="cursor-pointer hover:scale-110 transition-transform flex items-center gap-0.5 text-white/90 hover:text-white"
+            onClick={() => {
+              setKickRight(false);
+              window.requestAnimationFrame(() => setKickRight(true));
+              window.setTimeout(() => setKickRight(false), 380);
+              onSkip(10);
+            }}
+            className={`elf-skip10-btn elf-skip10-fwd ${kickRight ? 'kicking' : ''}`}
             title="Forward 10 seconds"
           >
-            <span className="text-[10px] lg:text-xs font-bold">10</span>
-            <RotateCw className="w-5 h-5 lg:w-6 lg:h-6" />
+            <Forward10Svg />
           </button>
           <div className="flex items-center gap-2 group/vol">
             <button
@@ -962,7 +961,8 @@ export const PlayerControlsOverlay: React.FC<PlayerControlsOverlayProps> = ({
                 setShowServersOverlay(false);
                 setSettingsOpen(false);
               }}
-              className="cursor-pointer hover:scale-110 transition-transform"
+              className="elf-episodes-btn"
+              title="Episodes"
             >
               <EpisodesToggleSvg />
             </button>
@@ -981,4 +981,5 @@ export const PlayerControlsOverlay: React.FC<PlayerControlsOverlayProps> = ({
       </div>
     </div>
   </div>
-);
+  );
+};

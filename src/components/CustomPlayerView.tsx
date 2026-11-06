@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import Hls from 'hls.js';
 import * as dashjs from 'dashjs';
-import { Loader, RotateCcw, RotateCw } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Loader, RotateCcw, RotateCw } from 'lucide-react';
 import {
   EpisodeTimingMetadata,
   MediaType,
@@ -138,8 +138,20 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
   const [skipFeedback, setSkipFeedback] = useState<{
     dir: 'left' | 'right';
     amount: number;
+    tick: number;
   } | null>(null);
   const skipTimerRef = useRef<number | null>(null);
+  const surfaceTapRef = useRef<{
+    lastTapAt: number;
+    lastZone: 'left' | 'center' | 'right' | null;
+    lastSkipByClickAt: number;
+    singleTapTimer: number | null;
+  }>({
+    lastTapAt: 0,
+    lastZone: null,
+    lastSkipByClickAt: 0,
+    singleTapTimer: null,
+  });
 
   // Settings menu state matching lK component
   const [settingsOpen, setSettingsOpen] = useState<boolean>(false);
@@ -646,6 +658,8 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
           genres,
           status: raw.status || 'Released',
           seasons,
+          overview: raw.overview || '',
+          rating: raw.vote_average || raw.rating || 9.7,
         });
       })
       .catch((_err) => {
@@ -669,6 +683,8 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
           genres: fallback.genres,
           status: fallback.status,
           seasons,
+          overview: fallback.overview || "Years after the battle with Earth's greatest enemy, Majin Buu, the planet's savior Son Goku spends his days in peace.",
+          rating: (fallback as any).rating || 9.7,
         });
         setMetadataError(null);
       });
@@ -2405,10 +2421,9 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
     syncNxshaStateMachineToUi,
   ]);
 
-  // Auto-hide controls after 3s of mouse inactivity during playback
+  // Auto-hide controls after 3.2s of mouse inactivity during playback
   useEffect(() => {
     if (!canPlay || !playing || settingsOpen || showServersOverlay || showEpisodeDrawer) {
-      setControlsVisible(true);
       return;
     }
     const timer = window.setTimeout(() => {
@@ -2417,7 +2432,7 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
     return () => window.clearTimeout(timer);
   }, [canPlay, playing, controlsVisible, settingsOpen, showServersOverlay, showEpisodeDrawer]);
 
-  // Show paused cinematic overlay (u7) after 4s of being paused while canPlay is true
+  // Auto-hide controls after 3.2s of being paused while canPlay is true so the Pause Screen is unobstructed
   useEffect(() => {
     if (!canPlay || playing || settingsOpen || showServersOverlay || showEpisodeDrawer) {
       setPausedIdleOverlay(false);
@@ -2426,9 +2441,9 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
     const timer = window.setTimeout(() => {
       setPausedIdleOverlay(true);
       setControlsVisible(false);
-    }, 4500);
+    }, 3200);
     return () => window.clearTimeout(timer);
-  }, [canPlay, playing, settingsOpen, showServersOverlay, showEpisodeDrawer]);
+  }, [canPlay, playing, controlsVisible, settingsOpen, showServersOverlay, showEpisodeDrawer]);
 
   const wakeControls = () => {
     setControlsVisible(true);
@@ -2457,11 +2472,12 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
     setSkipFeedback((prev) => ({
       dir,
       amount: prev && prev.dir === dir ? prev.amount + Math.abs(seconds) : Math.abs(seconds),
+      tick: (prev?.tick ?? 0) + 1,
     }));
     if (skipTimerRef.current) window.clearTimeout(skipTimerRef.current);
     skipTimerRef.current = window.setTimeout(() => {
       setSkipFeedback(null);
-    }, 650);
+    }, 720);
   }, []);
 
   // Keyboard shortcuts matching zxcstream.cc player
@@ -3261,17 +3277,56 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
         playsInline
         onClick={(e) => {
           e.stopPropagation();
-          if (settingsOpen) setSettingsOpen(false);
-          else if (showServersOverlay) setShowServersOverlay(false);
-          else if (showEpisodeDrawer) setShowEpisodeDrawer(false);
-          else togglePlay();
+          wakeControls();
+          if (settingsOpen) {
+            setSettingsOpen(false);
+            return;
+          }
+          if (showServersOverlay) {
+            setShowServersOverlay(false);
+            return;
+          }
+          if (showEpisodeDrawer) {
+            setShowEpisodeDrawer(false);
+            return;
+          }
+
+          const rect = e.currentTarget.getBoundingClientRect();
+          const relX = (e.clientX - rect.left) / Math.max(1, rect.width);
+          const zone: 'left' | 'center' | 'right' =
+            relX < 0.36 ? 'left' : relX > 0.64 ? 'right' : 'center';
+          const now = performance.now();
+          const delta = now - surfaceTapRef.current.lastTapAt;
+
+          if (delta > 0 && delta < 340 && surfaceTapRef.current.lastZone === zone) {
+            if (surfaceTapRef.current.singleTapTimer !== null) {
+              window.clearTimeout(surfaceTapRef.current.singleTapTimer);
+              surfaceTapRef.current.singleTapTimer = null;
+            }
+            surfaceTapRef.current.lastTapAt = now;
+            surfaceTapRef.current.lastSkipByClickAt = now;
+            if (zone === 'left') handleSkip(-10);
+            else if (zone === 'right') handleSkip(10);
+            else toggleFullscreen();
+            return;
+          }
+
+          surfaceTapRef.current.lastTapAt = now;
+          surfaceTapRef.current.lastZone = zone;
         }}
         onDoubleClick={(e) => {
           e.stopPropagation();
+          if (surfaceTapRef.current.singleTapTimer !== null) {
+            window.clearTimeout(surfaceTapRef.current.singleTapTimer);
+            surfaceTapRef.current.singleTapTimer = null;
+          }
+          if (performance.now() - surfaceTapRef.current.lastSkipByClickAt < 140) {
+            return;
+          }
           const rect = e.currentTarget.getBoundingClientRect();
-          const x = e.clientX - rect.left;
-          if (x < rect.width * 0.35) handleSkip(-10);
-          else if (x > rect.width * 0.65) handleSkip(10);
+          const relX = (e.clientX - rect.left) / Math.max(1, rect.width);
+          if (relX < 0.36) handleSkip(-10);
+          else if (relX > 0.64) handleSkip(10);
           else toggleFullscreen();
         }}
         onCanPlay={(e) => {
@@ -3339,6 +3394,7 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
         }}
         onPause={() => {
           setPlaying(false);
+          wakeControls();
           if (dubAudioRef.current) dubAudioRef.current.pause();
         }}
         onWaiting={() => {
@@ -3570,19 +3626,44 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
 
       {skipFeedback && (
         <div
-          className={`absolute inset-y-0 z-20 flex items-center justify-center pointer-events-none w-1/3 ${
-            skipFeedback.dir === 'left' ? 'left-0' : 'right-0'
+          key={`${skipFeedback.dir}-${skipFeedback.tick}`}
+          data-testid={`double-tap-feedback-${skipFeedback.dir}`}
+          className={`elf-dtap-zone ${
+            skipFeedback.dir === 'left' ? 'elf-dtap-left' : 'elf-dtap-right'
           }`}
         >
-          <div className="flex flex-col items-center justify-center bg-black/50 backdrop-blur-xs rounded-full w-20 h-20 animate-pulse">
-            {skipFeedback.dir === 'left' ? (
-              <RotateCcw className="w-7 h-7 text-white" />
-            ) : (
-              <RotateCw className="w-7 h-7 text-white" />
-            )}
-            <span className="text-xs font-bold mt-1">
+          <div className="elf-dtap-ripple" />
+          <div className="elf-dtap-content">
+            <div className="elf-dtap-chevs">
+              {skipFeedback.dir === 'left' ? (
+                <svg
+                  viewBox="0 0 36 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2.8"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <path className="elf-c2" d="M15 18l-6-6 6-6" />
+                  <path className="elf-c1" d="M25 18l-6-6 6-6" />
+                </svg>
+              ) : (
+                <svg
+                  viewBox="0 0 36 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2.8"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <path className="elf-c1" d="M11 18l6-6-6-6" />
+                  <path className="elf-c2" d="M21 18l6-6-6-6" />
+                </svg>
+              )}
+            </div>
+            <div className="elf-dtap-label">
               {skipFeedback.dir === 'left' ? `-${skipFeedback.amount}s` : `+${skipFeedback.amount}s`}
-            </span>
+            </div>
           </div>
         </div>
       )}
@@ -3638,20 +3719,58 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
         !playing &&
         !settingsOpen &&
         !showServersOverlay &&
-        !showEpisodeDrawer &&
-        pauseLogoUrl &&
-        !pauseLogoError && (
-          <img
-            data-testid="player-pause-tmdb-logo"
-            src={pauseLogoUrl}
-            alt=""
-            onError={() => setPauseLogoError(true)}
-            className={`absolute left-6 sm:left-10 lg:left-12 z-20 max-h-12 sm:max-h-16 lg:max-h-24 max-w-[180px] sm:max-w-[260px] lg:max-w-[360px] w-auto h-auto object-contain pointer-events-none select-none transition-all duration-300 ${
-              controlsVisible && !pausedIdleOverlay
-                ? 'bottom-24 sm:bottom-28 lg:bottom-32'
-                : 'bottom-8 sm:bottom-10 lg:bottom-12'
-            }`}
-          />
+        !showEpisodeDrawer && (
+          <div
+            data-testid="player-pause-overlay"
+            data-controls-visible={controlsVisible ? 'true' : 'false'}
+            className="elf-pause-screen pointer-events-none"
+          >
+            <div className="elf-pause-card pointer-events-none">
+              {pauseLogoUrl && !pauseLogoError ? (
+                <img
+                  data-testid="player-pause-tmdb-logo"
+                  src={pauseLogoUrl}
+                  alt={metadata?.title || ''}
+                  onError={() => setPauseLogoError(true)}
+                  className="elf-title-logo elf-title-logo--pause"
+                />
+              ) : (
+                <h2 className="elf-title-cartoon elf-title-cartoon--pause">
+                  {metadata?.title || 'Dragon Ball Super'}
+                </h2>
+              )}
+
+              <div className="elf-pause-word">PAUSED</div>
+
+              <div className="elf-pause-facts">
+                <span>{metadata?.year || '2026'}</span>
+                <span className="elf-pf-dot">•</span>
+                <span className="elf-pf-rating">
+                  <svg className="elf-pf-star" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" />
+                  </svg>
+                  {metadata?.rating ? Number(metadata.rating).toFixed(1) : '9.7'}
+                </span>
+                <span className="elf-pf-dot">•</span>
+                {activeMediaType === 'tv' ? (
+                  <span className="elf-pf-ep">
+                    S{currentSeason} E{currentEpisode}
+                    {currentEpisodeRecord?.name ? ` · ${currentEpisodeRecord.name}` : ''}
+                  </span>
+                ) : (
+                  <span className="elf-pf-genre">
+                    {metadata?.genres?.join(', ') || 'Action, Anime'}
+                  </span>
+                )}
+              </div>
+
+              <p className="elf-pause-overview">
+                {currentEpisodeRecord?.overview ||
+                  metadata?.overview ||
+                  "Years after the battle with Earth's greatest enemy, Majin Buu, the planet's savior Son Goku spends his days in peace. Meanwhile, on a distant planet, the God of Destruction Beerus awakens from his long slumber!"}
+              </p>
+            </div>
+          </div>
         )}
 
       {canPlay && activeMediaType === 'tv' && showEpisodeDrawer && (
@@ -3661,6 +3780,9 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
           selectedSeasonForDrawer={selectedSeasonForDrawer}
           currentSeason={currentSeason}
           currentEpisode={currentEpisode}
+          seasons={metadata?.seasons}
+          fallbackBackdropPath={backdropPath}
+          onSelectSeason={(sNum) => setSelectedSeasonForDrawer(sNum)}
           onClose={() => setShowEpisodeDrawer(false)}
           onSelectEpisode={handleSelectEpisodeFromDrawer}
         />
