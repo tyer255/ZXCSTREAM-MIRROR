@@ -35,6 +35,7 @@ import {
   TailspinLoader,
 } from '../components/PlayerIconsAndTypes.js';
 import { SmartPlaybackControls } from '../components/PlayerControlsOverlay.js';
+import { PlayerDownloadModal } from '../components/PlayerDownloadModal.js';
 
 export interface AnimePlayerProps {
   tmdbId: string;
@@ -139,6 +140,7 @@ export const AnimePlayer: React.FC<AnimePlayerProps> = ({
   const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
   const [controlsVisible, setControlsVisible] = useState<boolean>(true);
   const [pausedIdleOverlay, setPausedIdleOverlay] = useState<boolean>(false);
+  const [downloadModalOpen, setDownloadModalOpen] = useState<boolean>(false);
   const [hintIndex, setHintIndex] = useState<number>(0);
 
   // Hover Seekbar
@@ -1796,7 +1798,23 @@ export const AnimePlayer: React.FC<AnimePlayerProps> = ({
         hoverPercent={hoverPercent}
         settingsOpen={settingsOpen}
         setSettingsOpen={setSettingsOpen}
+        onOpenDownload={() => setDownloadModalOpen(true)}
       />
+
+      {downloadModalOpen && (
+        <PlayerDownloadModal
+          open={downloadModalOpen}
+          onClose={() => setDownloadModalOpen(false)}
+          mediaType={validationResult?.mediaType || initialMediaType || 'tv'}
+          tmdbId={String(tmdbId)}
+          season={currentSeason}
+          episode={currentEpisode}
+          currentPlaybackSource={activeSource?.label || 'Anime Core HLS'}
+          playbackUrl={activeSource?.url || ''}
+          availableDubs={availableAudioTracks.map((t) => ({ code: t.code, name: t.label, type: t.isDub ? 'dub' : 'sub' }))}
+          audioTracks={availableAudioTracks.map((t, idx) => ({ id: idx, label: t.label, lang: t.code }))}
+        />
+      )}
     </div>
   );
 };

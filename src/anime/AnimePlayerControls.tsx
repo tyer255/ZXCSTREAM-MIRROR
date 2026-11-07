@@ -22,6 +22,7 @@ import {
   FullscreenExitSvg,
   PauseSvg,
   PlaySvg,
+  PlayerDownloadSvg,
   Rewind10Svg,
   SettingsGearSvg,
   VolumeHighSvg,
@@ -91,6 +92,7 @@ export interface AnimePlayerControlsProps {
   hoverPercent: number;
   settingsOpen: boolean;
   setSettingsOpen: React.Dispatch<React.SetStateAction<boolean>>;
+  onOpenDownload?: () => void;
 }
 
 export const AnimePlayerControls: React.FC<AnimePlayerControlsProps> = ({
@@ -131,6 +133,7 @@ export const AnimePlayerControls: React.FC<AnimePlayerControlsProps> = ({
   showBackButton = true,
   aspectMode = 'contain',
   onBack,
+  onOpenDownload,
   onTogglePlay,
   onSkip,
   onPrevEpisode,
@@ -196,7 +199,24 @@ export const AnimePlayerControls: React.FC<AnimePlayerControlsProps> = ({
           )}
         </div>
 
-        <div className="flex items-center gap-3" />
+        <div className="flex items-center gap-3">
+          {onOpenDownload && (
+            <button
+              type="button"
+              aria-label="Download Media"
+              data-testid="player-download-button"
+              title="Download Movie or Episode"
+              onClick={(e) => {
+                e.stopPropagation();
+                onOpenDownload();
+              }}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-white/15 hover:bg-white/25 active:scale-95 backdrop-blur-xs text-xs font-semibold text-white transition cursor-pointer shadow-xs border border-white/10"
+            >
+              <PlayerDownloadSvg />
+              <span className="hidden sm:inline">Download</span>
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Bottom Bar Container with gradient - Exactly matches PlayerControlsOverlay */}

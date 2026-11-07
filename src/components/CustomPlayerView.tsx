@@ -47,6 +47,7 @@ import {
   canPlayHevcInBrowser,
 } from './PlayerIconsAndTypes.js';
 import { PlayerControlsOverlay, SmartPlaybackControls } from './PlayerControlsOverlay.js';
+import { PlayerDownloadModal } from './PlayerDownloadModal.js';
 
 export type { CustomPlayerViewProps };
 
@@ -110,6 +111,7 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
     Math.max(0, Math.min(activeServerList.length - 1, initialServer))
   );
   const [showServersOverlay, setShowServersOverlay] = useState<boolean>(false);
+  const [downloadModalOpen, setDownloadModalOpen] = useState<boolean>(false);
 
   // Strict Anti-Ad & Anti-Popup Interceptor (blocks all window.open popups and ad redirects)
   useEffect(() => {
@@ -3882,7 +3884,28 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
         onSelectDub={handleSelectDub}
         isFullscreen={isFullscreen}
         onToggleFullscreen={toggleFullscreen}
+        onOpenDownload={() => setDownloadModalOpen(true)}
       />
+
+      {downloadModalOpen && (
+        <PlayerDownloadModal
+          open={downloadModalOpen}
+          onClose={() => setDownloadModalOpen(false)}
+          mediaType={activeMediaType}
+          tmdbId={String(metadata?.id || tmdbId)}
+          season={currentSeason}
+          episode={currentEpisode}
+          currentPlaybackSource={activeServerList[currentServerIndex]?.label}
+          playbackUrl={videoRef.current?.currentSrc || ''}
+          availableDubs={availableDubs.map((d) => ({
+            code: d.lang,
+            name: d.name,
+            type: String(d.type || 'dub'),
+          }))}
+          audioTracks={audioTracks}
+          qualities={qualities}
+        />
+      )}
 
       {subtitleModalOpen && (
         <PlayerSubtitleSettingsModal
