@@ -7,6 +7,7 @@ import {
   MediaType,
   PLAYER_HINTS,
   PLAYER_SERVERS,
+  OVERPOWER_SERVERS,
   NXSHA_SERVERS,
   RawOrionDub,
   detectSingleStreamLanguage,
@@ -90,7 +91,12 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
   const [pauseLogoError, setPauseLogoError] = useState<boolean>(false);
 
   // Server probing state matching zxcstream.cc u2 component
-  const activeServerList = playerMode === 'nxsha' ? NXSHA_SERVERS : PLAYER_SERVERS;
+  const activeServerList =
+    playerMode === 'nxsha'
+      ? NXSHA_SERVERS
+      : playerMode === 'overpower'
+      ? OVERPOWER_SERVERS
+      : PLAYER_SERVERS;
   const [servers, setServers] = useState<ServerItemState[]>(() =>
     activeServerList.map((s) => ({
       index: s.index,
@@ -944,8 +950,13 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
   const updateServerStatus = useCallback((idx: number, status: ServerProbeStatus) => {
     setServers((prev) =>
       prev.map((srv, i) => {
-        if (i !== idx) return srv;
-        // Never allow a FAILED server to transition back to checking/connecting/available in the same session
+        if (i !== idx) {
+          if (status === 'available' && playerMode === 'overpower' && srv.status === 'checking') {
+            return { ...srv, status: 'available', state: 'AVAILABLE' };
+          }
+          return srv;
+        }
+        // Never allow a FAILED server to transition back to checking/connecting/available automatically unless reset
         if (srv.status === 'failed' || srv.state === 'FAILED') {
           return srv;
         }
@@ -958,7 +969,7 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
         return { ...srv, status, state: nextState };
       })
     );
-  }, []);
+  }, [playerMode]);
 
   const syncNxshaStateMachineToUi = useCallback((sessionId?: string) => {
     const machine = nxshaStateMachineRef.current;
@@ -1241,17 +1252,13 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
             ) {
               return;
             }
-            const isPrePlayNetworkError =
-              videoEl.readyState < 3 &&
-              (errData.details === Hls.ErrorDetails.FRAG_LOAD_ERROR ||
-                errData.details === Hls.ErrorDetails.MANIFEST_LOAD_ERROR);
-            if (errData.fatal || isPrePlayNetworkError) {
+            if (errData.fatal) {
               handleNxshaPlaybackFailureRef.current(
                 sessionId,
                 providerCode,
                 meta,
                 dubCodeToUse,
-                `HLS error: ${errData.details || 'fatal'}`
+                `HLS fatal error: ${errData.details || 'fatal'}`
               );
             }
           });
@@ -1691,7 +1698,7 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
         return;
       }
 
-      const activeList = PLAYER_SERVERS;
+      const activeList = playerMode === 'overpower' ? OVERPOWER_SERVERS : PLAYER_SERVERS;
       if (serverIdx >= activeList.length) return;
 
       const serverDef = activeList[serverIdx];
@@ -1735,8 +1742,8 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
             date: meta.releaseDate,
             lastAirDate: meta.lastAirDate,
             imdbId: meta.imdbId,
-            dubCode: serverIdx === 0 ? dubCodeToUse : '',
-            dubType: serverIdx === 0 && dubCodeToUse ? selectedDubTypeRef.current : '',
+            dubCode: serverIdx === 0 || serverDef.id.startsWith('source-') || serverDef.id === 'orion' ? dubCodeToUse : '',
+            dubType: (serverIdx === 0 || serverDef.id.startsWith('source-') || serverDef.id === 'orion') && dubCodeToUse ? selectedDubTypeRef.current : '',
             preferredServer: serverDef.id,
             strictSingleServer: true,
             allowHevc,
@@ -1748,13 +1755,19 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
         if (Array.isArray(data?.dubs) && data.dubs.length > 0) {
           setAvailableDubs((prev) => mergeAvailableDubs(prev, data.dubs));
         }
+        if (Array.isArray(data?.subtitles) && data.subtitles.length > 0) {
+          setSubtitles((prev) => normalizeSubtitleTracks(prev, data.subtitles));
+        }
         if (!res.ok || !data?.success || !data?.link) {
           advanceToNextServer();
           return;
         }
 
         updateServerStatus(serverIdx, 'connecting');
-        loadedStreamDubRef.current = serverIdx === 0 ? dubCodeToUse.toLowerCase() : '';
+        loadedStreamDubRef.current =
+          serverIdx === 0 || serverDef.id.startsWith('source-') || serverDef.id === 'orion'
+            ? dubCodeToUse.toLowerCase()
+            : '';
 
         const videoEl = videoRef.current;
         if (!videoEl) return;
@@ -1916,7 +1929,12 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
     hasEstablishedPlaybackRef.current = false;
     currentPlayingProviderRef.current = null;
     const runId = ++probeRunIdRef.current;
-    const activeList = playerMode === 'nxsha' ? NXSHA_SERVERS : PLAYER_SERVERS;
+    const activeList =
+      playerMode === 'nxsha'
+        ? NXSHA_SERVERS
+        : playerMode === 'overpower'
+        ? OVERPOWER_SERVERS
+        : PLAYER_SERVERS;
     const startIdx = Math.max(0, Math.min(activeList.length - 1, initialServer));
 
     if (playerMode === 'nxsha') {
@@ -2217,11 +2235,10 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
         const targetDef = NXSHA_SERVERS[idx];
         if (!targetDef || !sessionId || !machine.isCurrentSession(sessionId)) return;
 
-        // Never select a FAILED server or duplicate-select the already SELECTED server
-        if (machine.isProviderFailed(sessionId, targetDef.id)) return;
+        // Allow user to select or retry any server in the carousel
         if (machine.getSelectedProviderCode(sessionId) === targetDef.id) return;
 
-        const selRes = machine.selectServer(sessionId, targetDef.id);
+        const selRes = machine.selectServer(sessionId, targetDef.id, true);
         if (!selRes.selected || !selRes.entry) return;
 
         syncNxshaStateMachineToUi(sessionId);
@@ -2261,7 +2278,7 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
                   episode: metadata.mediaType === 'tv' ? currentEpisode : 1,
                   preferredServer: targetDef.id,
                   strictSingleServer: true,
-                  allowFallback: false,
+                  allowFallback: true,
                   imdbId: metadata.imdbId,
                   dubCode: selectedDub,
                   dubLang: selectedDub,
@@ -2333,17 +2350,17 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
         return;
       }
 
-      // ZXCSTREAM custom mode manual selection (excluding failed servers)
+      // ZXCSTREAM / OVER POWER manual selection (allows switching or retrying any server)
       const targetSrv = servers[idx];
-      if (!targetSrv || targetSrv.status === 'failed' || targetSrv.state === 'FAILED') return;
+      if (!targetSrv) return;
       if (idx === currentServerIndex && canPlay) return;
 
       const runId = ++probeRunIdRef.current;
       hasEstablishedPlaybackRef.current = false;
       setServers((prev) =>
         prev.map((s, i) => {
-          if (s.status === 'failed' || s.state === 'FAILED') return s;
           if (i === idx) return { ...s, status: 'checking', state: 'SELECTED' };
+          if (s.status === 'failed' || s.state === 'FAILED') return s;
           return {
             ...s,
             status: s.status === 'available' ? 'available' : 'checking',
@@ -3245,7 +3262,7 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
       data-selected-server={
         playerMode === 'nxsha'
           ? nxshaStateMachineRef.current.getSelectedProviderCode() ?? ''
-          : PLAYER_SERVERS[currentServerIndex]?.id ?? ''
+          : activeServerList[currentServerIndex]?.id ?? ''
       }
       data-failed-servers={
         playerMode === 'nxsha'
@@ -3556,8 +3573,8 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
             } else {
               const nextRunId = ++probeRunIdRef.current;
               updateServerStatus(currentServerIndex, 'failed');
-              const nextIdx = (currentServerIndex + 1) % PLAYER_SERVERS.length;
-              if (servers[nextIdx]?.status === 'queue') {
+              const nextIdx = (currentServerIndex + 1) % activeServerList.length;
+              if (servers[nextIdx]?.status === 'queue' || servers[nextIdx]?.status === 'checking' || servers[nextIdx]?.status === 'available') {
                 probeServerAtIndex(nextIdx, nextRunId, metadata, selectedDub);
               }
             }

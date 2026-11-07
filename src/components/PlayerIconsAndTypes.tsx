@@ -427,6 +427,12 @@ export const PlayerLoadingScreen: React.FC<{
 };
 
 const SERVER_SUBTITLES: Record<string, string> = {
+  'source-1': 'Multi-Audio • 18 Languages & HD Stream',
+  'source-2': 'Multi-Audio • Hindi, Tamil, Telugu & English 1080p',
+  'source-3': 'Independent Multi-Language HD Stream',
+  'source-4': '1080p Multi-Audio • Hindi, English & Dual',
+  'source-5': '1080p Multi-Audio • Fast HLS Stream',
+  'source-6': 'Global Backup HD Stream',
   orion: 'Multi Audio Support',
   valstrax: 'HD Quality & Reliable',
   atlas: 'Fast & Stable',

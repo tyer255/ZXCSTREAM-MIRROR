@@ -94,7 +94,9 @@ export default function App() {
         onBack={() => navigateTo('/')}
         onEpisodeChange={(newSeason, newEpisode) => {
           const endpoint =
-            route.playerMode === 'nxsha'
+            route.playerMode === 'overpower'
+              ? 'overpower'
+              : route.playerMode === 'nxsha'
               ? 'nxsha'
               : route.playerMode === 'custom'
               ? 'player'

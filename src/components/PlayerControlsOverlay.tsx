@@ -381,7 +381,7 @@ export const PlayerControlsOverlay: React.FC<PlayerControlsOverlayProps> = ({
         )}
       </div>
       <div className="flex items-center gap-3">
-        {(playerMode === 'custom' || playerMode === 'nxsha') && (
+        {(playerMode === 'custom' || playerMode === 'nxsha' || playerMode === 'overpower') && (
           <button
             type="button"
             aria-label="Toggle Servers"
@@ -543,6 +543,26 @@ export const PlayerControlsOverlay: React.FC<PlayerControlsOverlayProps> = ({
             >
               {settingsTab === 'main' && (
                 <>
+                  {(playerMode === 'custom' ||
+                    playerMode === 'nxsha' ||
+                    playerMode === 'overpower') && (
+                    <button
+                      type="button"
+                      data-testid="settings-open-servers"
+                      onClick={() => {
+                        setSettingsOpen(false);
+                        setShowEpisodeDrawer(false);
+                        setShowServersOverlay(true);
+                      }}
+                      className="w-full flex items-center justify-between px-3 py-2 rounded-xl hover:bg-white/[0.08] active:bg-white/[0.12] transition-colors cursor-pointer"
+                    >
+                      <span className="text-zinc-300 font-medium">Servers</span>
+                      <span className="flex items-center gap-1 font-semibold text-white">
+                        Switch
+                        <ChevronRight className="w-4 h-4 text-zinc-400" />
+                      </span>
+                    </button>
+                  )}
                   <button
                     type="button"
                     data-testid="settings-open-dub-tab"

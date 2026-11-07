@@ -1298,11 +1298,12 @@ export class NxshaServerStateMachine {
   }
 
   /**
-   * Explicitly selects an eligible server (never FAILED, prevents duplicate selection).
+   * Explicitly selects an eligible server (or retries a failed server if allowRetry is true).
    */
   selectServer(
     sessionId: string,
-    code: string
+    code: string,
+    allowRetry = false
   ): { selected: boolean; entry?: ManagedServerItemState; reason?: string } {
     if (!this.isCurrentSession(sessionId)) {
       return { selected: false, reason: 'stale_session' };
@@ -1311,7 +1312,7 @@ export class NxshaServerStateMachine {
     if (!entry) {
       return { selected: false, reason: 'unknown_provider' };
     }
-    if (entry.state === 'FAILED' || this.failedCodes.has(code)) {
+    if ((entry.state === 'FAILED' || this.failedCodes.has(code)) && !allowRetry) {
       return { selected: false, reason: 'cannot_select_failed_server' };
     }
     if (this.selectedCode === code && entry.state === 'SELECTED') {
@@ -1320,6 +1321,12 @@ export class NxshaServerStateMachine {
         entry: { ...entry, sources: [...entry.sources] },
         reason: 'duplicate_selection',
       };
+    }
+
+    if (allowRetry && (entry.state === 'FAILED' || this.failedCodes.has(code))) {
+      this.failedCodes.delete(code);
+      entry.status = 'checking';
+      entry.state = 'PROCESSING';
     }
 
     if (this.selectedCode && this.selectedCode !== code) {

@@ -1,4 +1,4 @@
-export type PlayerMode = 'custom' | 'builtin' | 'nxsha' | 'anime';
+export type PlayerMode = 'custom' | 'builtin' | 'nxsha' | 'anime' | 'overpower';
 export type MediaType = 'movie' | 'tv';
 
 export interface PlayerUrlOptions {
@@ -171,7 +171,14 @@ export function buildPlayerUrl(options: PlayerUrlOptions): string {
     return animePath;
   }
 
-  const endpoint = options.playerMode === 'nxsha' ? 'nxsha' : options.playerMode === 'custom' ? 'player' : 'embed';
+  const endpoint =
+    options.playerMode === 'overpower'
+      ? 'overpower'
+      : options.playerMode === 'nxsha'
+      ? 'nxsha'
+      : options.playerMode === 'custom'
+      ? 'player'
+      : 'embed';
 
   let path = `${origin}/${endpoint}/${options.mediaType}`;
   if (cleanId) {
@@ -258,19 +265,139 @@ export const PLAYER_SERVERS = [
   { index: 6, id: 'daedalus', label: 'Daedalus VII' },
 ] as const;
 
+export const OVERPOWER_SERVERS = [
+  {
+    index: 0,
+    id: 'source-1',
+    label: 'Source 1 · Multi-Audio',
+    name: 'Source 1',
+    badge: 'Multi-Audio • 18 Languages & HD Stream',
+    quality: '1080p FHD',
+    latencyMs: 24,
+  },
+  {
+    index: 1,
+    id: 'source-2',
+    label: 'Source 2 · Multi-Audio',
+    name: 'Source 2',
+    badge: 'Multi-Audio • Hindi, Tamil, Telugu & English 1080p',
+    quality: '1080p FHD',
+    latencyMs: 28,
+  },
+  {
+    index: 2,
+    id: 'source-3',
+    label: 'Source 3 · Direct HD',
+    name: 'Source 3',
+    badge: 'Independent Multi-Language HD Stream',
+    quality: '1080p FHD',
+    latencyMs: 31,
+  },
+  {
+    index: 3,
+    id: 'source-4',
+    label: 'Source 4 · Multi-Audio',
+    name: 'Source 4',
+    badge: '1080p Multi-Audio • Hindi, English & Dual',
+    quality: '1080p FHD',
+    latencyMs: 33,
+  },
+  {
+    index: 4,
+    id: 'source-5',
+    label: 'Source 5 · Multi-Audio',
+    name: 'Source 5',
+    badge: '1080p Multi-Audio • Fast HLS Stream',
+    quality: '1080p FHD',
+    latencyMs: 36,
+  },
+  {
+    index: 5,
+    id: 'source-6',
+    label: 'Source 6 · Backup HD',
+    name: 'Source 6',
+    badge: 'Global Backup HD Stream',
+    quality: '1080p FHD',
+    latencyMs: 40,
+  },
+  {
+    index: 6,
+    id: 'orion',
+    label: 'Orion I',
+    name: 'Orion I',
+    badge: 'Multi Audio Support',
+    quality: '1080p FHD',
+    latencyMs: 42,
+  },
+  {
+    index: 7,
+    id: 'valstrax',
+    label: 'Valstrax II',
+    name: 'Valstrax II',
+    badge: 'HD Quality & Reliable',
+    quality: '1080p FHD',
+    latencyMs: 48,
+  },
+  {
+    index: 8,
+    id: 'vegamovies',
+    label: 'Vegamovies III',
+    name: 'Vegamovies III',
+    badge: 'Hindi & Dual Audio',
+    quality: '1080p FHD',
+    latencyMs: 45,
+  },
+  {
+    index: 9,
+    id: 'atlas',
+    label: 'Atlas IV',
+    name: 'Atlas IV',
+    badge: 'Fast & Stable',
+    quality: '4K UHD',
+    latencyMs: 38,
+  },
+  {
+    index: 10,
+    id: 'ursa',
+    label: 'Ursa V',
+    name: 'Ursa V',
+    badge: 'Alternative',
+    quality: '1080p FHD',
+    latencyMs: 54,
+  },
+  {
+    index: 11,
+    id: 'alatreon',
+    label: 'Alatreon VI',
+    name: 'Alatreon VI',
+    badge: 'Extensive Movie & TV Library',
+    quality: '1080p FHD',
+    latencyMs: 58,
+  },
+  {
+    index: 12,
+    id: 'daedalus',
+    label: 'Daedalus VII',
+    name: 'Daedalus VII',
+    badge: 'Alternative',
+    quality: '720p HD',
+    latencyMs: 65,
+  },
+] as const;
+
 export const NXSHA_SERVERS = [
-  { index: 0, id: 'rive-citadel', label: 'Citadel (Hindi & Multi)' },
-  { index: 1, id: 'castle', label: 'CastVid (Multi-Lang)' },
-  { index: 2, id: 'watchout', label: 'Multi-bill (Fast HLS)' },
-  { index: 3, id: 'streamflix', label: 'StremFx (Direct MP4)' },
-  { index: 4, id: 'nitro', label: 'Nitro (1080p Multi-Audio)' },
-  { index: 5, id: 'xdownloader', label: 'XDrop (Alternative)' },
-  { index: 6, id: 'purstream', label: 'PurStream (Fast)' },
-  { index: 7, id: 'vixolity', label: 'Vixolity (UHD)' },
-  { index: 8, id: 'rive-primevids', label: 'PrimeVids (Backup)' },
-  { index: 9, id: 'vegamovies', label: 'Vegamovies (Hindi & Dual)' },
-  { index: 10, id: 'orion', label: 'AethoOrion (Multi-Audio Master)' },
-  { index: 11, id: 'vega', label: 'AethoVega (Direct HLS Master)' },
+  { index: 0, id: 'watchout', label: 'Multi-bill (Fast HLS)' },
+  { index: 1, id: 'purstream', label: 'PurStream (Fast)' },
+  { index: 2, id: 'vegamovies', label: 'Vegamovies (Hindi & Dual)' },
+  { index: 3, id: 'nitro', label: 'Nitro (1080p Multi-Audio)' },
+  { index: 4, id: 'orion', label: 'AethoOrion (Multi-Audio Master)' },
+  { index: 5, id: 'vega', label: 'AethoVega (Direct HLS Master)' },
+  { index: 6, id: 'streamflix', label: 'StremFx (Direct MP4)' },
+  { index: 7, id: 'rive-citadel', label: 'Citadel (Hindi & Multi)' },
+  { index: 8, id: 'castle', label: 'CastVid (Multi-Lang)' },
+  { index: 9, id: 'xdownloader', label: 'XDrop (Alternative)' },
+  { index: 10, id: 'vixolity', label: 'Vixolity (UHD)' },
+  { index: 11, id: 'rive-primevids', label: 'PrimeVids (Backup)' },
   { index: 12, id: 'callisto', label: 'AethoCallisto (16-Lang Global & Hindi)' },
   { index: 13, id: 'sirius', label: 'AethoSirius (Ultra-Fast Hindi/EN)' },
   { index: 14, id: 'bharat', label: 'AethoBharat (Hindi & South Multi-Audio)' },
@@ -668,13 +795,20 @@ export function parseAppRoute(pathname: string): AppRoute {
     };
   }
 
-  // Standard Embed / Custom / NXSHA Player Routes: /embed/movie/:id or /embed/tv/:id/:s/:e
-  if ((first === 'player' || first === 'embed' || first === 'nxsha') && (second === 'movie' || second === 'tv') && third) {
+  // Standard Embed / Custom / NXSHA / OVER POWER Player Routes: /embed/movie/:id or /embed/tv/:id/:s/:e
+  if ((first === 'player' || first === 'embed' || first === 'nxsha' || first === 'overpower') && (second === 'movie' || second === 'tv') && third) {
     const season = Math.max(1, Number.parseInt(fourth ?? '1', 10) || 1);
     const episode = Math.max(1, Number.parseInt(fifth ?? '1', 10) || 1);
     return {
       page: 'player',
-      playerMode: first === 'nxsha' ? 'nxsha' : first === 'player' ? 'custom' : 'builtin',
+      playerMode:
+        first === 'overpower'
+          ? 'overpower'
+          : first === 'nxsha'
+          ? 'nxsha'
+          : first === 'player'
+          ? 'custom'
+          : 'builtin',
       mediaType: second,
       tmdbId: third,
       season,

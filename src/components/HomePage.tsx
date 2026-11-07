@@ -11,6 +11,7 @@ import {
   Code,
   ShieldCheck,
   Play,
+  Flame,
 } from 'lucide-react';
 import {
   DUB_LANGUAGES,
@@ -140,31 +141,45 @@ export const HomePage: React.FC<HomePageProps> = ({
 
   // Dynamic Brand Identity & Restrained Lighting per Player
   const brandTitle =
-    playerMode === 'nxsha' ? 'NXSHA' : playerMode === 'anime' ? 'ANIME CORE' : 'ZXCSTREAM';
+    playerMode === 'overpower'
+      ? 'OVER POWER'
+      : playerMode === 'nxsha'
+      ? 'NXSHA'
+      : playerMode === 'anime'
+      ? 'ANIME CORE'
+      : 'ZXCSTREAM';
 
   const lampRgba =
-    playerMode === 'nxsha'
+    playerMode === 'overpower'
+      ? 'rgba(168, 85, 247, 0.7)'
+      : playerMode === 'nxsha'
       ? 'rgba(8, 145, 178, 0.7)'
       : playerMode === 'anime'
       ? 'rgba(225, 29, 72, 0.65)'
       : 'rgba(37, 99, 235, 0.7)';
 
   const lampGlowSoftClass =
-    playerMode === 'nxsha'
+    playerMode === 'overpower'
+      ? 'bg-purple-600/10'
+      : playerMode === 'nxsha'
       ? 'bg-cyan-600/10'
       : playerMode === 'anime'
       ? 'bg-rose-600/10'
       : 'bg-blue-600/10';
 
   const lampBarClass =
-    playerMode === 'nxsha'
+    playerMode === 'overpower'
+      ? 'bg-purple-600/70'
+      : playerMode === 'nxsha'
       ? 'bg-cyan-600/70'
       : playerMode === 'anime'
       ? 'bg-rose-600/70'
       : 'bg-blue-600/70';
 
   const activeButtonClass =
-    playerMode === 'nxsha'
+    playerMode === 'overpower'
+      ? 'bg-purple-900 text-white shadow-md scale-100'
+      : playerMode === 'nxsha'
       ? 'bg-cyan-900 text-white shadow-md scale-100'
       : playerMode === 'anime'
       ? 'bg-rose-900 text-white shadow-md scale-100'
@@ -235,6 +250,18 @@ export const HomePage: React.FC<HomePageProps> = ({
               }`}
             >
               NXSHA
+            </button>
+            <button
+              type="button"
+              onClick={() => handleSelectPlayer('overpower')}
+              data-testid="header-engine-overpower"
+              className={`px-3.5 py-1.5 rounded-md transition-all duration-300 cursor-pointer font-semibold ${
+                playerMode === 'overpower'
+                  ? 'bg-purple-900 text-white shadow-xs'
+                  : 'text-zinc-400 hover:text-white'
+              }`}
+            >
+              OVER POWER
             </button>
             <button
               type="button"
@@ -315,12 +342,14 @@ export const HomePage: React.FC<HomePageProps> = ({
             <p className="text-zinc-400 text-xs lg:text-base max-w-lg mt-2">
               {playerMode === 'anime'
                 ? 'Dedicated anime streaming player with TMDB anime verification and multi-audio Sub & Dub playback'
+                : playerMode === 'overpower'
+                ? 'Overpowered 4-server ultra-low-latency streaming engine with unlimited bandwidth and multi-audio'
                 : playerMode === 'nxsha'
                 ? 'High-speed ad-free streaming engine for Movies & TV Shows with multi-server parallel discovery'
                 : 'Dive into endless hours of free streaming of Movies & TV Shows. A free, easy-to-embed player you can drop into any website'}
             </p>
 
-            {/* Three-Player Switcher */}
+            {/* Four-Player Switcher */}
             <span className="mt-8 text-xs font-mono text-zinc-400 mb-1">PLAYER</span>
             <div
               data-testid="main-player-switcher"
@@ -351,6 +380,19 @@ export const HomePage: React.FC<HomePageProps> = ({
               >
                 <ShieldCheck className="w-4 h-4" />
                 <span>NXSHA</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => handleSelectPlayer('overpower')}
+                data-testid="toggle-overpower-player"
+                className={`flex items-center gap-2 px-5 py-2.5 rounded-lg font-medium text-xs lg:text-sm cursor-pointer transition-all duration-300 ${
+                  playerMode === 'overpower'
+                    ? 'bg-purple-900 text-white shadow-md scale-100'
+                    : 'text-zinc-400 hover:text-zinc-50'
+                }`}
+              >
+                <Flame className="w-4 h-4 text-purple-400" />
+                <span>OVER POWER</span>
               </button>
               <button
                 type="button"
@@ -670,12 +712,33 @@ export const HomePage: React.FC<HomePageProps> = ({
           )}
 
           {/* QUERY PARAMETERS Documentation Section */}
-          {(playerMode === 'custom' || playerMode === 'nxsha') && (
+          {(playerMode === 'custom' || playerMode === 'nxsha' || playerMode === 'overpower') && (
             <div className="mt-10 w-full max-w-4xl text-left">
               <div className="space-y-5">
                 <h2 className="text-sm font-mono tracking-wider text-zinc-400 uppercase mb-6">
-                  {playerMode === 'nxsha' ? 'NXSHA Engine & Parameters' : 'Query Parameters'}
+                  {playerMode === 'overpower'
+                    ? 'OVER POWER Engine & Parameters'
+                    : playerMode === 'nxsha'
+                    ? 'NXSHA Engine & Parameters'
+                    : 'Query Parameters'}
                 </h2>
+
+                {playerMode === 'overpower' && (
+                  <div className="space-y-4 text-sm border-b border-zinc-800 pb-5">
+                    <div className="font-mono text-zinc-50 text-base">OVER POWER Direct Endpoints</div>
+                    <p className="text-zinc-400 leading-relaxed">
+                      OVER POWER provides direct high-performance streaming servers (Source 1–6 Multi-Audio/Direct HD, Orion I, Valstrax II, Vegamovies III, Atlas IV, Ursa V, Alatreon VI, Daedalus VII) engineered for instantaneous playback, zero rate-limiting delays, and full multi-audio support.
+                    </p>
+                    <div>
+                      <div className="font-mono text-xs uppercase tracking-wider text-zinc-400 mb-2">
+                        Usage
+                      </div>
+                      <pre className="bg-zinc-900 border border-zinc-800 rounded-md p-3 text-xs font-mono overflow-x-auto text-zinc-200">
+                        {`/overpower/movie/128\n/overpower/tv/66732/1/1`}
+                      </pre>
+                    </div>
+                  </div>
+                )}
 
                 {playerMode === 'nxsha' && (
                   <div className="space-y-4 text-sm border-b border-zinc-800 pb-5">

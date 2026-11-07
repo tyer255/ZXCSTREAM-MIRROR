@@ -323,7 +323,7 @@ async function resolveForServer(
     dubCode?: string;
     dubType?: string;
   }
-) {
+): Promise<any> {
   const {
     mediaType,
     tmdbId,
@@ -337,6 +337,150 @@ async function resolveForServer(
     dubCode = '',
     dubType = '',
   } = options;
+
+  if (targetServer.startsWith('source-') || targetServer.startsWith('op-')) {
+    const legacyOpToSource: Record<string, string> = {
+      'op-alpha': 'source-1',
+      'op-ultra': 'source-2',
+      'op-phoenix': 'source-3',
+      'op-apex': 'source-4',
+    };
+    const elfuraSourceId = legacyOpToSource[targetServer] || targetServer;
+    const randIp = () =>
+      `${Math.floor(Math.random() * 200) + 11}.${Math.floor(Math.random() * 250) + 1}.${Math.floor(Math.random() * 250) + 1}.${Math.floor(Math.random() * 250) + 1}`;
+    const bypassIp = randIp();
+    const embedReferer =
+      mediaType === 'tv'
+        ? `https://embed.theogpiratebot.online/embed/tv/${tmdbId}/${season}/${episode}?color=f4f4f4&episodeSelector=1`
+        : `https://embed.theogpiratebot.online/embed/movie/${tmdbId}?color=f4f4f4`;
+
+    try {
+      const sessRes = await fetch('https://embed.theogpiratebot.online/api/v1/session', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+          'User-Agent': COMMON_HEADERS['User-Agent'],
+          Origin: 'https://embed.theogpiratebot.online',
+          Referer: embedReferer,
+          'X-Forwarded-For': bypassIp,
+          'CF-Connecting-IP': bypassIp,
+          'X-Real-IP': bypassIp,
+        },
+        body: JSON.stringify({
+          type: mediaType === 'tv' ? 'tv' : 'movie',
+          tmdb: String(tmdbId),
+        }),
+      });
+
+      if (sessRes.ok) {
+        const sessData: any = await sessRes.json();
+        if (sessData?.ok && sessData?.pltoken && sessData?.nonce) {
+          const pbQuery = new URLSearchParams({
+            type: mediaType === 'tv' ? 'tv' : 'movie',
+            tmdb: String(tmdbId),
+            source: elfuraSourceId,
+            nonce: String(sessData.nonce),
+          });
+          if (mediaType === 'tv') {
+            pbQuery.set('s', String(Number(season) || 1));
+            pbQuery.set('e', String(Number(episode) || 1));
+          }
+          if (dubCode) {
+            pbQuery.set('lang', dubCode);
+          }
+
+          const pbRes = await fetch(
+            `https://embed.theogpiratebot.online/api/v1/playback?${pbQuery.toString()}`,
+            {
+              headers: {
+                Accept: 'application/json',
+                'User-Agent': COMMON_HEADERS['User-Agent'],
+                Origin: 'https://embed.theogpiratebot.online',
+                Referer: embedReferer,
+                'X-Playback-Token': String(sessData.pltoken),
+                'X-Forwarded-For': bypassIp,
+                'CF-Connecting-IP': bypassIp,
+                'X-Real-IP': bypassIp,
+              },
+            }
+          );
+
+          if (pbRes.ok) {
+            const pbData: any = await pbRes.json();
+            const rawSources = Array.isArray(pbData?.sources)
+              ? pbData.sources
+              : pbData?.primary
+              ? [pbData.primary]
+              : [];
+
+            if (pbData?.ok && rawSources.length > 0) {
+              const links = rawSources
+                .filter((s: any) => s && typeof s.url === 'string' && s.url.length > 0)
+                .map((s: any) => {
+                  const fullStreamUrl = s.url.startsWith('http')
+                    ? s.url
+                    : `https://embed.theogpiratebot.online${s.url.startsWith('/') ? '' : '/'}${s.url}`;
+                  return {
+                    link: `/api/stream/proxy?url=${encodeURIComponent(fullStreamUrl)}`,
+                    type: 'hls',
+                    quality: '1080p',
+                    label: s.label || targetServer,
+                    lang: dubCode || 'en',
+                    onlyHevc: false,
+                  };
+                });
+
+              if (links.length > 0) {
+                const firstSrc = rawSources[0];
+                const dubs = Array.isArray(firstSrc?.availableAudioLangs)
+                  ? firstSrc.availableAudioLangs.map((langCode: string) => ({
+                      code: String(langCode).toLowerCase(),
+                      name: String(langCode).toUpperCase(),
+                      type: 'dub',
+                    }))
+                  : [];
+                const subtitles = Array.isArray(firstSrc?.subtitles) ? firstSrc.subtitles : [];
+
+                return {
+                  success: true,
+                  server: targetServer,
+                  links,
+                  dubs,
+                  subtitles,
+                };
+              }
+            }
+          }
+        }
+      }
+    } catch {
+      // Fall through to multi-provider fallback if upstream session/playback is unreachable
+    }
+
+    const fallbackOrder: Record<string, string[]> = {
+      'source-1': ['valstrax', 'orion', 'atlas'],
+      'source-2': ['orion', 'valstrax', 'vegamovies'],
+      'source-3': ['vegamovies', 'valstrax', 'atlas'],
+      'source-4': ['atlas', 'valstrax', 'ursa'],
+      'source-5': ['ursa', 'valstrax', 'orion'],
+      'source-6': ['alatreon', 'daedalus', 'valstrax'],
+    };
+    const candidates = fallbackOrder[elfuraSourceId] || ['valstrax', 'orion', 'atlas', 'vegamovies'];
+    for (const cand of candidates) {
+      try {
+        const res = await resolveForServer(cand, options);
+        if (res && res.success && Array.isArray(res.links) && res.links.length > 0) {
+          return {
+            ...res,
+            server: targetServer,
+          };
+        }
+      } catch {
+        // try next candidate
+      }
+    }
+  }
 
   if (targetServer === 'vegamovies') {
     const vegaRes = await resolveVegaMoviesCombined({
@@ -1090,11 +1234,18 @@ apiRouter.get('/stream/proxy', async (req, res) => {
   res.setHeader('Access-Control-Allow-Headers', '*');
 
   try {
+    const isElfura = targetUrl.includes('embed.theogpiratebot.online');
     const reqHeaders: Record<string, string> = {
       'User-Agent': COMMON_HEADERS['User-Agent'],
-      Referer: 'https://zxcstream.cc/',
-      Origin: 'https://zxcstream.cc',
+      Referer: isElfura ? 'https://embed.theogpiratebot.online/' : 'https://zxcstream.cc/',
+      Origin: isElfura ? 'https://embed.theogpiratebot.online' : 'https://zxcstream.cc',
     };
+    if (isElfura) {
+      const randIp = `${Math.floor(Math.random() * 200) + 11}.${Math.floor(Math.random() * 250) + 1}.${Math.floor(Math.random() * 250) + 1}.${Math.floor(Math.random() * 250) + 1}`;
+      reqHeaders['X-Forwarded-For'] = randIp;
+      reqHeaders['CF-Connecting-IP'] = randIp;
+      reqHeaders['X-Real-IP'] = randIp;
+    }
     if (req.headers.range) {
       reqHeaders.Range = String(req.headers.range);
     }
