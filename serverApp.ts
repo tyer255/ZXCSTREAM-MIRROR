@@ -346,9 +346,6 @@ async function resolveForServer(
       'op-apex': 'source-4',
     };
     const elfuraSourceId = legacyOpToSource[targetServer] || targetServer;
-    const randIp = () =>
-      `${Math.floor(Math.random() * 200) + 11}.${Math.floor(Math.random() * 250) + 1}.${Math.floor(Math.random() * 250) + 1}.${Math.floor(Math.random() * 250) + 1}`;
-    const bypassIp = randIp();
     const embedReferer =
       mediaType === 'tv'
         ? `https://embed.theogpiratebot.online/embed/tv/${tmdbId}/${season}/${episode}?color=f4f4f4&episodeSelector=1`
@@ -363,9 +360,6 @@ async function resolveForServer(
           'User-Agent': COMMON_HEADERS['User-Agent'],
           Origin: 'https://embed.theogpiratebot.online',
           Referer: embedReferer,
-          'X-Forwarded-For': bypassIp,
-          'CF-Connecting-IP': bypassIp,
-          'X-Real-IP': bypassIp,
         },
         body: JSON.stringify({
           type: mediaType === 'tv' ? 'tv' : 'movie',
@@ -399,9 +393,6 @@ async function resolveForServer(
                 Origin: 'https://embed.theogpiratebot.online',
                 Referer: embedReferer,
                 'X-Playback-Token': String(sessData.pltoken),
-                'X-Forwarded-For': bypassIp,
-                'CF-Connecting-IP': bypassIp,
-                'X-Real-IP': bypassIp,
               },
             }
           );
@@ -1240,12 +1231,6 @@ apiRouter.get('/stream/proxy', async (req, res) => {
       Referer: isElfura ? 'https://embed.theogpiratebot.online/' : 'https://zxcstream.cc/',
       Origin: isElfura ? 'https://embed.theogpiratebot.online' : 'https://zxcstream.cc',
     };
-    if (isElfura) {
-      const randIp = `${Math.floor(Math.random() * 200) + 11}.${Math.floor(Math.random() * 250) + 1}.${Math.floor(Math.random() * 250) + 1}.${Math.floor(Math.random() * 250) + 1}`;
-      reqHeaders['X-Forwarded-For'] = randIp;
-      reqHeaders['CF-Connecting-IP'] = randIp;
-      reqHeaders['X-Real-IP'] = randIp;
-    }
     if (req.headers.range) {
       reqHeaders.Range = String(req.headers.range);
     }
