@@ -395,22 +395,27 @@ export const DeveloperDashboardPage: React.FC<DeveloperDashboardPageProps> = ({
     baseOrigin
   );
 
-  // Ready-to-share message for friend (TV 1396/1/1 + Movie 128)
+  // Ready-to-share message for friend (TV 1396 S1E1 + S1E2, Movie 128 + 533535)
   const friendShareMessage = `✅ ZXC[STREAM] Download API Examples:
 
-1️⃣ TV Series Example (1396/1/1 - Season 1 Episode 1):
-• Download Page: ${baseOrigin}/download/tv/1396/1/1
-• Direct MP4 Download (1-Click): ${baseApiUrl}/dl/tv/1396/1/1?lang=hi&quality=1080p
-• Simple JSON API (GET): ${baseApiUrl}/download/tv/1396/1/1
+1️⃣ TV Series Example: Breaking Bad (TMDB ID 1396):
+• Episode 1 (S1E1) Direct MP4: ${baseApiUrl}/dl/tv/1396/1/1?lang=hi&quality=1080p
+• Episode 1 (S1E1) Page:       ${baseOrigin}/download/tv/1396/1/1
+• Episode 2 (S1E2) Direct MP4: ${baseApiUrl}/dl/tv/1396/1/2?lang=hi&quality=1080p
+• Episode 2 (S1E2) Page:       ${baseOrigin}/download/tv/1396/1/2
+• Simple JSON API (GET):       ${baseApiUrl}/download/tv/1396/1/2
 
-2️⃣ Movie Example (128):
-• Download Page: ${baseOrigin}/download/movie/128
-• Direct MP4 Download (1-Click): ${baseApiUrl}/dl/movie/128?lang=hi&quality=1080p
-• Simple JSON API (GET): ${baseApiUrl}/download/movie/128
+2️⃣ Movie Examples (Standalone Movies):
+• Movie 1: Princess Mononoke (TMDB ID 128 - 2h 14m)
+  Direct MP4: ${baseApiUrl}/dl/movie/128?lang=hi&quality=1080p
+  Page:       ${baseOrigin}/download/movie/128
+• Movie 2: Deadpool & Wolverine (TMDB ID 533535 - 2h 8m)
+  Direct MP4: ${baseApiUrl}/dl/movie/533535?lang=hi&quality=1080p
+  Page:       ${baseOrigin}/download/movie/533535
 
-Pattern:
-• Series: ${baseOrigin}/download/tv/{tmdbId}/{season}/{episode}
-• Movie:  ${baseOrigin}/download/movie/{tmdbId}`;
+📌 Format Rule:
+• TV Series: ${baseOrigin}/download/tv/{tmdbId}/{season}/{episode}
+• Movies:    ${baseOrigin}/download/movie/{tmdbId}`;
 
   const jsSnippet = `// ✅ SUPER SIMPLE 1-LINE METHOD (No POST body required!)
 
@@ -736,106 +741,133 @@ export async function downloadMediaSimple() {
               </div>
 
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-                {/* Card 1: TV Series 1396/1/1 */}
+                {/* Card 1: TV Series 1396 (Breaking Bad S1E1 & S1E2) */}
                 <div className="p-4 bg-zinc-950 border border-zinc-800 rounded-xl space-y-3">
                   <div className="flex items-center justify-between gap-2">
                     <div>
                       <span className="text-xs font-mono font-semibold text-emerald-400">
-                        TV SERIES EXAMPLE (1396/1/1)
+                        TV SERIES EXAMPLE (ID: 1396)
                       </span>
                       <h3 className="text-sm font-bold text-white mt-0.5">
-                        Breaking Bad — Season 1, Episode 1
+                        Breaking Bad — Season 1 (Episodes 1 &amp; 2)
                       </h3>
+                      <p className="text-[11px] text-zinc-400 mt-0.5">
+                        Format: <code className="text-zinc-200">/download/tv/{'{tmdbId}'}/{'{season}'}/{'{episode}'}</code>
+                      </p>
                     </div>
                     {onNavigateDownload && (
-                      <button
-                        type="button"
-                        onClick={() => onNavigateDownload('tv', '1396', 1, 1)}
-                        className="px-2.5 py-1 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 rounded text-xs font-medium inline-flex items-center gap-1 cursor-pointer shrink-0"
-                      >
-                        <span>Open Page</span>
-                        <ExternalLink className="w-3 h-3" />
-                      </button>
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => onNavigateDownload('tv', '1396', 1, 1)}
+                          className="px-2 py-1 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 rounded text-xs font-medium inline-flex items-center gap-1 cursor-pointer shrink-0"
+                          title="Open S1E1 Download Page"
+                        >
+                          <span>S1E1</span>
+                          <ExternalLink className="w-3 h-3" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => onNavigateDownload('tv', '1396', 1, 2)}
+                          className="px-2 py-1 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 rounded text-xs font-medium inline-flex items-center gap-1 cursor-pointer shrink-0"
+                          title="Open S1E2 Download Page"
+                        >
+                          <span>S1E2</span>
+                          <ExternalLink className="w-3 h-3" />
+                        </button>
+                      </div>
                     )}
                   </div>
 
                   <div className="space-y-2 text-xs">
-                    <div className="p-2.5 bg-zinc-900/90 border border-zinc-800/80 rounded-lg flex items-center justify-between gap-2">
-                      <div className="min-w-0 flex-1">
-                        <div className="text-[11px] text-zinc-400">
-                          1. Download Page URL (Share / Embed):
+                    {/* S1E1 */}
+                    <div className="p-2.5 bg-zinc-900/90 border border-zinc-800/80 rounded-lg space-y-1">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[11px] font-semibold text-zinc-300">
+                          Episode 1 (Pilot — S1E1):
+                        </span>
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              copyToClipboard(`${baseApiUrl}/dl/tv/1396/1/1?lang=hi&quality=1080p`, 'tv-mp4-s1e1')
+                            }
+                            className="text-[11px] text-emerald-400 hover:text-emerald-300 inline-flex items-center gap-1 cursor-pointer font-mono"
+                          >
+                            {copiedTokenId === 'tv-mp4-s1e1' ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
+                            <span>Direct MP4</span>
+                          </button>
+                          <span className="text-zinc-600">·</span>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              copyToClipboard(`${baseOrigin}/download/tv/1396/1/1`, 'tv-page-s1e1')
+                            }
+                            className="text-[11px] text-zinc-400 hover:text-white inline-flex items-center gap-1 cursor-pointer font-mono"
+                          >
+                            {copiedTokenId === 'tv-page-s1e1' ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
+                            <span>Page</span>
+                          </button>
                         </div>
-                        <code
-                          data-testid="example-tv-page-url"
-                          className="font-mono text-zinc-100 break-all select-all"
-                        >
-                          {baseOrigin}/download/tv/1396/1/1
-                        </code>
                       </div>
-                      <button
-                        type="button"
-                        aria-label="Copy TV Download Page URL"
-                        onClick={() =>
-                          copyToClipboard(`${baseOrigin}/download/tv/1396/1/1`, 'tv-page-url')
-                        }
-                        className="p-1.5 text-zinc-400 hover:text-white rounded hover:bg-zinc-800 cursor-pointer shrink-0"
-                      >
-                        {copiedTokenId === 'tv-page-url' ? (
-                          <Check className="w-3.5 h-3.5 text-emerald-400" />
-                        ) : (
-                          <Copy className="w-3.5 h-3.5" />
-                        )}
-                      </button>
+                      <code className="block font-mono text-[11px] text-zinc-300 break-all select-all">
+                        {baseApiUrl}/dl/tv/1396/1/1?lang=hi&amp;quality=1080p
+                      </code>
                     </div>
 
-                    <div className="p-2.5 bg-zinc-900/90 border border-zinc-800/80 rounded-lg flex items-center justify-between gap-2">
-                      <div className="min-w-0 flex-1">
-                        <div className="text-[11px] text-zinc-400">
-                          2. Direct 1-Click MP4 File Download Link:
+                    {/* S1E2 */}
+                    <div className="p-2.5 bg-zinc-900/90 border border-zinc-800/80 rounded-lg space-y-1">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[11px] font-semibold text-zinc-300">
+                          Episode 2 (Cat&apos;s in the Bag... — S1E2):
+                        </span>
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              copyToClipboard(`${baseApiUrl}/dl/tv/1396/1/2?lang=hi&quality=1080p`, 'tv-mp4-s1e2')
+                            }
+                            className="text-[11px] text-emerald-400 hover:text-emerald-300 inline-flex items-center gap-1 cursor-pointer font-mono"
+                          >
+                            {copiedTokenId === 'tv-mp4-s1e2' ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
+                            <span>Direct MP4</span>
+                          </button>
+                          <span className="text-zinc-600">·</span>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              copyToClipboard(`${baseOrigin}/download/tv/1396/1/2`, 'tv-page-s1e2')
+                            }
+                            className="text-[11px] text-zinc-400 hover:text-white inline-flex items-center gap-1 cursor-pointer font-mono"
+                          >
+                            {copiedTokenId === 'tv-page-s1e2' ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
+                            <span>Page</span>
+                          </button>
                         </div>
-                        <code
-                          data-testid="example-tv-mp4-url"
-                          className="font-mono text-emerald-400 break-all select-all"
-                        >
-                          {baseApiUrl}/dl/tv/1396/1/1?lang=hi&amp;quality=1080p
-                        </code>
                       </div>
-                      <button
-                        type="button"
-                        aria-label="Copy TV Direct MP4 Link"
-                        onClick={() =>
-                          copyToClipboard(
-                            `${baseApiUrl}/dl/tv/1396/1/1?lang=hi&quality=1080p`,
-                            'tv-mp4-url'
-                          )
-                        }
-                        className="p-1.5 text-zinc-400 hover:text-white rounded hover:bg-zinc-800 cursor-pointer shrink-0"
-                      >
-                        {copiedTokenId === 'tv-mp4-url' ? (
-                          <Check className="w-3.5 h-3.5 text-emerald-400" />
-                        ) : (
-                          <Copy className="w-3.5 h-3.5" />
-                        )}
-                      </button>
+                      <code className="block font-mono text-[11px] text-emerald-400 break-all select-all">
+                        {baseApiUrl}/dl/tv/1396/1/2?lang=hi&amp;quality=1080p
+                      </code>
                     </div>
 
+                    {/* Simple JSON API */}
                     <div className="p-2.5 bg-zinc-900/90 border border-zinc-800/80 rounded-lg flex items-center justify-between gap-2">
                       <div className="min-w-0 flex-1">
                         <div className="text-[11px] text-zinc-400">
-                          3. Simple 1-Line JSON API (GET):
+                          Simple 1-Line JSON API (GET):
                         </div>
                         <code
                           data-testid="example-tv-json-url"
                           className="font-mono text-blue-300 break-all select-all"
                         >
-                          {baseApiUrl}/download/tv/1396/1/1
+                          {baseApiUrl}/download/tv/1396/1/2
                         </code>
                       </div>
                       <button
                         type="button"
                         aria-label="Copy TV JSON API URL"
                         onClick={() =>
-                          copyToClipboard(`${baseApiUrl}/download/tv/1396/1/1`, 'tv-json-url')
+                          copyToClipboard(`${baseApiUrl}/download/tv/1396/1/2`, 'tv-json-url')
                         }
                         className="p-1.5 text-zinc-400 hover:text-white rounded hover:bg-zinc-800 cursor-pointer shrink-0"
                       >
@@ -849,93 +881,120 @@ export async function downloadMediaSimple() {
                   </div>
                 </div>
 
-                {/* Card 2: Movie 128 */}
+                {/* Card 2: Movie Examples (ID: 128 & ID: 533535) */}
                 <div className="p-4 bg-zinc-950 border border-zinc-800 rounded-xl space-y-3">
                   <div className="flex items-center justify-between gap-2">
                     <div>
                       <span className="text-xs font-mono font-semibold text-blue-400">
-                        MOVIE EXAMPLE (128)
+                        MOVIE EXAMPLES (ID: 128 &amp; 533535)
                       </span>
                       <h3 className="text-sm font-bold text-white mt-0.5">
-                        Movie — TMDB ID 128 (Princess Mononoke)
+                        Standalone Movies (No Seasons or Episodes)
                       </h3>
+                      <p className="text-[11px] text-zinc-400 mt-0.5">
+                        Format: <code className="text-zinc-200">/download/movie/{'{tmdbId}'}</code>
+                      </p>
                     </div>
                     {onNavigateDownload && (
-                      <button
-                        type="button"
-                        onClick={() => onNavigateDownload('movie', '128')}
-                        className="px-2.5 py-1 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 rounded text-xs font-medium inline-flex items-center gap-1 cursor-pointer shrink-0"
-                      >
-                        <span>Open Page</span>
-                        <ExternalLink className="w-3 h-3" />
-                      </button>
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => onNavigateDownload('movie', '128')}
+                          className="px-2 py-1 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 rounded text-xs font-medium inline-flex items-center gap-1 cursor-pointer shrink-0"
+                          title="Open Princess Mononoke (128)"
+                        >
+                          <span>128</span>
+                          <ExternalLink className="w-3 h-3" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => onNavigateDownload('movie', '533535')}
+                          className="px-2 py-1 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 rounded text-xs font-medium inline-flex items-center gap-1 cursor-pointer shrink-0"
+                          title="Open Deadpool & Wolverine (533535)"
+                        >
+                          <span>533535</span>
+                          <ExternalLink className="w-3 h-3" />
+                        </button>
+                      </div>
                     )}
                   </div>
 
                   <div className="space-y-2 text-xs">
-                    <div className="p-2.5 bg-zinc-900/90 border border-zinc-800/80 rounded-lg flex items-center justify-between gap-2">
-                      <div className="min-w-0 flex-1">
-                        <div className="text-[11px] text-zinc-400">
-                          1. Download Page URL (Share / Embed):
+                    {/* Movie 1: Princess Mononoke (128) */}
+                    <div className="p-2.5 bg-zinc-900/90 border border-zinc-800/80 rounded-lg space-y-1">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[11px] font-semibold text-zinc-300">
+                          Movie 1: Princess Mononoke (TMDB ID 128 · 2h 14m):
+                        </span>
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              copyToClipboard(`${baseApiUrl}/dl/movie/128?lang=hi&quality=1080p`, 'movie-mp4-128')
+                            }
+                            className="text-[11px] text-emerald-400 hover:text-emerald-300 inline-flex items-center gap-1 cursor-pointer font-mono"
+                          >
+                            {copiedTokenId === 'movie-mp4-128' ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
+                            <span>Direct MP4</span>
+                          </button>
+                          <span className="text-zinc-600">·</span>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              copyToClipboard(`${baseOrigin}/download/movie/128`, 'movie-page-128')
+                            }
+                            className="text-[11px] text-zinc-400 hover:text-white inline-flex items-center gap-1 cursor-pointer font-mono"
+                          >
+                            {copiedTokenId === 'movie-page-128' ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
+                            <span>Page</span>
+                          </button>
                         </div>
-                        <code
-                          data-testid="example-movie-page-url"
-                          className="font-mono text-zinc-100 break-all select-all"
-                        >
-                          {baseOrigin}/download/movie/128
-                        </code>
                       </div>
-                      <button
-                        type="button"
-                        aria-label="Copy Movie Download Page URL"
-                        onClick={() =>
-                          copyToClipboard(`${baseOrigin}/download/movie/128`, 'movie-page-url')
-                        }
-                        className="p-1.5 text-zinc-400 hover:text-white rounded hover:bg-zinc-800 cursor-pointer shrink-0"
-                      >
-                        {copiedTokenId === 'movie-page-url' ? (
-                          <Check className="w-3.5 h-3.5 text-emerald-400" />
-                        ) : (
-                          <Copy className="w-3.5 h-3.5" />
-                        )}
-                      </button>
+                      <code className="block font-mono text-[11px] text-emerald-400 break-all select-all">
+                        {baseApiUrl}/dl/movie/128?lang=hi&amp;quality=1080p
+                      </code>
                     </div>
 
-                    <div className="p-2.5 bg-zinc-900/90 border border-zinc-800/80 rounded-lg flex items-center justify-between gap-2">
-                      <div className="min-w-0 flex-1">
-                        <div className="text-[11px] text-zinc-400">
-                          2. Direct 1-Click MP4 File Download Link:
+                    {/* Movie 2: Deadpool & Wolverine (533535) */}
+                    <div className="p-2.5 bg-zinc-900/90 border border-zinc-800/80 rounded-lg space-y-1">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[11px] font-semibold text-zinc-300">
+                          Movie 2: Deadpool &amp; Wolverine (TMDB ID 533535 · 2h 8m):
+                        </span>
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              copyToClipboard(`${baseApiUrl}/dl/movie/533535?lang=hi&quality=1080p`, 'movie-mp4-533535')
+                            }
+                            className="text-[11px] text-emerald-400 hover:text-emerald-300 inline-flex items-center gap-1 cursor-pointer font-mono"
+                          >
+                            {copiedTokenId === 'movie-mp4-533535' ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
+                            <span>Direct MP4</span>
+                          </button>
+                          <span className="text-zinc-600">·</span>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              copyToClipboard(`${baseOrigin}/download/movie/533535`, 'movie-page-533535')
+                            }
+                            className="text-[11px] text-zinc-400 hover:text-white inline-flex items-center gap-1 cursor-pointer font-mono"
+                          >
+                            {copiedTokenId === 'movie-page-533535' ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
+                            <span>Page</span>
+                          </button>
                         </div>
-                        <code
-                          data-testid="example-movie-mp4-url"
-                          className="font-mono text-emerald-400 break-all select-all"
-                        >
-                          {baseApiUrl}/dl/movie/128?lang=hi&amp;quality=1080p
-                        </code>
                       </div>
-                      <button
-                        type="button"
-                        aria-label="Copy Movie Direct MP4 Link"
-                        onClick={() =>
-                          copyToClipboard(
-                            `${baseApiUrl}/dl/movie/128?lang=hi&quality=1080p`,
-                            'movie-mp4-url'
-                          )
-                        }
-                        className="p-1.5 text-zinc-400 hover:text-white rounded hover:bg-zinc-800 cursor-pointer shrink-0"
-                      >
-                        {copiedTokenId === 'movie-mp4-url' ? (
-                          <Check className="w-3.5 h-3.5 text-emerald-400" />
-                        ) : (
-                          <Copy className="w-3.5 h-3.5" />
-                        )}
-                      </button>
+                      <code className="block font-mono text-[11px] text-zinc-300 break-all select-all">
+                        {baseApiUrl}/dl/movie/533535?lang=hi&amp;quality=1080p
+                      </code>
                     </div>
 
+                    {/* Simple JSON API */}
                     <div className="p-2.5 bg-zinc-900/90 border border-zinc-800/80 rounded-lg flex items-center justify-between gap-2">
                       <div className="min-w-0 flex-1">
                         <div className="text-[11px] text-zinc-400">
-                          3. Simple 1-Line JSON API (GET):
+                          Simple 1-Line JSON API (GET):
                         </div>
                         <code
                           data-testid="example-movie-json-url"
