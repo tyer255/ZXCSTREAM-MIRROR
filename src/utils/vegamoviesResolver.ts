@@ -1,8 +1,9 @@
 import crypto from 'node:crypto';
 import { detectAllStreamLanguages, detectSingleStreamLanguage } from './urlBuilder.js';
 
-export const VEGAMOVIES_BASE_URL = 'https://vegamovies6.co.in';
+export const VEGAMOVIES_BASE_URL = 'https://vegamovies7.co.in';
 export const VEGAMOVIES_MIRRORS = [
+  'https://vegamovies7.co.in',
   'https://vegamovies6.co.in',
   'https://vegamovies1.co.in',
   'https://vegamovies.yt',
@@ -605,7 +606,7 @@ export async function resolveFastDlCodeToStreamUrl(
  * along with the matched post metadata.
  */
 export async function resolveVegaMoviesWithPost(params: {
-  tmdbId: string;
+  tmdbId?: string;
   imdbId?: string;
   title: string;
   originalTitle?: string;
@@ -618,7 +619,11 @@ export async function resolveVegaMoviesWithPost(params: {
   const { title, originalTitle, year, imdbId, mediaType, season = 1, episode = 1, signal } = params;
   const cleanQuery = normalizeVegaSearchQuery(title);
   const cleanOrigQuery = normalizeVegaSearchQuery(originalTitle || '');
-  const cleanId = String(params.tmdbId || '').trim();
+
+  // Vegamovies resolution strictly requires a movie/series name derived from TMDB (never raw TMDB ID codes)
+  if (!cleanQuery && !cleanOrigQuery) {
+    return { sources: [], matchedPost: null, imdbId: null };
+  }
 
   try {
     let cards: VegaSearchCard[] = [];
@@ -628,6 +633,7 @@ export async function resolveVegaMoviesWithPost(params: {
       const trimmed = q.trim();
       if (
         trimmed &&
+        !/^\d+$/.test(trimmed) &&
         trimmed.toLowerCase() !== 'movie' &&
         trimmed.toLowerCase() !== 'series' &&
         !list.some((existing) => existing.toLowerCase() === trimmed.toLowerCase())
@@ -636,32 +642,45 @@ export async function resolveVegaMoviesWithPost(params: {
       }
     };
 
+    const addNameVariants = (queries: string[], rawName: string, cleanName: string) => {
+      if (!cleanName) return;
+      addUniqueQuery(queries, cleanName);
+
+      // Romanized Hindi transliteration variant (e.g., "Nai Naveli" <-> "Nayi Naveli")
+      if (/\bnai\b/i.test(cleanName)) {
+        addUniqueQuery(queries, cleanName.replace(/\bnai\b/gi, 'Nayi'));
+      } else if (/\bnayi\b/i.test(cleanName)) {
+        addUniqueQuery(queries, cleanName.replace(/\bnayi\b/gi, 'Nai'));
+      }
+
+      // If title contains a colon or dash subtitle (e.g. "Stree 2: Sarkate Ka Aatank"), also try the main title prefix
+      if (/[:\-–—]/.test(rawName)) {
+        const prefix = normalizeVegaSearchQuery(rawName.split(/[:\-–—]/)[0] || '');
+        if (prefix.length >= 3) {
+          addUniqueQuery(queries, prefix);
+        }
+      }
+
+      if (year && !cleanName.includes(year)) {
+        addUniqueQuery(queries, `${cleanName} ${year}`);
+      }
+    };
+
     const queriesToTry: string[] = [];
     if (cleanOrigQuery) {
-      addUniqueQuery(queriesToTry, cleanOrigQuery);
+      addNameVariants(queriesToTry, originalTitle || '', cleanOrigQuery);
     }
     if (cleanQuery) {
-      addUniqueQuery(queriesToTry, cleanQuery);
-      // Romanized Hindi transliteration variant (e.g., "Nai Naveli" <-> "Nayi Naveli")
-      if (/\bnai\b/i.test(cleanQuery)) {
-        addUniqueQuery(queriesToTry, cleanQuery.replace(/\bnai\b/gi, 'Nayi'));
-      } else if (/\bnayi\b/i.test(cleanQuery)) {
-        addUniqueQuery(queriesToTry, cleanQuery.replace(/\bnayi\b/gi, 'Nai'));
-      }
-      if (year && !cleanQuery.includes(year)) {
-        addUniqueQuery(queriesToTry, `${cleanQuery} ${year}`);
-      }
-      // Also add the longest distinctive word (>= 4 chars) as fallback so DLE search succeeds
-      // even when one word in a multi-word title has an alternate transliteration on Vegamovies
-      const words = tokenizeVegaTitle(cleanQuery)
-        .filter((w) => w.length >= 4 && !/^\d+$/.test(w))
-        .sort((a, b) => b.length - a.length);
-      if (words.length > 0 && cleanQuery.includes(' ')) {
-        addUniqueQuery(queriesToTry, words[0]);
-      }
+      addNameVariants(queriesToTry, title, cleanQuery);
     }
-    if (cleanId) {
-      addUniqueQuery(queriesToTry, cleanId);
+
+    // Also add the longest distinctive word (>= 4 chars) from the movie name as fallback so DLE search succeeds
+    // even when one word in a multi-word title has an alternate transliteration on Vegamovies
+    const combinedWords = tokenizeVegaTitle(`${cleanOrigQuery} ${cleanQuery}`)
+      .filter((w) => w.length >= 4 && !/^\d+$/.test(w))
+      .sort((a, b) => b.length - a.length);
+    if (combinedWords.length > 0 && (cleanQuery.includes(' ') || cleanOrigQuery.includes(' '))) {
+      addUniqueQuery(queriesToTry, combinedWords[0]);
     }
 
     // Try primary mirror then fallback mirrors only if primary mirror is unreachable
@@ -671,8 +690,6 @@ export async function resolveVegaMoviesWithPost(params: {
 
       for (const q of queriesToTry) {
         if (cards.length > 0 || signal?.aborted) break;
-        // Skip raw numeric ID in DLE story search (handled via index.php?newsid= below)
-        if (/^\d+$/.test(q)) continue;
         try {
           const searchCtrl = new AbortController();
           const searchTimer = setTimeout(() => searchCtrl.abort(), 3200);
@@ -692,13 +709,12 @@ export async function resolveVegaMoviesWithPost(params: {
             mirrorReachable = true;
             const html = await searchRes.text();
             const parsed = parseVegaSearchHtml(html);
-            // Verify at least one parsed card actually scores > 0 before stopping query loop
+            // Verify at least one parsed card actually matches the movie/series name before stopping query loop
             const matching = parsed.filter(
               (card) =>
                 scoreVegaCandidatePost(card.url, card.title, {
                   title,
                   originalTitle,
-                  postId: cleanId,
                   year,
                   mediaType,
                   season,
@@ -715,48 +731,7 @@ export async function resolveVegaMoviesWithPost(params: {
         }
       }
 
-      // If no title match and cleanId is a 4-6 digit number, check if it's a direct Vegamovies newsid (e.g. 59682)
-      if (cards.length === 0 && /^\d{4,6}$/.test(cleanId) && !signal?.aborted) {
-        try {
-          const newsCtrl = new AbortController();
-          const newsTimer = setTimeout(() => newsCtrl.abort(), 2500);
-          if (signal) {
-            signal.addEventListener('abort', () => newsCtrl.abort(), { once: true });
-          }
-          const newsRes = await fetch(`${mirror}/index.php?newsid=${cleanId}`, {
-            method: 'HEAD',
-            redirect: 'manual',
-            headers: { 'User-Agent': VEGA_USER_AGENT },
-            signal: newsCtrl.signal,
-          });
-          clearTimeout(newsTimer);
-          const loc = newsRes.headers.get('location') || '';
-          const locMatch = loc.match(/\/(\d+)-([a-z0-9-]+)\.html/i);
-          if (locMatch && locMatch[1] === cleanId) {
-            mirrorReachable = true;
-            const fullPostUrl = loc.startsWith('http') ? loc : `${mirror}${loc.startsWith('/') ? '' : '/'}${loc}`;
-            const slugTitle = locMatch[2].replace(/-/g, ' ');
-            const yearMatch = slugTitle.match(/\b(19\d{2}|20\d{2})\b/);
-            cards = [
-              {
-                id: cleanId,
-                url: fullPostUrl,
-                title: slugTitle,
-                year: yearMatch ? yearMatch[1] : '',
-                qualityBadge: 'HD',
-                rating: '',
-                posterUrl: '',
-                isSeries: /\b(season|s\d{1,2}|series)\b/i.test(slugTitle),
-              },
-            ];
-            searchUrlUsed = `${mirror}/`;
-          }
-        } catch {
-          // ignore
-        }
-      }
-
-      // If search returns no matching cards, inspect homepage posts
+      // If search returns no matching cards, inspect homepage posts by movie name
       if (cards.length === 0 && !signal?.aborted) {
         try {
           const homeCtrl = new AbortController();
@@ -780,7 +755,6 @@ export async function resolveVegaMoviesWithPost(params: {
                 scoreVegaCandidatePost(card.url, card.title, {
                   title,
                   originalTitle,
-                  postId: cleanId,
                   year,
                   mediaType,
                   season,
@@ -811,7 +785,6 @@ export async function resolveVegaMoviesWithPost(params: {
         score: scoreVegaCandidatePost(card.url, card.title, {
           title,
           originalTitle,
-          postId: cleanId,
           year,
           mediaType,
           season,
@@ -852,9 +825,8 @@ export async function resolveVegaMoviesWithPost(params: {
           extractedImdbId = detailMeta.imdbId;
         }
 
-        // If both page and caller have an IMDb ID and they don't match, skip this post (unless matched by direct postId)
+        // If both page and caller have an IMDb ID and they don't match, skip this post
         if (
-          candidate.card.id !== cleanId &&
           imdbId &&
           detailMeta.imdbId &&
           imdbId.toLowerCase() !== detailMeta.imdbId.toLowerCase()

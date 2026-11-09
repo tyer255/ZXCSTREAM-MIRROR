@@ -50,6 +50,13 @@ import {
   extractDashSegmentUrls,
   extractHlsSegmentUrls,
 } from './src/services/downloadEngineTypes.js';
+import {
+  DEFAULT_DEMO_API_KEY,
+  extractApiKeyFromRequest,
+  publicDownloadApiManager,
+  validateDownloadRequestInput,
+  verifyDownloadFileToken,
+} from './src/services/publicDownloadApi.js';
 
 const app = express();
 
@@ -2488,7 +2495,11 @@ apiRouter.post('/download/prepare', async (req, res) => {
   return res.json({ status: 'preparing', cacheKey });
 });
 
-apiRouter.all('/download/file', async (req, res) => {
+async function handleDownloadFileStream(
+  req: express.Request,
+  res: express.Response,
+  queryParams: Record<string, string | undefined>
+) {
   if (req.method !== 'GET' && req.method !== 'HEAD') {
     return res.status(405).send('Method Not Allowed');
   }
@@ -2502,7 +2513,7 @@ apiRouter.all('/download/file', async (req, res) => {
     quality = '1080p',
     title = '',
     sourceUrl = '',
-  } = req.query as Record<string, string>;
+  } = queryParams;
 
   const cleanTitle = (title || (mediaType === 'tv' ? 'Series' : 'Movie'))
     .replace(/[^a-zA-Z0-9_\-\s]/g, '')
@@ -2748,6 +2759,520 @@ apiRouter.all('/download/file', async (req, res) => {
   }
 
   return res.end();
+}
+
+apiRouter.all('/download/file', async (req, res) => {
+  return handleDownloadFileStream(req, res, req.query as Record<string, string>);
+});
+
+// ==========================================
+// PUBLIC DEVELOPER DOWNLOAD API (v1)
+// Integrated directly with the existing Download Engine
+// Unlimited API Requests & Unlimited Downloads (No Rate Limits / Quotas)
+// ==========================================
+
+function resolveRequestOrigin(_req: express.Request): string {
+  return 'https://zxcstream-mirror.vercel.app';
+}
+
+apiRouter.get('/v1/developer/keys', (req, res) => {
+  const t0 = Date.now();
+  const keys = publicDownloadApiManager.listApiKeys();
+  publicDownloadApiManager.logActivity({
+    method: 'GET',
+    endpoint: '/api/v1/developer/keys',
+    statusCode: 200,
+    keyId: 'dashboard',
+    keyPrefix: 'console',
+    latencyMs: Date.now() - t0,
+    summary: `Listed ${keys.length} developer API key(s)`,
+  });
+  return res.json({
+    success: true,
+    baseUrl: 'https://zxcstream-mirror.vercel.app/api/v1',
+    siteOrigin: 'https://zxcstream-mirror.vercel.app',
+    keys,
+    defaultDemoKey: DEFAULT_DEMO_API_KEY,
+    policy: {
+      rateLimit: 'UNLIMITED',
+      quota: 'UNLIMITED',
+    },
+  });
+});
+
+apiRouter.post('/v1/developer/keys', (req, res) => {
+  const rawName = typeof req.body?.name === 'string' ? req.body.name.trim() : '';
+  if (rawName.length > 80) {
+    return res.status(400).json({
+      success: false,
+      code: 'INVALID_KEY_NAME',
+      error: 'API key name must be 80 characters or fewer.',
+    });
+  }
+  const { key, rawKey } = publicDownloadApiManager.createApiKey(rawName || undefined);
+  return res.status(201).json({
+    success: true,
+    key,
+    apiKey: rawKey,
+    message: 'API key generated successfully. Store this secret key securely; it is only shown once.',
+    policy: {
+      rateLimit: 'UNLIMITED',
+      quota: 'UNLIMITED',
+    },
+  });
+});
+
+apiRouter.delete('/v1/developer/keys/:id', (req, res) => {
+  const keyId = String(req.params.id || '').trim();
+  const revoked = publicDownloadApiManager.revokeApiKey(keyId);
+  if (!revoked) {
+    return res.status(404).json({
+      success: false,
+      code: 'KEY_NOT_FOUND',
+      error: `API key "${keyId}" was not found.`,
+    });
+  }
+  return res.json({
+    success: true,
+    key: revoked,
+    message: `API key "${revoked.name}" (${revoked.keyPrefix}) has been revoked.`,
+  });
+});
+
+apiRouter.get('/v1/developer/usage', (req, res) => {
+  const t0 = Date.now();
+  const providedKey = extractApiKeyFromRequest(
+    req.headers as Record<string, string | string[] | undefined>,
+    req.query as Record<string, unknown>
+  );
+
+  let filterKeyId: string | undefined;
+  if (providedKey) {
+    const auth = publicDownloadApiManager.authenticateKey(providedKey);
+    if (!auth.authenticated || !auth.key) {
+      publicDownloadApiManager.logActivity({
+        method: 'GET',
+        endpoint: '/api/v1/developer/usage',
+        statusCode: 401,
+        keyId: 'unauthenticated',
+        keyPrefix: 'invalid',
+        latencyMs: Date.now() - t0,
+        summary: auth.error || 'Unauthorized usage query',
+      });
+      return res.status(401).json({
+        success: false,
+        code: auth.code || 'UNAUTHORIZED',
+        error: auth.error,
+      });
+    }
+    if (req.query.scope === 'key') {
+      filterKeyId = auth.key.id;
+    }
+  }
+
+  const stats = publicDownloadApiManager.getUsageStatistics(filterKeyId);
+  const jobs = publicDownloadApiManager
+    .listDownloadJobs(filterKeyId)
+    .slice(0, 50)
+    .map((j) => publicDownloadApiManager.formatPublicJobResponse(j, resolveRequestOrigin(req)));
+
+  return res.json({
+    ...stats,
+    jobs,
+  });
+});
+
+apiRouter.get('/v1/downloads', (req, res) => {
+  const providedKey = extractApiKeyFromRequest(
+    req.headers as Record<string, string | string[] | undefined>,
+    req.query as Record<string, unknown>
+  );
+
+  let filterKeyId: string | undefined;
+  if (providedKey) {
+    const auth = publicDownloadApiManager.authenticateKey(providedKey);
+    if (!auth.authenticated || !auth.key) {
+      return res.status(401).json({
+        success: false,
+        code: auth.code || 'UNAUTHORIZED',
+        error: auth.error,
+      });
+    }
+    if (req.query.scope === 'key') {
+      filterKeyId = auth.key.id;
+    }
+  }
+
+  const origin = resolveRequestOrigin(req);
+  const jobs = publicDownloadApiManager
+    .listDownloadJobs(filterKeyId)
+    .map((j) => publicDownloadApiManager.formatPublicJobResponse(j, origin));
+
+  return res.json({
+    success: true,
+    total: jobs.length,
+    downloads: jobs,
+    policy: {
+      rateLimit: 'UNLIMITED',
+      quota: 'UNLIMITED',
+    },
+  });
+});
+
+apiRouter.post('/v1/downloads', async (req, res) => {
+  const t0 = Date.now();
+  const rawKey = extractApiKeyFromRequest(
+    req.headers as Record<string, string | string[] | undefined>,
+    req.query as Record<string, unknown>
+  );
+
+  const auth = publicDownloadApiManager.authenticateKey(rawKey);
+  if (!auth.authenticated || !auth.key) {
+    publicDownloadApiManager.logActivity({
+      method: 'POST',
+      endpoint: '/api/v1/downloads',
+      statusCode: 401,
+      keyId: 'unauthenticated',
+      keyPrefix: 'none',
+      latencyMs: Date.now() - t0,
+      summary: auth.error || 'Rejected unauthenticated download request',
+    });
+    return res.status(401).json({
+      success: false,
+      code: auth.code || 'UNAUTHORIZED',
+      error: auth.error,
+    });
+  }
+
+  const validation = validateDownloadRequestInput(req.body || {});
+  if (!validation.valid) {
+    publicDownloadApiManager.logActivity({
+      method: 'POST',
+      endpoint: '/api/v1/downloads',
+      statusCode: 400,
+      keyId: auth.key.id,
+      keyPrefix: auth.key.keyPrefix,
+      latencyMs: Date.now() - t0,
+      summary: `Validation failed: ${validation.code}`,
+    });
+    return res.status(400).json({
+      success: false,
+      code: validation.code,
+      error: validation.error,
+    });
+  }
+
+  const validReq = validation.data;
+  const job = publicDownloadApiManager.createDownloadJob({
+    key: auth.key,
+    request: validReq,
+  });
+
+  try {
+    // Delegate directly to the EXISTING Download Engine
+    const { directSources, matchedPost } = await gatherDirectDownloadSources({
+      mediaType: validReq.mediaType,
+      tmdbId: validReq.tmdbId,
+      season: validReq.season,
+      episode: validReq.episode,
+      title: validReq.title || '',
+      year: validReq.year || '',
+    });
+
+    const fallbackPostTitle = matchedPost?.title
+      ? matchedPost.title.replace(/\b(19\d{2}|20\d{2})\b.*$/i, '').trim()
+      : '';
+
+    const resolution = await resolveDownloadableMedia(
+      {
+        mediaType: validReq.mediaType,
+        tmdbId: validReq.tmdbId,
+        season: validReq.season,
+        episode: validReq.episode,
+        title: String(validReq.title || fallbackPostTitle || '').trim() || undefined,
+        year: String(validReq.year || matchedPost?.year || '').trim() || undefined,
+        resolvedDirectSources: directSources,
+      },
+      fetchTmdbDetailsWithFallback
+    );
+
+    const updatedJob =
+      publicDownloadApiManager.completeDownloadJobWithResolution(job.id, resolution) || job;
+
+    // Warm up the existing MP4 cache in the background if requested
+    if (req.body?.prepareCache !== false && updatedJob.status === 'completed') {
+      const heightMatch = String(updatedJob.quality).match(/(\d+)p/i);
+      const requestedHeight = heightMatch ? Number(heightMatch[1]) : 1080;
+      const cacheKey = `${updatedJob.mediaType}_${updatedJob.tmdbId}_s${
+        updatedJob.season || 1
+      }_e${updatedJob.episode || 1}_${updatedJob.lang.toLowerCase()}_${requestedHeight}p`.replace(
+        /[^a-zA-Z0-9_-]/g,
+        ''
+      );
+      const cachedMp4Path = path.join('/tmp', `zxc_cached_mp4_${cacheKey}.mp4`);
+      void buildFullMovieMp4ToCache({
+        cacheKey,
+        cachedMp4Path,
+        mediaType: updatedJob.mediaType,
+        tmdbId: updatedJob.tmdbId,
+        season: String(updatedJob.season || 1),
+        episode: String(updatedJob.episode || 1),
+        lang: updatedJob.lang,
+        requestedHeight,
+        title: updatedJob.title,
+        sourceUrl: updatedJob.directUrl || updatedJob.internalDownloadUrl || '',
+      });
+    }
+
+    const statusCode = updatedJob.status === 'failed' ? 422 : 201;
+    publicDownloadApiManager.logActivity({
+      method: 'POST',
+      endpoint: '/api/v1/downloads',
+      statusCode,
+      keyId: auth.key.id,
+      keyPrefix: auth.key.keyPrefix,
+      latencyMs: Date.now() - t0,
+      jobId: updatedJob.id,
+      summary: `${updatedJob.title} (${updatedJob.mediaType.toUpperCase()} #${updatedJob.tmdbId}) · ${updatedJob.quality} [${updatedJob.lang.toUpperCase()}]`,
+    });
+
+    const origin = resolveRequestOrigin(req);
+    return res
+      .status(statusCode)
+      .json(publicDownloadApiManager.formatPublicJobResponse(updatedJob, origin));
+  } catch (err: any) {
+    const failedJob =
+      publicDownloadApiManager.failDownloadJob(
+        job.id,
+        err?.message || 'Unexpected error in Download Engine'
+      ) || job;
+
+    publicDownloadApiManager.logActivity({
+      method: 'POST',
+      endpoint: '/api/v1/downloads',
+      statusCode: 500,
+      keyId: auth.key.id,
+      keyPrefix: auth.key.keyPrefix,
+      latencyMs: Date.now() - t0,
+      jobId: failedJob.id,
+      summary: `Download job failed: ${failedJob.error}`,
+    });
+
+    const origin = resolveRequestOrigin(req);
+    return res
+      .status(500)
+      .json(publicDownloadApiManager.formatPublicJobResponse(failedJob, origin));
+  }
+});
+
+apiRouter.get('/v1/downloads/:id', (req, res) => {
+  const t0 = Date.now();
+  const rawKey = extractApiKeyFromRequest(
+    req.headers as Record<string, string | string[] | undefined>,
+    req.query as Record<string, unknown>
+  );
+
+  const auth = publicDownloadApiManager.authenticateKey(rawKey);
+  if (!auth.authenticated || !auth.key) {
+    publicDownloadApiManager.logActivity({
+      method: 'GET',
+      endpoint: `/api/v1/downloads/${req.params.id}`,
+      statusCode: 401,
+      keyId: 'unauthenticated',
+      keyPrefix: 'none',
+      latencyMs: Date.now() - t0,
+      summary: auth.error || 'Unauthorized download job lookup',
+    });
+    return res.status(401).json({
+      success: false,
+      code: auth.code || 'UNAUTHORIZED',
+      error: auth.error,
+    });
+  }
+
+  const jobId = String(req.params.id || '').trim();
+  const job = publicDownloadApiManager.getDownloadJob(jobId);
+  if (!job) {
+    publicDownloadApiManager.logActivity({
+      method: 'GET',
+      endpoint: `/api/v1/downloads/${jobId}`,
+      statusCode: 404,
+      keyId: auth.key.id,
+      keyPrefix: auth.key.keyPrefix,
+      latencyMs: Date.now() - t0,
+      summary: `Download job "${jobId}" not found`,
+    });
+    return res.status(404).json({
+      success: false,
+      code: 'JOB_NOT_FOUND',
+      error: `Download job "${jobId}" does not exist.`,
+    });
+  }
+
+  publicDownloadApiManager.logActivity({
+    method: 'GET',
+    endpoint: `/api/v1/downloads/${jobId}`,
+    statusCode: 200,
+    keyId: auth.key.id,
+    keyPrefix: auth.key.keyPrefix,
+    latencyMs: Date.now() - t0,
+    jobId: job.id,
+    summary: `Fetched details for job ${job.id} (${job.title})`,
+  });
+
+  const origin = resolveRequestOrigin(req);
+  return res.json(publicDownloadApiManager.formatPublicJobResponse(job, origin));
+});
+
+apiRouter.get('/v1/downloads/:id/status', (req, res) => {
+  const t0 = Date.now();
+  const rawKey = extractApiKeyFromRequest(
+    req.headers as Record<string, string | string[] | undefined>,
+    req.query as Record<string, unknown>
+  );
+
+  const auth = publicDownloadApiManager.authenticateKey(rawKey);
+  if (!auth.authenticated || !auth.key) {
+    return res.status(401).json({
+      success: false,
+      code: auth.code || 'UNAUTHORIZED',
+      error: auth.error,
+    });
+  }
+
+  const jobId = String(req.params.id || '').trim();
+  const job = publicDownloadApiManager.getDownloadJob(jobId);
+  if (!job) {
+    return res.status(404).json({
+      success: false,
+      code: 'JOB_NOT_FOUND',
+      error: `Download job "${jobId}" does not exist.`,
+    });
+  }
+
+  const origin = resolveRequestOrigin(req);
+  const formatted = publicDownloadApiManager.formatPublicJobResponse(job, origin);
+
+  publicDownloadApiManager.logActivity({
+    method: 'GET',
+    endpoint: `/api/v1/downloads/${jobId}/status`,
+    statusCode: 200,
+    keyId: auth.key.id,
+    keyPrefix: auth.key.keyPrefix,
+    latencyMs: Date.now() - t0,
+    jobId: job.id,
+    summary: `Status check ${job.id}: ${job.status.toUpperCase()} (${job.progress}%)`,
+  });
+
+  return res.json({
+    success: formatted.success,
+    jobId: job.id,
+    status: job.status,
+    progress: job.progress,
+    stage: job.stage,
+    downloadUrl: formatted.downloadUrl,
+    expiresAt: formatted.expiresAt,
+    error: job.error,
+  });
+});
+
+apiRouter.all('/v1/downloads/:id/file', async (req, res) => {
+  const t0 = Date.now();
+  const jobId = String(req.params.id || '').trim();
+  const job = publicDownloadApiManager.getDownloadJob(jobId);
+
+  if (!job) {
+    return res.status(404).json({
+      success: false,
+      code: 'JOB_NOT_FOUND',
+      error: `Download job "${jobId}" does not exist.`,
+    });
+  }
+
+  if (job.status !== 'completed') {
+    return res.status(409).json({
+      success: false,
+      code: 'JOB_NOT_READY',
+      error: `Download job "${jobId}" is currently in "${job.status}" state (${job.progress}%).`,
+    });
+  }
+
+  // Authorize via signed expiring URL token OR via valid Developer API Key
+  const queryToken = typeof req.query.token === 'string' ? req.query.token.trim() : '';
+  const queryExpires = Number(req.query.expires || 0);
+  const rawKey = extractApiKeyFromRequest(
+    req.headers as Record<string, string | string[] | undefined>,
+    req.query as Record<string, unknown>
+  );
+
+  let authorizedKeyPrefix = job.keyPrefix;
+  let authorizedKeyId = job.keyId;
+
+  if (queryToken) {
+    const tokenVerification = verifyDownloadFileToken({
+      jobId: job.id,
+      keyId: job.keyId,
+      token: queryToken,
+      expiresAtMs: queryExpires || job.expiresAtMs,
+    });
+    if (!tokenVerification.valid) {
+      publicDownloadApiManager.logActivity({
+        method: req.method,
+        endpoint: `/api/v1/downloads/${jobId}/file`,
+        statusCode: 403,
+        keyId: job.keyId,
+        keyPrefix: job.keyPrefix,
+        latencyMs: Date.now() - t0,
+        jobId: job.id,
+        summary: `Rejected file download: ${tokenVerification.reason}`,
+      });
+      return res.status(403).json({
+        success: false,
+        code: 'INVALID_OR_EXPIRED_DOWNLOAD_URL',
+        error: tokenVerification.reason || 'Download URL is invalid or expired.',
+      });
+    }
+  } else if (rawKey) {
+    const auth = publicDownloadApiManager.authenticateKey(rawKey);
+    if (!auth.authenticated || !auth.key) {
+      return res.status(401).json({
+        success: false,
+        code: auth.code || 'UNAUTHORIZED',
+        error: auth.error,
+      });
+    }
+    authorizedKeyId = auth.key.id;
+    authorizedKeyPrefix = auth.key.keyPrefix;
+  } else {
+    return res.status(401).json({
+      success: false,
+      code: 'AUTHORIZATION_REQUIRED',
+      error: 'File download requires either a valid signed token (?token=...&expires=...) or an API key header.',
+    });
+  }
+
+  publicDownloadApiManager.logActivity({
+    method: req.method,
+    endpoint: `/api/v1/downloads/${jobId}/file`,
+    statusCode: 200,
+    keyId: authorizedKeyId,
+    keyPrefix: authorizedKeyPrefix,
+    latencyMs: Date.now() - t0,
+    jobId: job.id,
+    summary: `Streaming MP4 file for "${job.title}" (${job.quality} · ${job.lang.toUpperCase()})`,
+  });
+
+  // Delegate directly to the existing Download Engine streaming handler
+  return handleDownloadFileStream(req, res, {
+    mediaType: job.mediaType,
+    tmdbId: job.tmdbId,
+    season: String(job.season || 1),
+    episode: String(job.episode || 1),
+    lang: job.lang,
+    quality: job.quality,
+    title: job.title,
+    sourceUrl: job.directUrl || job.internalDownloadUrl || '',
+  });
 });
 
 // Dedicated Subtitle Download Endpoint (.srt format)

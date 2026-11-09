@@ -1,12 +1,12 @@
 // serverApp.ts
-import path from "node:path";
-import fs from "node:fs";
+import path2 from "node:path";
+import fs2 from "node:fs";
 import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 import { Readable } from "node:stream";
 import express from "express";
 import cors from "cors";
-import crypto2 from "node:crypto";
+import crypto3 from "node:crypto";
 import CryptoJS from "crypto-js";
 
 // src/data/tmdbCatalog.ts
@@ -2691,8 +2691,9 @@ async function resolveAnimeContent(params, deps) {
 
 // src/utils/vegamoviesResolver.ts
 import crypto from "node:crypto";
-var VEGAMOVIES_BASE_URL = "https://vegamovies6.co.in";
+var VEGAMOVIES_BASE_URL = "https://vegamovies7.co.in";
 var VEGAMOVIES_MIRRORS = [
+  "https://vegamovies7.co.in",
   "https://vegamovies6.co.in",
   "https://vegamovies1.co.in",
   "https://vegamovies.yt"
@@ -3070,44 +3071,52 @@ async function resolveVegaMoviesWithPost(params) {
   const { title, originalTitle, year, imdbId, mediaType, season = 1, episode = 1, signal } = params;
   const cleanQuery = normalizeVegaSearchQuery(title);
   const cleanOrigQuery = normalizeVegaSearchQuery(originalTitle || "");
-  const cleanId = String(params.tmdbId || "").trim();
+  if (!cleanQuery && !cleanOrigQuery) {
+    return { sources: [], matchedPost: null, imdbId: null };
+  }
   try {
     let cards = [];
     let searchUrlUsed = "";
     const addUniqueQuery = (list, q) => {
       const trimmed = q.trim();
-      if (trimmed && trimmed.toLowerCase() !== "movie" && trimmed.toLowerCase() !== "series" && !list.some((existing) => existing.toLowerCase() === trimmed.toLowerCase())) {
+      if (trimmed && !/^\d+$/.test(trimmed) && trimmed.toLowerCase() !== "movie" && trimmed.toLowerCase() !== "series" && !list.some((existing) => existing.toLowerCase() === trimmed.toLowerCase())) {
         list.push(trimmed);
+      }
+    };
+    const addNameVariants = (queries, rawName, cleanName) => {
+      if (!cleanName) return;
+      addUniqueQuery(queries, cleanName);
+      if (/\bnai\b/i.test(cleanName)) {
+        addUniqueQuery(queries, cleanName.replace(/\bnai\b/gi, "Nayi"));
+      } else if (/\bnayi\b/i.test(cleanName)) {
+        addUniqueQuery(queries, cleanName.replace(/\bnayi\b/gi, "Nai"));
+      }
+      if (/[:\-–—]/.test(rawName)) {
+        const prefix = normalizeVegaSearchQuery(rawName.split(/[:\-–—]/)[0] || "");
+        if (prefix.length >= 3) {
+          addUniqueQuery(queries, prefix);
+        }
+      }
+      if (year && !cleanName.includes(year)) {
+        addUniqueQuery(queries, `${cleanName} ${year}`);
       }
     };
     const queriesToTry = [];
     if (cleanOrigQuery) {
-      addUniqueQuery(queriesToTry, cleanOrigQuery);
+      addNameVariants(queriesToTry, originalTitle || "", cleanOrigQuery);
     }
     if (cleanQuery) {
-      addUniqueQuery(queriesToTry, cleanQuery);
-      if (/\bnai\b/i.test(cleanQuery)) {
-        addUniqueQuery(queriesToTry, cleanQuery.replace(/\bnai\b/gi, "Nayi"));
-      } else if (/\bnayi\b/i.test(cleanQuery)) {
-        addUniqueQuery(queriesToTry, cleanQuery.replace(/\bnayi\b/gi, "Nai"));
-      }
-      if (year && !cleanQuery.includes(year)) {
-        addUniqueQuery(queriesToTry, `${cleanQuery} ${year}`);
-      }
-      const words = tokenizeVegaTitle(cleanQuery).filter((w) => w.length >= 4 && !/^\d+$/.test(w)).sort((a, b) => b.length - a.length);
-      if (words.length > 0 && cleanQuery.includes(" ")) {
-        addUniqueQuery(queriesToTry, words[0]);
-      }
+      addNameVariants(queriesToTry, title, cleanQuery);
     }
-    if (cleanId) {
-      addUniqueQuery(queriesToTry, cleanId);
+    const combinedWords = tokenizeVegaTitle(`${cleanOrigQuery} ${cleanQuery}`).filter((w) => w.length >= 4 && !/^\d+$/.test(w)).sort((a, b) => b.length - a.length);
+    if (combinedWords.length > 0 && (cleanQuery.includes(" ") || cleanOrigQuery.includes(" "))) {
+      addUniqueQuery(queriesToTry, combinedWords[0]);
     }
     for (const mirror of VEGAMOVIES_MIRRORS) {
       if (cards.length > 0 || signal?.aborted) break;
       let mirrorReachable = false;
       for (const q of queriesToTry) {
         if (cards.length > 0 || signal?.aborted) break;
-        if (/^\d+$/.test(q)) continue;
         try {
           const searchCtrl = new AbortController();
           const searchTimer = setTimeout(() => searchCtrl.abort(), 3200);
@@ -3131,7 +3140,6 @@ async function resolveVegaMoviesWithPost(params) {
               (card) => scoreVegaCandidatePost(card.url, card.title, {
                 title,
                 originalTitle,
-                postId: cleanId,
                 year,
                 mediaType,
                 season
@@ -3142,44 +3150,6 @@ async function resolveVegaMoviesWithPost(params) {
               searchUrlUsed = sUrl;
               break;
             }
-          }
-        } catch {
-        }
-      }
-      if (cards.length === 0 && /^\d{4,6}$/.test(cleanId) && !signal?.aborted) {
-        try {
-          const newsCtrl = new AbortController();
-          const newsTimer = setTimeout(() => newsCtrl.abort(), 2500);
-          if (signal) {
-            signal.addEventListener("abort", () => newsCtrl.abort(), { once: true });
-          }
-          const newsRes = await fetch(`${mirror}/index.php?newsid=${cleanId}`, {
-            method: "HEAD",
-            redirect: "manual",
-            headers: { "User-Agent": VEGA_USER_AGENT },
-            signal: newsCtrl.signal
-          });
-          clearTimeout(newsTimer);
-          const loc = newsRes.headers.get("location") || "";
-          const locMatch = loc.match(/\/(\d+)-([a-z0-9-]+)\.html/i);
-          if (locMatch && locMatch[1] === cleanId) {
-            mirrorReachable = true;
-            const fullPostUrl = loc.startsWith("http") ? loc : `${mirror}${loc.startsWith("/") ? "" : "/"}${loc}`;
-            const slugTitle = locMatch[2].replace(/-/g, " ");
-            const yearMatch = slugTitle.match(/\b(19\d{2}|20\d{2})\b/);
-            cards = [
-              {
-                id: cleanId,
-                url: fullPostUrl,
-                title: slugTitle,
-                year: yearMatch ? yearMatch[1] : "",
-                qualityBadge: "HD",
-                rating: "",
-                posterUrl: "",
-                isSeries: /\b(season|s\d{1,2}|series)\b/i.test(slugTitle)
-              }
-            ];
-            searchUrlUsed = `${mirror}/`;
           }
         } catch {
         }
@@ -3206,7 +3176,6 @@ async function resolveVegaMoviesWithPost(params) {
               (card) => scoreVegaCandidatePost(card.url, card.title, {
                 title,
                 originalTitle,
-                postId: cleanId,
                 year,
                 mediaType,
                 season
@@ -3232,7 +3201,6 @@ async function resolveVegaMoviesWithPost(params) {
       score: scoreVegaCandidatePost(card.url, card.title, {
         title,
         originalTitle,
-        postId: cleanId,
         year,
         mediaType,
         season
@@ -3265,7 +3233,7 @@ async function resolveVegaMoviesWithPost(params) {
         if (detailMeta.imdbId) {
           extractedImdbId = detailMeta.imdbId;
         }
-        if (candidate.card.id !== cleanId && imdbId && detailMeta.imdbId && imdbId.toLowerCase() !== detailMeta.imdbId.toLowerCase()) {
+        if (imdbId && detailMeta.imdbId && imdbId.toLowerCase() !== detailMeta.imdbId.toLowerCase()) {
           continue;
         }
         const fastDlCandidates = [];
@@ -3595,14 +3563,19 @@ async function resolveDownloadableMedia(options, fetchDetailsFn) {
     qualities = [],
     resolvedDirectSources = []
   } = options;
-  let title = reqTitle || (mediaType === "tv" ? "Series" : "Movie");
+  const isPlaceholderTitle = (t) => !t || /^(?:TMDB\s+(?:Feature|Series|Movie|Show)\s*#|Movie$|Series$)/i.test(t.trim());
+  const cleanReqTitle = isPlaceholderTitle(reqTitle) ? "" : reqTitle.trim();
+  let title = cleanReqTitle || (mediaType === "tv" ? "Series" : "Movie");
   let year = reqYear || "2024";
   let episodeName = "";
   let durationSeconds = 120 * 60;
   try {
     const details = await fetchDetailsFn(mediaType, tmdbId);
     if (details && !details.fallback) {
-      title = details.title || details.name || title;
+      const detTitle = details.title || details.name || "";
+      if (!isPlaceholderTitle(detTitle)) {
+        title = detTitle;
+      }
       const date = details.release_date || details.first_air_date || "";
       if (date) {
         year = date.split("-")[0] || year;
@@ -3610,8 +3583,11 @@ async function resolveDownloadableMedia(options, fetchDetailsFn) {
       if (details.runtime) {
         durationSeconds = details.runtime * 60;
       }
-    } else if (details && !reqTitle) {
-      title = details.title || details.name || title;
+    } else if (details && !cleanReqTitle) {
+      const detTitle = details.title || details.name || "";
+      if (!isPlaceholderTitle(detTitle)) {
+        title = detTitle;
+      }
       const date = details.release_date || details.first_air_date || "";
       if (date) {
         year = date.split("-")[0] || year;
@@ -3621,9 +3597,9 @@ async function resolveDownloadableMedia(options, fetchDetailsFn) {
       }
     }
   } catch {
-    if (!reqTitle) {
+    if (!cleanReqTitle) {
       const fallback = getMediaByTmdbId(mediaType, tmdbId);
-      if (fallback) {
+      if (fallback && !isPlaceholderTitle(fallback.title)) {
         title = fallback.title;
         year = fallback.releaseYear;
         if (fallback.runtimeMinutes) {
@@ -3759,9 +3735,590 @@ async function resolveDownloadableMedia(options, fetchDetailsFn) {
   };
 }
 
+// src/services/publicDownloadApi.ts
+import crypto2 from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
+var DEFAULT_DEMO_API_KEY = "zxc_live_a1b2c3d4e5f60718293a4b5c6d7e8f90";
+var HMAC_SECRET = process.env.ZXC_DOWNLOAD_API_SECRET || "zxcstream-public-download-api-hmac-secret-2026";
+var STATE_FILE_PATH = path.join("/tmp", "zxc_public_download_api_state_v1.json");
+var DEFAULT_URL_TTL_MS = 24 * 60 * 60 * 1e3;
+function hashApiKey(rawKey) {
+  return crypto2.createHash("sha256").update(rawKey.trim()).digest("hex");
+}
+function generateDeveloperApiKeyPair() {
+  const randomHex = crypto2.randomBytes(16).toString("hex");
+  const rawKey = `zxc_live_${randomHex}`;
+  const keyPrefix = `${rawKey.slice(0, 13)}...${rawKey.slice(-4)}`;
+  const keyHash = hashApiKey(rawKey);
+  return { rawKey, keyPrefix, keyHash };
+}
+function signDownloadFileToken(jobId, keyId, expiresAtMs, secret = HMAC_SECRET) {
+  const payload = `${jobId}:${keyId}:${expiresAtMs}`;
+  return crypto2.createHmac("sha256", secret).update(payload).digest("hex");
+}
+function verifyDownloadFileToken(params) {
+  const {
+    jobId,
+    keyId,
+    token,
+    expiresAtMs,
+    nowMs = Date.now(),
+    secret = HMAC_SECRET
+  } = params;
+  if (!token || typeof token !== "string") {
+    return { valid: false, reason: "Missing download authorization token" };
+  }
+  if (!Number.isFinite(expiresAtMs) || expiresAtMs <= 0) {
+    return { valid: false, reason: "Invalid expiration timestamp" };
+  }
+  if (nowMs > expiresAtMs) {
+    return { valid: false, reason: "Download URL has expired" };
+  }
+  const expected = signDownloadFileToken(jobId, keyId, expiresAtMs, secret);
+  try {
+    const a = Buffer.from(token, "hex");
+    const b = Buffer.from(expected, "hex");
+    if (a.length !== b.length || !crypto2.timingSafeEqual(a, b)) {
+      return { valid: false, reason: "Invalid download signature token" };
+    }
+    return { valid: true };
+  } catch {
+    return { valid: false, reason: "Malformed download token" };
+  }
+}
+function extractApiKeyFromRequest(headers, query) {
+  const authHeader = headers["authorization"] || headers["Authorization"];
+  if (typeof authHeader === "string" && authHeader.trim()) {
+    const match = authHeader.trim().match(/^Bearer\s+(.+)$/i);
+    if (match && match[1]) {
+      return match[1].trim();
+    }
+    if (authHeader.trim().startsWith("zxc_")) {
+      return authHeader.trim();
+    }
+  }
+  const xApiKey = headers["x-api-key"] || headers["X-API-Key"] || headers["X-Api-Key"];
+  if (typeof xApiKey === "string" && xApiKey.trim()) {
+    return xApiKey.trim();
+  }
+  if (Array.isArray(xApiKey) && typeof xApiKey[0] === "string" && xApiKey[0].trim()) {
+    return xApiKey[0].trim();
+  }
+  if (query) {
+    const qKey = query["api_key"] ?? query["apiKey"];
+    if (typeof qKey === "string" && qKey.trim()) {
+      return qKey.trim();
+    }
+  }
+  return null;
+}
+function validateDownloadRequestInput(input) {
+  if (!input || typeof input !== "object") {
+    return {
+      valid: false,
+      code: "INVALID_PAYLOAD",
+      error: "Request body must be a valid JSON object."
+    };
+  }
+  const rawType = String(input.mediaType ?? "movie").trim().toLowerCase();
+  if (rawType !== "movie" && rawType !== "tv") {
+    return {
+      valid: false,
+      code: "INVALID_MEDIA_TYPE",
+      error: 'Parameter "mediaType" must be either "movie" or "tv".'
+    };
+  }
+  const rawTmdbId = String(input.tmdbId ?? "").trim();
+  if (!rawTmdbId || !/^(?:tt\d+|\d+)$/i.test(rawTmdbId)) {
+    return {
+      valid: false,
+      code: "INVALID_TMDB_ID",
+      error: 'Parameter "tmdbId" is required and must be a valid numeric TMDB ID or IMDb ID (e.g. "128" or "66732").'
+    };
+  }
+  const season = input.season !== void 0 && input.season !== null && input.season !== "" ? Number(input.season) : 1;
+  const episode = input.episode !== void 0 && input.episode !== null && input.episode !== "" ? Number(input.episode) : 1;
+  if (!Number.isInteger(season) || season < 1 || season > 200) {
+    return {
+      valid: false,
+      code: "INVALID_SEASON",
+      error: 'Parameter "season" must be a positive integer between 1 and 200.'
+    };
+  }
+  if (!Number.isInteger(episode) || episode < 1 || episode > 5e3) {
+    return {
+      valid: false,
+      code: "INVALID_EPISODE",
+      error: 'Parameter "episode" must be a positive integer between 1 and 5000.'
+    };
+  }
+  const rawLang = String(input.lang ?? "en").trim().toLowerCase() || "en";
+  if (!/^[a-z]{2,8}$/.test(rawLang)) {
+    return {
+      valid: false,
+      code: "INVALID_LANGUAGE",
+      error: 'Parameter "lang" must be a valid ISO language code (e.g. "en", "hi", "ja", "es").'
+    };
+  }
+  const rawQuality = String(input.quality ?? "1080p").trim().toLowerCase() || "1080p";
+  const normalizedQuality = rawQuality === "4k" || rawQuality === "2160" || rawQuality === "2160p" ? "2160p" : rawQuality === "1080" || rawQuality === "1080p" || rawQuality === "fhd" ? "1080p" : rawQuality === "720" || rawQuality === "720p" || rawQuality === "hd" ? "720p" : rawQuality === "480" || rawQuality === "480p" || rawQuality === "sd" ? "480p" : rawQuality === "360" || rawQuality === "360p" ? "360p" : "";
+  if (!normalizedQuality) {
+    return {
+      valid: false,
+      code: "INVALID_QUALITY",
+      error: 'Parameter "quality" must be one of: "360p", "480p", "720p", "1080p", "2160p" (or "4K").'
+    };
+  }
+  const title = typeof input.title === "string" && input.title.trim() ? input.title.trim() : void 0;
+  const year = typeof input.year === "string" && input.year.trim() ? input.year.trim() : void 0;
+  return {
+    valid: true,
+    data: {
+      mediaType: rawType,
+      tmdbId: rawTmdbId,
+      season,
+      episode,
+      lang: rawLang,
+      quality: normalizedQuality,
+      title,
+      year
+    }
+  };
+}
+function selectResolvedDownloadOption(resolution, requestedLang, requestedQuality) {
+  if (!resolution || !Array.isArray(resolution.languages) || resolution.languages.length === 0) {
+    return null;
+  }
+  const cleanLang = requestedLang.toLowerCase().trim();
+  const langGroup = resolution.languages.find((l) => l.langCode.toLowerCase() === cleanLang) || resolution.languages.find((l) => l.langCode === "en") || resolution.languages[0];
+  if (!langGroup || !Array.isArray(langGroup.qualities) || langGroup.qualities.length === 0) {
+    return null;
+  }
+  const reqHeight = Number((requestedQuality.match(/(\d{3,4})/) || [])[1]) || 1080;
+  const exactQuality = langGroup.qualities.find(
+    (q) => q.quality.toLowerCase() === requestedQuality.toLowerCase() || q.resolution === reqHeight
+  );
+  if (exactQuality) {
+    return { langGroup, qualityOption: exactQuality };
+  }
+  const sortedByClosest = [...langGroup.qualities].sort(
+    (a, b) => Math.abs(a.resolution - reqHeight) - Math.abs(b.resolution - reqHeight)
+  );
+  return {
+    langGroup,
+    qualityOption: sortedByClosest[0]
+  };
+}
+var PublicDownloadApiManager = class {
+  constructor(options) {
+    this.keys = /* @__PURE__ */ new Map();
+    this.jobs = /* @__PURE__ */ new Map();
+    this.activityLogs = [];
+    this.persistEnabled = options?.persistEnabled ?? true;
+    this.loadState();
+    this.ensureDefaultKey();
+  }
+  ensureDefaultKey() {
+    const defaultHash = hashApiKey(DEFAULT_DEMO_API_KEY);
+    const existing = Array.from(this.keys.values()).find((k) => k.keyHash === defaultHash);
+    if (!existing) {
+      const defaultKey = {
+        id: "key_default_prod",
+        name: "Default Production API Key",
+        keyPrefix: `${DEFAULT_DEMO_API_KEY.slice(0, 13)}...${DEFAULT_DEMO_API_KEY.slice(-4)}`,
+        keyHash: defaultHash,
+        createdAt: new Date(Date.now() - 36e5 * 24).toISOString(),
+        lastUsedAt: (/* @__PURE__ */ new Date()).toISOString(),
+        revokedAt: null,
+        status: "active",
+        requestCount: 0,
+        downloadCount: 0,
+        rateLimit: "UNLIMITED",
+        quota: "UNLIMITED"
+      };
+      this.keys.set(defaultKey.id, defaultKey);
+      this.saveState();
+    }
+  }
+  loadState() {
+    if (!this.persistEnabled) return;
+    try {
+      if (fs.existsSync(STATE_FILE_PATH)) {
+        const raw = fs.readFileSync(STATE_FILE_PATH, "utf-8");
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed.keys)) {
+          for (const k of parsed.keys) {
+            if (k && k.id) this.keys.set(k.id, k);
+          }
+        }
+        if (Array.isArray(parsed.jobs)) {
+          for (const j of parsed.jobs) {
+            if (j && j.id) this.jobs.set(j.id, j);
+          }
+        }
+        if (Array.isArray(parsed.activityLogs)) {
+          this.activityLogs = parsed.activityLogs.slice(0, 200);
+        }
+      }
+    } catch {
+    }
+  }
+  saveState() {
+    if (!this.persistEnabled) return;
+    try {
+      const payload = {
+        keys: Array.from(this.keys.values()),
+        jobs: Array.from(this.jobs.values()).slice(-200),
+        activityLogs: this.activityLogs.slice(0, 200)
+      };
+      fs.writeFileSync(STATE_FILE_PATH, JSON.stringify(payload, null, 2), "utf-8");
+    } catch {
+    }
+  }
+  /**
+   * Creates a new Developer API Key with unlimited access.
+   */
+  createApiKey(name) {
+    const cleanName = (name || "").trim() || `API Key ${this.keys.size + 1}`;
+    const { rawKey, keyPrefix, keyHash } = generateDeveloperApiKeyPair();
+    const id = `key_${Date.now().toString(36)}_${crypto2.randomBytes(4).toString("hex")}`;
+    const record = {
+      id,
+      name: cleanName,
+      keyPrefix,
+      keyHash,
+      createdAt: (/* @__PURE__ */ new Date()).toISOString(),
+      lastUsedAt: null,
+      revokedAt: null,
+      status: "active",
+      requestCount: 0,
+      downloadCount: 0,
+      rateLimit: "UNLIMITED",
+      quota: "UNLIMITED"
+    };
+    this.keys.set(id, record);
+    this.logActivity({
+      method: "POST",
+      endpoint: "/api/v1/developer/keys",
+      statusCode: 201,
+      keyId: id,
+      keyPrefix,
+      latencyMs: 2,
+      summary: `Created API key "${cleanName}" (${keyPrefix})`
+    });
+    this.saveState();
+    return { key: record, rawKey };
+  }
+  /**
+   * Lists all Developer API Keys (never exposing raw secrets).
+   */
+  listApiKeys() {
+    return Array.from(this.keys.values()).sort(
+      (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+    );
+  }
+  /**
+   * Revokes a Developer API Key by ID.
+   */
+  revokeApiKey(keyId) {
+    const record = this.keys.get(keyId);
+    if (!record) return null;
+    record.status = "revoked";
+    record.revokedAt = (/* @__PURE__ */ new Date()).toISOString();
+    this.logActivity({
+      method: "DELETE",
+      endpoint: `/api/v1/developer/keys/${keyId}`,
+      statusCode: 200,
+      keyId: record.id,
+      keyPrefix: record.keyPrefix,
+      latencyMs: 1,
+      summary: `Revoked API key "${record.name}" (${record.keyPrefix})`
+    });
+    this.saveState();
+    return record;
+  }
+  /**
+   * Validates a raw API key without imposing any rate limits or quotas.
+   */
+  authenticateKey(rawKey) {
+    if (!rawKey || !rawKey.trim()) {
+      return {
+        authenticated: false,
+        code: "MISSING_API_KEY",
+        error: 'Authentication required. Provide a valid API key via "Authorization: Bearer <API_KEY>" or "X-API-Key: <API_KEY>".'
+      };
+    }
+    const incomingHash = hashApiKey(rawKey);
+    const matched = Array.from(this.keys.values()).find((k) => k.keyHash === incomingHash);
+    if (!matched) {
+      return {
+        authenticated: false,
+        code: "INVALID_API_KEY",
+        error: "Invalid API key provided."
+      };
+    }
+    if (matched.status === "revoked") {
+      return {
+        authenticated: false,
+        code: "REVOKED_API_KEY",
+        error: `API key "${matched.keyPrefix}" has been revoked and can no longer be used.`
+      };
+    }
+    matched.lastUsedAt = (/* @__PURE__ */ new Date()).toISOString();
+    matched.requestCount += 1;
+    this.saveState();
+    return {
+      authenticated: true,
+      key: matched
+    };
+  }
+  /**
+   * Creates a new Download Job and transitions it through the existing Download Engine.
+   */
+  createDownloadJob(params) {
+    const { key, request } = params;
+    const jobId = `job_${Date.now().toString(36)}_${crypto2.randomBytes(5).toString("hex")}`;
+    const nowIso = (/* @__PURE__ */ new Date()).toISOString();
+    const expiresAtMs = Date.now() + DEFAULT_URL_TTL_MS;
+    const expiresAt = new Date(expiresAtMs).toISOString();
+    const signedToken = signDownloadFileToken(jobId, key.id, expiresAtMs);
+    const job = {
+      id: jobId,
+      keyId: key.id,
+      keyPrefix: key.keyPrefix,
+      status: "processing",
+      progress: 15,
+      stage: "Resolving media streams via Download Engine",
+      mediaType: request.mediaType,
+      tmdbId: request.tmdbId,
+      season: request.mediaType === "tv" ? request.season : void 0,
+      episode: request.mediaType === "tv" ? request.episode : void 0,
+      lang: request.lang,
+      quality: request.quality,
+      title: request.title || (request.mediaType === "tv" ? `Series #${request.tmdbId}` : `Movie #${request.tmdbId}`),
+      year: request.year,
+      format: "mp4",
+      createdAt: nowIso,
+      updatedAt: nowIso,
+      completedAt: null,
+      expiresAt,
+      expiresAtMs,
+      signedToken,
+      error: null
+    };
+    key.downloadCount += 1;
+    this.jobs.set(jobId, job);
+    this.saveState();
+    return job;
+  }
+  /**
+   * Updates an existing Download Job with the output from the existing Download Engine.
+   */
+  completeDownloadJobWithResolution(jobId, resolution) {
+    const job = this.jobs.get(jobId);
+    if (!job) return null;
+    if (!resolution || !resolution.success) {
+      job.status = "failed";
+      job.progress = 0;
+      job.stage = "Failed to resolve media stream";
+      job.error = resolution?.unsupportedReason || "Media resolution failed in Download Engine";
+      job.updatedAt = (/* @__PURE__ */ new Date()).toISOString();
+      this.saveState();
+      return job;
+    }
+    const selected = selectResolvedDownloadOption(resolution, job.lang, job.quality);
+    if (!selected) {
+      job.status = "failed";
+      job.progress = 0;
+      job.stage = "No matching downloadable stream found";
+      job.error = `No downloadable stream available for language "${job.lang}" at "${job.quality}".`;
+      job.updatedAt = (/* @__PURE__ */ new Date()).toISOString();
+      this.saveState();
+      return job;
+    }
+    const nowIso = (/* @__PURE__ */ new Date()).toISOString();
+    job.title = resolution.title || job.title;
+    job.year = resolution.year || job.year;
+    job.lang = selected.langGroup.langCode;
+    job.quality = selected.qualityOption.quality;
+    job.sizeFormatted = selected.qualityOption.sizeFormatted;
+    job.codec = selected.qualityOption.codec;
+    job.sourceProvider = selected.qualityOption.sourceProvider;
+    job.internalDownloadUrl = selected.qualityOption.downloadUrl;
+    job.directUrl = selected.qualityOption.directUrl;
+    job.availableLanguages = resolution.languages.map((lg) => ({
+      langCode: lg.langCode,
+      langName: lg.langName,
+      qualities: lg.qualities.map((q) => ({
+        quality: q.quality,
+        resolution: q.resolution,
+        sizeFormatted: q.sizeFormatted,
+        codec: q.codec
+      }))
+    }));
+    job.status = "completed";
+    job.progress = 100;
+    job.stage = "Ready for download";
+    job.updatedAt = nowIso;
+    job.completedAt = nowIso;
+    job.error = null;
+    this.saveState();
+    return job;
+  }
+  /**
+   * Marks a Download Job as failed.
+   */
+  failDownloadJob(jobId, errorMessage) {
+    const job = this.jobs.get(jobId);
+    if (!job) return null;
+    job.status = "failed";
+    job.progress = 0;
+    job.stage = "Download resolution failed";
+    job.error = errorMessage;
+    job.updatedAt = (/* @__PURE__ */ new Date()).toISOString();
+    this.saveState();
+    return job;
+  }
+  /**
+   * Retrieves a Download Job by ID.
+   */
+  getDownloadJob(jobId) {
+    return this.jobs.get(jobId) || null;
+  }
+  /**
+   * Lists all Download Jobs sorted newest first.
+   */
+  listDownloadJobs(filterKeyId) {
+    const all = Array.from(this.jobs.values());
+    const filtered = filterKeyId ? all.filter((j) => j.keyId === filterKeyId) : all;
+    return filtered.sort(
+      (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+    );
+  }
+  /**
+   * Builds the public-facing JSON representation of a Download Job, including the expiring signed download URL.
+   */
+  formatPublicJobResponse(job, baseOrigin = PUBLIC_API_DEPLOYMENT_ORIGIN) {
+    const cleanOrigin = resolvePublicDeploymentOrigin(baseOrigin);
+    const filePath = `/api/v1/downloads/${encodeURIComponent(job.id)}/file?token=${encodeURIComponent(
+      job.signedToken
+    )}&expires=${job.expiresAtMs}`;
+    const fullDownloadUrl = `${cleanOrigin}${filePath}`;
+    return {
+      success: job.status !== "failed",
+      jobId: job.id,
+      status: job.status,
+      progress: job.progress,
+      stage: job.stage,
+      baseApiUrl: `${cleanOrigin}/api/v1`,
+      media: {
+        mediaType: job.mediaType,
+        tmdbId: job.tmdbId,
+        title: job.title,
+        year: job.year || null,
+        season: job.season ?? null,
+        episode: job.episode ?? null,
+        lang: job.lang,
+        quality: job.quality,
+        format: job.format,
+        codec: job.codec || null,
+        sizeFormatted: job.sizeFormatted || null,
+        sourceProvider: job.sourceProvider || null
+      },
+      downloadUrl: job.status === "completed" ? fullDownloadUrl : null,
+      statusUrl: `${cleanOrigin}/api/v1/downloads/${encodeURIComponent(job.id)}/status`,
+      detailUrl: `${cleanOrigin}/api/v1/downloads/${encodeURIComponent(job.id)}`,
+      relativeDownloadUrl: job.status === "completed" ? filePath : null,
+      expiresAt: job.status === "completed" ? job.expiresAt : null,
+      availableLanguages: job.availableLanguages || [],
+      createdAt: job.createdAt,
+      updatedAt: job.updatedAt,
+      completedAt: job.completedAt,
+      error: job.error,
+      policy: {
+        rateLimit: "UNLIMITED",
+        quota: "UNLIMITED"
+      }
+    };
+  }
+  /**
+   * Logs an API request in the activity log.
+   */
+  logActivity(entry) {
+    const fullEntry = {
+      id: `req_${Date.now().toString(36)}_${crypto2.randomBytes(3).toString("hex")}`,
+      timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+      ...entry
+    };
+    this.activityLogs.unshift(fullEntry);
+    if (this.activityLogs.length > 250) {
+      this.activityLogs.length = 250;
+    }
+    this.saveState();
+    return fullEntry;
+  }
+  /**
+   * Computes real-time Developer API usage statistics (with unlimited policy).
+   */
+  getUsageStatistics(filterKeyId) {
+    const allKeys = this.listApiKeys();
+    const activeKeysCount = allKeys.filter((k) => k.status === "active").length;
+    const revokedKeysCount = allKeys.filter((k) => k.status === "revoked").length;
+    const allJobs = this.listDownloadJobs(filterKeyId);
+    const completedJobs = allJobs.filter((j) => j.status === "completed").length;
+    const failedJobs = allJobs.filter((j) => j.status === "failed").length;
+    const processingJobs = allJobs.filter(
+      (j) => j.status === "processing" || j.status === "queued"
+    ).length;
+    const logs = filterKeyId ? this.activityLogs.filter((l) => l.keyId === filterKeyId) : this.activityLogs;
+    const totalRequestsFromKeys = allKeys.filter((k) => !filterKeyId || k.id === filterKeyId).reduce((acc, k) => acc + k.requestCount, 0);
+    const totalRequests = Math.max(logs.length, totalRequestsFromKeys);
+    const finishedCount = completedJobs + failedJobs;
+    const successRate = finishedCount > 0 ? Number((completedJobs / finishedCount * 100).toFixed(1)) : 100;
+    const endpointBreakdown = {};
+    for (const log of logs) {
+      const normalizedEp = log.endpoint.replace(/\/job_[a-z0-9_]+/gi, "/:id").replace(/\/key_[a-z0-9_]+/gi, "/:id");
+      endpointBreakdown[normalizedEp] = (endpointBreakdown[normalizedEp] || 0) + 1;
+    }
+    return {
+      success: true,
+      baseUrl: PUBLIC_API_BASE_URL,
+      siteOrigin: PUBLIC_API_DEPLOYMENT_ORIGIN,
+      accessTier: "UNLIMITED",
+      rateLimit: null,
+      quota: null,
+      unlimitedRequests: true,
+      unlimitedDownloads: true,
+      metrics: {
+        totalRequests,
+        totalDownloadJobs: allJobs.length,
+        completedDownloads: completedJobs,
+        failedDownloads: failedJobs,
+        activeDownloads: processingJobs,
+        successRatePercent: successRate,
+        activeApiKeys: activeKeysCount,
+        revokedApiKeys: revokedKeysCount
+      },
+      endpointBreakdown,
+      recentActivity: logs.slice(0, 50)
+    };
+  }
+};
+var PUBLIC_API_DEPLOYMENT_ORIGIN = "https://zxcstream-mirror.vercel.app";
+var PUBLIC_API_BASE_URL = `${PUBLIC_API_DEPLOYMENT_ORIGIN}/api/v1`;
+function resolvePublicDeploymentOrigin(rawOrigin) {
+  const trimmed = (rawOrigin || "").trim().replace(/\/+$/, "");
+  if (!trimmed || trimmed.includes("localhost") || trimmed.includes("127.0.0.1") || trimmed.includes(".run.app")) {
+    return PUBLIC_API_DEPLOYMENT_ORIGIN;
+  }
+  return trimmed;
+}
+var publicDownloadApiManager = new PublicDownloadApiManager();
+
 // serverApp.ts
 var __filename = fileURLToPath(import.meta.url);
-var __dirname = path.dirname(__filename);
+var __dirname = path2.dirname(__filename);
 var app = express();
 app.use(cors({ origin: true, credentials: true }));
 app.use(express.json());
@@ -3853,11 +4410,11 @@ async function refreshFieldMapFromUpstream() {
           const season = extractField("season");
           const episode = extractField("episode");
           const imdbId = extractField("imdbId");
-          const path2 = extractField("path");
+          const path3 = extractField("path");
           const mediaType = extractField("mediaType");
           const date = extractField("date");
           const latestDate = extractField("latestDate");
-          if (id && ts && token && path2 && mediaType) {
+          if (id && ts && token && path3 && mediaType) {
             FIELD_MAP = {
               id,
               fToken: fToken || FIELD_MAP.fToken,
@@ -3868,7 +4425,7 @@ async function refreshFieldMapFromUpstream() {
               season: season || FIELD_MAP.season,
               episode: episode || FIELD_MAP.episode,
               imdbId: imdbId || FIELD_MAP.imdbId,
-              path: path2,
+              path: path3,
               mediaType,
               date: date || FIELD_MAP.date,
               latestDate: latestDate || FIELD_MAP.latestDate
@@ -3897,12 +4454,12 @@ function decryptCryptoJS(cipherBase64, passphrase) {
     let keyIv = Buffer.alloc(0);
     let prev = Buffer.alloc(0);
     while (keyIv.length < 48) {
-      prev = crypto2.createHash("md5").update(Buffer.concat([prev, Buffer.from(passphrase, "utf8"), salt])).digest();
+      prev = crypto3.createHash("md5").update(Buffer.concat([prev, Buffer.from(passphrase, "utf8"), salt])).digest();
       keyIv = Buffer.concat([keyIv, prev]);
     }
     const key = keyIv.subarray(0, 32);
     const iv = keyIv.subarray(32, 48);
-    const decipher = crypto2.createDecipheriv("aes-256-cbc", key, iv);
+    const decipher = crypto3.createDecipheriv("aes-256-cbc", key, iv);
     return Buffer.concat([decipher.update(ciphertext), decipher.final()]).toString("utf8");
   } catch {
     return cipherBase64;
@@ -4855,9 +5412,16 @@ apiRouter.get("/stream/proxy", async (req, res) => {
       res.setHeader("Content-Type", "video/mp4");
       res.setHeader("Content-Disposition", "inline");
       res.setHeader("Cache-Control", "no-store");
-      const ff = spawn("ffmpeg", [
-        "-loglevel",
-        "error",
+      const startParam = Math.max(
+        0,
+        parseFloat(req.query.start || req.query.ss || req.query.t || "0") || 0
+      );
+      const ffArgs = ["-loglevel", "error"];
+      if (startParam > 0) {
+        ffArgs.push("-ss", String(startParam));
+        ffArgs.push("-output_ts_offset", String(startParam));
+      }
+      ffArgs.push(
         "-i",
         "pipe:0",
         "-map",
@@ -4875,7 +5439,8 @@ apiRouter.get("/stream/proxy", async (req, res) => {
         "-movflags",
         "frag_keyframe+empty_moov+default_base_moof",
         "pipe:1"
-      ]);
+      );
+      const ff = spawn("ffmpeg", ffArgs);
       const nodeStream = Readable.fromWeb(upstream.body);
       nodeStream.on("error", () => {
         try {
@@ -4995,38 +5560,75 @@ apiRouter.get("/stream/mpd-audio", async (req, res) => {
     return res.status(502).send(err.message || "Upstream MPD audio proxy failed");
   }
 });
+var directDownloadSourceCache = /* @__PURE__ */ new Map();
+function stripPlaceholderDownloadTitle(raw) {
+  const s = String(raw || "").trim();
+  if (!s || /^(?:TMDB\s+(?:Feature|Series|Movie|Show)\s*#|Movie$|Series$)/i.test(s)) {
+    return "";
+  }
+  return s;
+}
 async function gatherDirectDownloadSources(params) {
-  try {
-    const vegaRes = await Promise.race([
-      resolveVegaMoviesCombined({
-        tmdbId: String(params.tmdbId),
-        mediaType: params.mediaType,
-        season: params.season,
-        episode: params.episode,
-        title: params.title,
-        releaseYear: params.year
-      }),
-      new Promise((r) => setTimeout(() => r(null), 4800))
-    ]);
-    if (!vegaRes) {
+  const cleanId = String(params.tmdbId || "128").trim();
+  const cacheKey = `${params.mediaType}:${cleanId}:${params.season}:${params.episode}`;
+  const now = Date.now();
+  const cached = directDownloadSourceCache.get(cacheKey);
+  if (cached && cached.expiresAt > now) {
+    return cached.promise;
+  }
+  const promise = (async () => {
+    try {
+      let title = stripPlaceholderDownloadTitle(params.title);
+      let originalTitle = "";
+      let releaseYear = String(params.year || "").trim();
+      let imdbId = tmdbImdbCache.get(cleanId) || getSeriesImdbId(cleanId) || "";
+      if (!title || !releaseYear || !imdbId) {
+        try {
+          const details = await fetchTmdbDetailsWithFallback(params.mediaType, cleanId);
+          if (details && !details.fallback) {
+            title = title || stripPlaceholderDownloadTitle(details.title || details.name);
+            originalTitle = details.original_title || details.original_name || "";
+            const dStr = details.release_date || details.first_air_date || "";
+            if (!releaseYear && dStr) releaseYear = String(dStr).slice(0, 4);
+            if (!imdbId && details.imdb_id) imdbId = String(details.imdb_id);
+          }
+        } catch {
+        }
+      }
+      const directResult = await Promise.race([
+        resolveVegaMoviesWithPost({
+          tmdbId: cleanId,
+          mediaType: params.mediaType,
+          season: params.season,
+          episode: params.episode,
+          title,
+          originalTitle,
+          year: releaseYear,
+          imdbId
+        }),
+        new Promise(
+          (r) => setTimeout(() => r({ sources: [], matchedPost: null, imdbId: null }), 5500)
+        )
+      ]);
+      const rawDirect = Array.isArray(directResult.sources) ? directResult.sources : [];
+      const directSources = rawDirect.map((s) => ({
+        quality: s.quality || "1080p",
+        url: s.url,
+        directUrl: s.url.startsWith("https://video-downloads.googleusercontent.com/") ? s.url : void 0,
+        sizeFormatted: s.sizeFormatted,
+        lang: s.lang,
+        multiLangs: s.multiLangs
+      }));
+      return {
+        directSources,
+        matchedPost: directResult.matchedPost || null
+      };
+    } catch {
       return { directSources: [], matchedPost: null };
     }
-    const rawDirect = Array.isArray(vegaRes.directSources) ? vegaRes.directSources : [];
-    const directSources = rawDirect.map((s) => ({
-      quality: s.quality || "1080p",
-      url: s.url,
-      directUrl: s.url.startsWith("https://video-downloads.googleusercontent.com/") ? s.url : void 0,
-      sizeFormatted: s.sizeFormatted,
-      lang: s.lang,
-      multiLangs: s.multiLangs
-    }));
-    return {
-      directSources,
-      matchedPost: vegaRes.matchedPost || null
-    };
-  } catch {
-    return { directSources: [], matchedPost: null };
-  }
+  })();
+  directDownloadSourceCache.set(cacheKey, { expiresAt: now + 6e4, promise });
+  return promise;
 }
 apiRouter.post("/download/resolve", async (req, res) => {
   const {
@@ -5046,13 +5648,14 @@ apiRouter.post("/download/resolve", async (req, res) => {
   const cleanTmdbId = String(tmdbId || "128").trim();
   const safeSeason = Number(season) || 1;
   const safeEpisode = Number(episode) || 1;
+  const cleanTitle = stripPlaceholderDownloadTitle(title);
   try {
     const { directSources, matchedPost } = await gatherDirectDownloadSources({
       mediaType: safeMediaType,
       tmdbId: cleanTmdbId,
       season: safeSeason,
       episode: safeEpisode,
-      title: String(title || ""),
+      title: cleanTitle,
       year: String(year || "")
     });
     const fallbackPostTitle = matchedPost?.title ? matchedPost.title.replace(/\b(19\d{2}|20\d{2})\b.*$/i, "").trim() : "";
@@ -5062,7 +5665,7 @@ apiRouter.post("/download/resolve", async (req, res) => {
         tmdbId: cleanTmdbId,
         season: safeSeason,
         episode: safeEpisode,
-        title: String(title || fallbackPostTitle || "").trim() || void 0,
+        title: String(cleanTitle || fallbackPostTitle || "").trim() || void 0,
         year: String(year || matchedPost?.year || "").trim() || void 0,
         currentPlaybackSource,
         playbackUrl,
@@ -5177,7 +5780,7 @@ apiRouter.get("/download/direct-check", async (req, res) => {
   }
 });
 function serveMp4FileWithRange(req, res, filePath, downloadFilename) {
-  const stat = fs.statSync(filePath);
+  const stat = fs2.statSync(filePath);
   const fileSize = stat.size;
   const range = req.headers.range;
   res.setHeader("Content-Type", "video/mp4");
@@ -5202,14 +5805,14 @@ function serveMp4FileWithRange(req, res, filePath, downloadFilename) {
     if (req.method === "HEAD") {
       return res.end();
     }
-    return fs.createReadStream(filePath, { start, end }).pipe(res);
+    return fs2.createReadStream(filePath, { start, end }).pipe(res);
   }
   res.status(200);
   res.setHeader("Content-Length", String(fileSize));
   if (req.method === "HEAD") {
     return res.end();
   }
-  return fs.createReadStream(filePath).pipe(res);
+  return fs2.createReadStream(filePath).pipe(res);
 }
 var MP4_ISO5_FTYP_BOX = Buffer.from(
   "0000001c6674797069736f350000020069736f3569736f366d703431",
@@ -5237,7 +5840,7 @@ async function buildFullMovieMp4ToCache(params) {
     sourceUrl
   } = params;
   try {
-    if (fs.existsSync(cachedMp4Path) && fs.statSync(cachedMp4Path).size > 1e5) {
+    if (fs2.existsSync(cachedMp4Path) && fs2.statSync(cachedMp4Path).size > 1e5) {
       return cachedMp4Path;
     }
   } catch {
@@ -5306,7 +5909,7 @@ async function buildFullMovieMp4ToCache(params) {
     };
     const downloadSegmentsToFile = async (urls, filePath, headers, concurrency = 160) => {
       if (!urls || urls.length === 0) return false;
-      const out = fs.createWriteStream(filePath);
+      const out = fs2.createWriteStream(filePath);
       const pending = /* @__PURE__ */ new Map();
       let nextFetch = 0;
       let nextWrite = 0;
@@ -5350,7 +5953,7 @@ async function buildFullMovieMp4ToCache(params) {
         out.on("error", reject);
       });
       try {
-        return fs.existsSync(filePath) && fs.statSync(filePath).size > 1024;
+        return fs2.existsSync(filePath) && fs2.statSync(filePath).size > 1024;
       } catch {
         return false;
       }
@@ -5364,7 +5967,7 @@ async function buildFullMovieMp4ToCache(params) {
       for (const p of [tempDubMpdPath, tempVideoPath, tempAudioPath]) {
         if (p) {
           try {
-            if (fs.existsSync(p)) fs.unlinkSync(p);
+            if (fs2.existsSync(p)) fs2.unlinkSync(p);
           } catch {
           }
         }
@@ -5454,11 +6057,11 @@ async function buildFullMovieMp4ToCache(params) {
               if ((hasMatchingDub || normLang === "hi") && mpdXml.includes("audio")) {
                 orionAudioUrls = extractDashSegmentUrls(mpdXml, "audio");
                 const audioOnlyXml = stripVideoFromMpd(mpdXml);
-                tempDubMpdPath = path.join(
+                tempDubMpdPath = path2.join(
                   "/tmp",
                   `zxc_dub_${Date.now()}_${Math.random().toString(36).slice(2)}.mpd`
                 );
-                fs.writeFileSync(tempDubMpdPath, audioOnlyXml, "utf-8");
+                fs2.writeFileSync(tempDubMpdPath, audioOnlyXml, "utf-8");
               }
             }
           }
@@ -5547,7 +6150,7 @@ async function buildFullMovieMp4ToCache(params) {
       const chosenVideoUrls = !isSlowWorkersCdn && hlsSegmentUrls.length > 0 ? hlsSegmentUrls : orionVideoUrls.length > 0 ? orionVideoUrls : hlsSegmentUrls;
       const videoDownloadTask = async () => {
         if (chosenVideoUrls.length > 0) {
-          const candidatePath = path.join("/tmp", `zxc_vid_${uid}.ts`);
+          const candidatePath = path2.join("/tmp", `zxc_vid_${uid}.ts`);
           const ok = await downloadSegmentsToFile(
             chosenVideoUrls,
             candidatePath,
@@ -5564,7 +6167,7 @@ async function buildFullMovieMp4ToCache(params) {
       };
       const audioDownloadTask = async () => {
         if (orionAudioUrls.length > 0) {
-          const candidatePath = path.join("/tmp", `zxc_aud_${uid}.m4a`);
+          const candidatePath = path2.join("/tmp", `zxc_aud_${uid}.m4a`);
           const ok = await downloadSegmentsToFile(
             orionAudioUrls,
             candidatePath,
@@ -5645,13 +6248,13 @@ User-Agent: ${COMMON_HEADERS["User-Agent"]}\r
         ff.on("error", () => resolve());
       });
       cleanupTempFiles();
-      if (fs.existsSync(cachedMp4TmpPath) && fs.statSync(cachedMp4TmpPath).size > 1e5) {
-        fs.renameSync(cachedMp4TmpPath, cachedMp4Path);
+      if (fs2.existsSync(cachedMp4TmpPath) && fs2.statSync(cachedMp4TmpPath).size > 1e5) {
+        fs2.renameSync(cachedMp4TmpPath, cachedMp4Path);
         return cachedMp4Path;
       }
-      if (fs.existsSync(cachedMp4TmpPath)) {
+      if (fs2.existsSync(cachedMp4TmpPath)) {
         try {
-          fs.unlinkSync(cachedMp4TmpPath);
+          fs2.unlinkSync(cachedMp4TmpPath);
         } catch {
         }
       }
@@ -5686,7 +6289,7 @@ apiRouter.post("/download/prepare", async (req, res) => {
     /[^a-zA-Z0-9_-]/g,
     ""
   );
-  const cachedMp4Path = path.join("/tmp", `zxc_cached_mp4_${cacheKey}.mp4`);
+  const cachedMp4Path = path2.join("/tmp", `zxc_cached_mp4_${cacheKey}.mp4`);
   void buildFullMovieMp4ToCache({
     cacheKey,
     cachedMp4Path,
@@ -5701,7 +6304,7 @@ apiRouter.post("/download/prepare", async (req, res) => {
   });
   return res.json({ status: "preparing", cacheKey });
 });
-apiRouter.all("/download/file", async (req, res) => {
+async function handleDownloadFileStream(req, res, queryParams) {
   if (req.method !== "GET" && req.method !== "HEAD") {
     return res.status(405).send("Method Not Allowed");
   }
@@ -5714,7 +6317,7 @@ apiRouter.all("/download/file", async (req, res) => {
     quality = "1080p",
     title = "",
     sourceUrl = ""
-  } = req.query;
+  } = queryParams;
   const cleanTitle = (title || (mediaType === "tv" ? "Series" : "Movie")).replace(/[^a-zA-Z0-9_\-\s]/g, "").trim().replace(/\s+/g, ".");
   const filePart = mediaType === "tv" ? `S${String(season).padStart(2, "0")}E${String(episode).padStart(2, "0")}` : "Movie";
   const downloadFilename = `${cleanTitle}.${filePart}.${quality}.${lang.toUpperCase()}.mp4`;
@@ -5724,9 +6327,9 @@ apiRouter.all("/download/file", async (req, res) => {
     /[^a-zA-Z0-9_-]/g,
     ""
   );
-  const cachedMp4Path = path.join("/tmp", `zxc_cached_mp4_${cacheKey}.mp4`);
+  const cachedMp4Path = path2.join("/tmp", `zxc_cached_mp4_${cacheKey}.mp4`);
   try {
-    if (fs.existsSync(cachedMp4Path) && fs.statSync(cachedMp4Path).size > 1e5) {
+    if (fs2.existsSync(cachedMp4Path) && fs2.statSync(cachedMp4Path).size > 1e5) {
       return serveMp4FileWithRange(req, res, cachedMp4Path, downloadFilename);
     }
   } catch {
@@ -5874,13 +6477,13 @@ apiRouter.all("/download/file", async (req, res) => {
   if (clientClosed || res.writableEnded) {
     return;
   }
-  if (builtPath && fs.existsSync(builtPath)) {
+  if (builtPath && fs2.existsSync(builtPath)) {
     let skipOffset = 0;
     try {
-      const fd = fs.openSync(builtPath, "r");
+      const fd = fs2.openSync(builtPath, "r");
       const headerBuf = Buffer.alloc(16);
-      fs.readSync(fd, headerBuf, 0, 16, 0);
-      fs.closeSync(fd);
+      fs2.readSync(fd, headerBuf, 0, 16, 0);
+      fs2.closeSync(fd);
       if (headerBuf.slice(4, 8).toString("ascii") === "ftyp") {
         const boxLen = headerBuf.readUInt32BE(0);
         if (boxLen >= 16 && boxLen <= 128) {
@@ -5890,17 +6493,17 @@ apiRouter.all("/download/file", async (req, res) => {
     } catch {
       skipOffset = 28;
     }
-    return fs.createReadStream(builtPath, { start: skipOffset }).pipe(res);
+    return fs2.createReadStream(builtPath, { start: skipOffset }).pipe(res);
   }
   const sampleQuality = requestedHeight >= 1080 ? "1080p" : requestedHeight >= 720 ? "720p" : requestedHeight >= 480 ? "480p" : "360p";
-  const sampleFilePath = path.join(process.cwd(), "public", "sample-media", `test_${sampleQuality}.mp4`);
-  if (fs.existsSync(sampleFilePath)) {
+  const sampleFilePath = path2.join(process.cwd(), "public", "sample-media", `test_${sampleQuality}.mp4`);
+  if (fs2.existsSync(sampleFilePath)) {
     let skipOffset = 0;
     try {
-      const fd = fs.openSync(sampleFilePath, "r");
+      const fd = fs2.openSync(sampleFilePath, "r");
       const headerBuf = Buffer.alloc(16);
-      fs.readSync(fd, headerBuf, 0, 16, 0);
-      fs.closeSync(fd);
+      fs2.readSync(fd, headerBuf, 0, 16, 0);
+      fs2.closeSync(fd);
       if (headerBuf.slice(4, 8).toString("ascii") === "ftyp") {
         const boxLen = headerBuf.readUInt32BE(0);
         if (boxLen >= 16 && boxLen <= 128) {
@@ -5910,9 +6513,453 @@ apiRouter.all("/download/file", async (req, res) => {
     } catch {
       skipOffset = 0;
     }
-    return fs.createReadStream(sampleFilePath, { start: skipOffset }).pipe(res);
+    return fs2.createReadStream(sampleFilePath, { start: skipOffset }).pipe(res);
   }
   return res.end();
+}
+apiRouter.all("/download/file", async (req, res) => {
+  return handleDownloadFileStream(req, res, req.query);
+});
+function resolveRequestOrigin(_req) {
+  return "https://zxcstream-mirror.vercel.app";
+}
+apiRouter.get("/v1/developer/keys", (req, res) => {
+  const t0 = Date.now();
+  const keys = publicDownloadApiManager.listApiKeys();
+  publicDownloadApiManager.logActivity({
+    method: "GET",
+    endpoint: "/api/v1/developer/keys",
+    statusCode: 200,
+    keyId: "dashboard",
+    keyPrefix: "console",
+    latencyMs: Date.now() - t0,
+    summary: `Listed ${keys.length} developer API key(s)`
+  });
+  return res.json({
+    success: true,
+    baseUrl: "https://zxcstream-mirror.vercel.app/api/v1",
+    siteOrigin: "https://zxcstream-mirror.vercel.app",
+    keys,
+    defaultDemoKey: DEFAULT_DEMO_API_KEY,
+    policy: {
+      rateLimit: "UNLIMITED",
+      quota: "UNLIMITED"
+    }
+  });
+});
+apiRouter.post("/v1/developer/keys", (req, res) => {
+  const rawName = typeof req.body?.name === "string" ? req.body.name.trim() : "";
+  if (rawName.length > 80) {
+    return res.status(400).json({
+      success: false,
+      code: "INVALID_KEY_NAME",
+      error: "API key name must be 80 characters or fewer."
+    });
+  }
+  const { key, rawKey } = publicDownloadApiManager.createApiKey(rawName || void 0);
+  return res.status(201).json({
+    success: true,
+    key,
+    apiKey: rawKey,
+    message: "API key generated successfully. Store this secret key securely; it is only shown once.",
+    policy: {
+      rateLimit: "UNLIMITED",
+      quota: "UNLIMITED"
+    }
+  });
+});
+apiRouter.delete("/v1/developer/keys/:id", (req, res) => {
+  const keyId = String(req.params.id || "").trim();
+  const revoked = publicDownloadApiManager.revokeApiKey(keyId);
+  if (!revoked) {
+    return res.status(404).json({
+      success: false,
+      code: "KEY_NOT_FOUND",
+      error: `API key "${keyId}" was not found.`
+    });
+  }
+  return res.json({
+    success: true,
+    key: revoked,
+    message: `API key "${revoked.name}" (${revoked.keyPrefix}) has been revoked.`
+  });
+});
+apiRouter.get("/v1/developer/usage", (req, res) => {
+  const t0 = Date.now();
+  const providedKey = extractApiKeyFromRequest(
+    req.headers,
+    req.query
+  );
+  let filterKeyId;
+  if (providedKey) {
+    const auth = publicDownloadApiManager.authenticateKey(providedKey);
+    if (!auth.authenticated || !auth.key) {
+      publicDownloadApiManager.logActivity({
+        method: "GET",
+        endpoint: "/api/v1/developer/usage",
+        statusCode: 401,
+        keyId: "unauthenticated",
+        keyPrefix: "invalid",
+        latencyMs: Date.now() - t0,
+        summary: auth.error || "Unauthorized usage query"
+      });
+      return res.status(401).json({
+        success: false,
+        code: auth.code || "UNAUTHORIZED",
+        error: auth.error
+      });
+    }
+    if (req.query.scope === "key") {
+      filterKeyId = auth.key.id;
+    }
+  }
+  const stats = publicDownloadApiManager.getUsageStatistics(filterKeyId);
+  const jobs = publicDownloadApiManager.listDownloadJobs(filterKeyId).slice(0, 50).map((j) => publicDownloadApiManager.formatPublicJobResponse(j, resolveRequestOrigin(req)));
+  return res.json({
+    ...stats,
+    jobs
+  });
+});
+apiRouter.get("/v1/downloads", (req, res) => {
+  const providedKey = extractApiKeyFromRequest(
+    req.headers,
+    req.query
+  );
+  let filterKeyId;
+  if (providedKey) {
+    const auth = publicDownloadApiManager.authenticateKey(providedKey);
+    if (!auth.authenticated || !auth.key) {
+      return res.status(401).json({
+        success: false,
+        code: auth.code || "UNAUTHORIZED",
+        error: auth.error
+      });
+    }
+    if (req.query.scope === "key") {
+      filterKeyId = auth.key.id;
+    }
+  }
+  const origin = resolveRequestOrigin(req);
+  const jobs = publicDownloadApiManager.listDownloadJobs(filterKeyId).map((j) => publicDownloadApiManager.formatPublicJobResponse(j, origin));
+  return res.json({
+    success: true,
+    total: jobs.length,
+    downloads: jobs,
+    policy: {
+      rateLimit: "UNLIMITED",
+      quota: "UNLIMITED"
+    }
+  });
+});
+apiRouter.post("/v1/downloads", async (req, res) => {
+  const t0 = Date.now();
+  const rawKey = extractApiKeyFromRequest(
+    req.headers,
+    req.query
+  );
+  const auth = publicDownloadApiManager.authenticateKey(rawKey);
+  if (!auth.authenticated || !auth.key) {
+    publicDownloadApiManager.logActivity({
+      method: "POST",
+      endpoint: "/api/v1/downloads",
+      statusCode: 401,
+      keyId: "unauthenticated",
+      keyPrefix: "none",
+      latencyMs: Date.now() - t0,
+      summary: auth.error || "Rejected unauthenticated download request"
+    });
+    return res.status(401).json({
+      success: false,
+      code: auth.code || "UNAUTHORIZED",
+      error: auth.error
+    });
+  }
+  const validation = validateDownloadRequestInput(req.body || {});
+  if (!validation.valid) {
+    publicDownloadApiManager.logActivity({
+      method: "POST",
+      endpoint: "/api/v1/downloads",
+      statusCode: 400,
+      keyId: auth.key.id,
+      keyPrefix: auth.key.keyPrefix,
+      latencyMs: Date.now() - t0,
+      summary: `Validation failed: ${validation.code}`
+    });
+    return res.status(400).json({
+      success: false,
+      code: validation.code,
+      error: validation.error
+    });
+  }
+  const validReq = validation.data;
+  const job = publicDownloadApiManager.createDownloadJob({
+    key: auth.key,
+    request: validReq
+  });
+  try {
+    const { directSources, matchedPost } = await gatherDirectDownloadSources({
+      mediaType: validReq.mediaType,
+      tmdbId: validReq.tmdbId,
+      season: validReq.season,
+      episode: validReq.episode,
+      title: validReq.title || "",
+      year: validReq.year || ""
+    });
+    const fallbackPostTitle = matchedPost?.title ? matchedPost.title.replace(/\b(19\d{2}|20\d{2})\b.*$/i, "").trim() : "";
+    const resolution = await resolveDownloadableMedia(
+      {
+        mediaType: validReq.mediaType,
+        tmdbId: validReq.tmdbId,
+        season: validReq.season,
+        episode: validReq.episode,
+        title: String(validReq.title || fallbackPostTitle || "").trim() || void 0,
+        year: String(validReq.year || matchedPost?.year || "").trim() || void 0,
+        resolvedDirectSources: directSources
+      },
+      fetchTmdbDetailsWithFallback
+    );
+    const updatedJob = publicDownloadApiManager.completeDownloadJobWithResolution(job.id, resolution) || job;
+    if (req.body?.prepareCache !== false && updatedJob.status === "completed") {
+      const heightMatch = String(updatedJob.quality).match(/(\d+)p/i);
+      const requestedHeight = heightMatch ? Number(heightMatch[1]) : 1080;
+      const cacheKey = `${updatedJob.mediaType}_${updatedJob.tmdbId}_s${updatedJob.season || 1}_e${updatedJob.episode || 1}_${updatedJob.lang.toLowerCase()}_${requestedHeight}p`.replace(
+        /[^a-zA-Z0-9_-]/g,
+        ""
+      );
+      const cachedMp4Path = path2.join("/tmp", `zxc_cached_mp4_${cacheKey}.mp4`);
+      void buildFullMovieMp4ToCache({
+        cacheKey,
+        cachedMp4Path,
+        mediaType: updatedJob.mediaType,
+        tmdbId: updatedJob.tmdbId,
+        season: String(updatedJob.season || 1),
+        episode: String(updatedJob.episode || 1),
+        lang: updatedJob.lang,
+        requestedHeight,
+        title: updatedJob.title,
+        sourceUrl: updatedJob.directUrl || updatedJob.internalDownloadUrl || ""
+      });
+    }
+    const statusCode = updatedJob.status === "failed" ? 422 : 201;
+    publicDownloadApiManager.logActivity({
+      method: "POST",
+      endpoint: "/api/v1/downloads",
+      statusCode,
+      keyId: auth.key.id,
+      keyPrefix: auth.key.keyPrefix,
+      latencyMs: Date.now() - t0,
+      jobId: updatedJob.id,
+      summary: `${updatedJob.title} (${updatedJob.mediaType.toUpperCase()} #${updatedJob.tmdbId}) \xB7 ${updatedJob.quality} [${updatedJob.lang.toUpperCase()}]`
+    });
+    const origin = resolveRequestOrigin(req);
+    return res.status(statusCode).json(publicDownloadApiManager.formatPublicJobResponse(updatedJob, origin));
+  } catch (err) {
+    const failedJob = publicDownloadApiManager.failDownloadJob(
+      job.id,
+      err?.message || "Unexpected error in Download Engine"
+    ) || job;
+    publicDownloadApiManager.logActivity({
+      method: "POST",
+      endpoint: "/api/v1/downloads",
+      statusCode: 500,
+      keyId: auth.key.id,
+      keyPrefix: auth.key.keyPrefix,
+      latencyMs: Date.now() - t0,
+      jobId: failedJob.id,
+      summary: `Download job failed: ${failedJob.error}`
+    });
+    const origin = resolveRequestOrigin(req);
+    return res.status(500).json(publicDownloadApiManager.formatPublicJobResponse(failedJob, origin));
+  }
+});
+apiRouter.get("/v1/downloads/:id", (req, res) => {
+  const t0 = Date.now();
+  const rawKey = extractApiKeyFromRequest(
+    req.headers,
+    req.query
+  );
+  const auth = publicDownloadApiManager.authenticateKey(rawKey);
+  if (!auth.authenticated || !auth.key) {
+    publicDownloadApiManager.logActivity({
+      method: "GET",
+      endpoint: `/api/v1/downloads/${req.params.id}`,
+      statusCode: 401,
+      keyId: "unauthenticated",
+      keyPrefix: "none",
+      latencyMs: Date.now() - t0,
+      summary: auth.error || "Unauthorized download job lookup"
+    });
+    return res.status(401).json({
+      success: false,
+      code: auth.code || "UNAUTHORIZED",
+      error: auth.error
+    });
+  }
+  const jobId = String(req.params.id || "").trim();
+  const job = publicDownloadApiManager.getDownloadJob(jobId);
+  if (!job) {
+    publicDownloadApiManager.logActivity({
+      method: "GET",
+      endpoint: `/api/v1/downloads/${jobId}`,
+      statusCode: 404,
+      keyId: auth.key.id,
+      keyPrefix: auth.key.keyPrefix,
+      latencyMs: Date.now() - t0,
+      summary: `Download job "${jobId}" not found`
+    });
+    return res.status(404).json({
+      success: false,
+      code: "JOB_NOT_FOUND",
+      error: `Download job "${jobId}" does not exist.`
+    });
+  }
+  publicDownloadApiManager.logActivity({
+    method: "GET",
+    endpoint: `/api/v1/downloads/${jobId}`,
+    statusCode: 200,
+    keyId: auth.key.id,
+    keyPrefix: auth.key.keyPrefix,
+    latencyMs: Date.now() - t0,
+    jobId: job.id,
+    summary: `Fetched details for job ${job.id} (${job.title})`
+  });
+  const origin = resolveRequestOrigin(req);
+  return res.json(publicDownloadApiManager.formatPublicJobResponse(job, origin));
+});
+apiRouter.get("/v1/downloads/:id/status", (req, res) => {
+  const t0 = Date.now();
+  const rawKey = extractApiKeyFromRequest(
+    req.headers,
+    req.query
+  );
+  const auth = publicDownloadApiManager.authenticateKey(rawKey);
+  if (!auth.authenticated || !auth.key) {
+    return res.status(401).json({
+      success: false,
+      code: auth.code || "UNAUTHORIZED",
+      error: auth.error
+    });
+  }
+  const jobId = String(req.params.id || "").trim();
+  const job = publicDownloadApiManager.getDownloadJob(jobId);
+  if (!job) {
+    return res.status(404).json({
+      success: false,
+      code: "JOB_NOT_FOUND",
+      error: `Download job "${jobId}" does not exist.`
+    });
+  }
+  const origin = resolveRequestOrigin(req);
+  const formatted = publicDownloadApiManager.formatPublicJobResponse(job, origin);
+  publicDownloadApiManager.logActivity({
+    method: "GET",
+    endpoint: `/api/v1/downloads/${jobId}/status`,
+    statusCode: 200,
+    keyId: auth.key.id,
+    keyPrefix: auth.key.keyPrefix,
+    latencyMs: Date.now() - t0,
+    jobId: job.id,
+    summary: `Status check ${job.id}: ${job.status.toUpperCase()} (${job.progress}%)`
+  });
+  return res.json({
+    success: formatted.success,
+    jobId: job.id,
+    status: job.status,
+    progress: job.progress,
+    stage: job.stage,
+    downloadUrl: formatted.downloadUrl,
+    expiresAt: formatted.expiresAt,
+    error: job.error
+  });
+});
+apiRouter.all("/v1/downloads/:id/file", async (req, res) => {
+  const t0 = Date.now();
+  const jobId = String(req.params.id || "").trim();
+  const job = publicDownloadApiManager.getDownloadJob(jobId);
+  if (!job) {
+    return res.status(404).json({
+      success: false,
+      code: "JOB_NOT_FOUND",
+      error: `Download job "${jobId}" does not exist.`
+    });
+  }
+  if (job.status !== "completed") {
+    return res.status(409).json({
+      success: false,
+      code: "JOB_NOT_READY",
+      error: `Download job "${jobId}" is currently in "${job.status}" state (${job.progress}%).`
+    });
+  }
+  const queryToken = typeof req.query.token === "string" ? req.query.token.trim() : "";
+  const queryExpires = Number(req.query.expires || 0);
+  const rawKey = extractApiKeyFromRequest(
+    req.headers,
+    req.query
+  );
+  let authorizedKeyPrefix = job.keyPrefix;
+  let authorizedKeyId = job.keyId;
+  if (queryToken) {
+    const tokenVerification = verifyDownloadFileToken({
+      jobId: job.id,
+      keyId: job.keyId,
+      token: queryToken,
+      expiresAtMs: queryExpires || job.expiresAtMs
+    });
+    if (!tokenVerification.valid) {
+      publicDownloadApiManager.logActivity({
+        method: req.method,
+        endpoint: `/api/v1/downloads/${jobId}/file`,
+        statusCode: 403,
+        keyId: job.keyId,
+        keyPrefix: job.keyPrefix,
+        latencyMs: Date.now() - t0,
+        jobId: job.id,
+        summary: `Rejected file download: ${tokenVerification.reason}`
+      });
+      return res.status(403).json({
+        success: false,
+        code: "INVALID_OR_EXPIRED_DOWNLOAD_URL",
+        error: tokenVerification.reason || "Download URL is invalid or expired."
+      });
+    }
+  } else if (rawKey) {
+    const auth = publicDownloadApiManager.authenticateKey(rawKey);
+    if (!auth.authenticated || !auth.key) {
+      return res.status(401).json({
+        success: false,
+        code: auth.code || "UNAUTHORIZED",
+        error: auth.error
+      });
+    }
+    authorizedKeyId = auth.key.id;
+    authorizedKeyPrefix = auth.key.keyPrefix;
+  } else {
+    return res.status(401).json({
+      success: false,
+      code: "AUTHORIZATION_REQUIRED",
+      error: "File download requires either a valid signed token (?token=...&expires=...) or an API key header."
+    });
+  }
+  publicDownloadApiManager.logActivity({
+    method: req.method,
+    endpoint: `/api/v1/downloads/${jobId}/file`,
+    statusCode: 200,
+    keyId: authorizedKeyId,
+    keyPrefix: authorizedKeyPrefix,
+    latencyMs: Date.now() - t0,
+    jobId: job.id,
+    summary: `Streaming MP4 file for "${job.title}" (${job.quality} \xB7 ${job.lang.toUpperCase()})`
+  });
+  return handleDownloadFileStream(req, res, {
+    mediaType: job.mediaType,
+    tmdbId: job.tmdbId,
+    season: String(job.season || 1),
+    episode: String(job.episode || 1),
+    lang: job.lang,
+    quality: job.quality,
+    title: job.title,
+    sourceUrl: job.directUrl || job.internalDownloadUrl || ""
+  });
 });
 apiRouter.get("/download/subtitle", async (req, res) => {
   const {
@@ -5957,8 +7004,8 @@ Synchronized with ZXC[STREAM] Player.\r
 apiRouter.get("/embed/sentinel", (req, res) => {
   const base = "https://zxcstream-mirror.vercel.app";
   const { mediaType = "movie", tmdbId = "128", season = "1", episode = "1" } = req.query;
-  const path2 = mediaType === "tv" ? `${base}/embed/tv/${tmdbId}/${season}/${episode}` : `${base}/embed/movie/${tmdbId}`;
-  return res.json({ embed: path2 });
+  const path3 = mediaType === "tv" ? `${base}/embed/tv/${tmdbId}/${season}/${episode}` : `${base}/embed/movie/${tmdbId}`;
+  return res.json({ embed: path3 });
 });
 var theIntroDbCache = /* @__PURE__ */ new Map();
 var upstreamIntroCache = /* @__PURE__ */ new Map();

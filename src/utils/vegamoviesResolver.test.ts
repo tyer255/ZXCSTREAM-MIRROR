@@ -8,6 +8,7 @@ import {
   extractVegaDetailMetadata,
   extractFastDlFromNexDriveHtml,
   parseFastDlButtonHref,
+  resolveVegaMoviesWithPost,
 } from './vegamoviesResolver.ts';
 
 describe('Vegamovies (vegamovies1.co.in) Discovery & Fast-DL Stream Resolver', () => {
@@ -171,5 +172,16 @@ describe('Vegamovies (vegamovies1.co.in) Discovery & Fast-DL Stream Resolver', (
     assert.equal(meta.nexDriveLinks[1].isHevc, true);
     assert.equal(meta.nexDriveLinks[2].quality, '1080p');
     assert.equal(meta.nexDriveLinks[2].isHevc, false);
+  });
+
+  it('requires a derived movie/series name and never searches Vegamovies by raw numeric TMDB ID', async () => {
+    const emptyTitleRes = await resolveVegaMoviesWithPost({
+      tmdbId: '1393907',
+      title: '',
+      originalTitle: '',
+      mediaType: 'movie',
+    });
+    assert.equal(emptyTitleRes.sources.length, 0);
+    assert.equal(emptyTitleRes.matchedPost, null);
   });
 });

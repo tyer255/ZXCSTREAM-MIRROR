@@ -5,6 +5,7 @@ import {
   MediaType,
   calculateStarRating,
   formatRuntime,
+  getDefaultOrigin,
 } from '../utils/urlBuilder';
 import {
   QUICK_SAMPLE_ITEMS,
@@ -19,6 +20,7 @@ export interface DownloadPageProps {
   mediaType: MediaType;
   tmdbId: string;
   onNavigateHome: () => void;
+  onNavigateDevelopers?: () => void;
   onSelectMedia: (mediaType: MediaType, tmdbId: string) => void;
 }
 
@@ -28,6 +30,7 @@ export const DownloadPage: React.FC<DownloadPageProps> = ({
   mediaType,
   tmdbId,
   onNavigateHome,
+  onNavigateDevelopers,
   onSelectMedia,
 }) => {
   const [tmdbData, setTmdbData] = useState<any>(null);
@@ -276,7 +279,7 @@ export const DownloadPage: React.FC<DownloadPageProps> = ({
 
           <div className="flex items-center gap-1.5 overflow-x-auto py-0.5">
             <span className="text-[11px] font-mono text-zinc-400 mr-1 hidden sm:inline">
-              ENDPOINT: /download/{mediaType}/{media.tmdbId}
+              ENDPOINT: {getDefaultOrigin()}/download/{mediaType}/{media.tmdbId}
             </span>
             {QUICK_SAMPLE_ITEMS.slice(0, 4).map((item) => {
               const isCurrent = item.mediaType === mediaType && item.tmdbId === media.tmdbId;
@@ -296,6 +299,20 @@ export const DownloadPage: React.FC<DownloadPageProps> = ({
                 </button>
               );
             })}
+            <button
+              type="button"
+              onClick={() => {
+                if (onNavigateDevelopers) {
+                  onNavigateDevelopers();
+                } else {
+                  window.location.href = '/developers';
+                }
+              }}
+              data-testid="download-page-api-btn"
+              className="inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-semibold bg-blue-600/20 border border-blue-500/40 text-blue-300 hover:bg-blue-600/30 hover:text-white transition cursor-pointer ml-1"
+            >
+              <span>Public Download API</span>
+            </button>
           </div>
         </div>
       </div>

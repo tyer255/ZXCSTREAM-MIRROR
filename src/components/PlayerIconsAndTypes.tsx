@@ -339,6 +339,7 @@ export interface TmdbMetadata {
   id: number;
   mediaType: MediaType;
   title: string;
+  originalTitle?: string;
   year: string;
   releaseDate: string;
   lastAirDate: string;

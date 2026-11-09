@@ -36,6 +36,7 @@ export const ANIME_PRESETS = [
 export interface HomePageProps {
   announcementOpen: boolean;
   onDismissAnnouncement: () => void;
+  onNavigateDevelopers?: () => void;
   onNavigateDownload: (mediaType: MediaType, tmdbId: string) => void;
   onOpenStandalonePlayer: (
     playerMode: PlayerMode,
@@ -49,6 +50,7 @@ export interface HomePageProps {
 export const HomePage: React.FC<HomePageProps> = ({
   announcementOpen,
   onDismissAnnouncement,
+  onNavigateDevelopers,
   onNavigateDownload,
   onOpenStandalonePlayer,
 }) => {
@@ -197,25 +199,42 @@ export const HomePage: React.FC<HomePageProps> = ({
             <Eclipse className="shrink-0 opacity-60 h-4 w-4" aria-hidden="true" />
             <div className="flex flex-col md:flex-row md:items-center justify-between gap-1 md:gap-3 text-sm">
               <p className="text-zinc-200 leading-snug">
-                Download endpoint is now available, usage:{' '}
+                Download endpoint &amp; Public Developer API now available:{' '}
                 <span className="font-mono text-zinc-100 break-words">
                   {currentOrigin}/download/&#123;media_type&#125;/&#123;tmdbId&#125;
                 </span>
               </p>
             </div>
           </div>
-          <button
-            type="button"
-            onClick={() => onNavigateDownload('movie', tmdbId.trim() || '128')}
-            data-testid="sample-download-link"
-            className="group shrink-0 text-sm font-medium whitespace-nowrap inline-flex items-center text-zinc-100 hover:text-blue-400 transition cursor-pointer"
-          >
-            <span>Sample Link</span>
-            <ArrowRight
-              className="ms-1 -mt-0.5 inline-flex opacity-60 transition-transform group-hover:translate-x-0.5 h-4 w-4"
-              aria-hidden="true"
-            />
-          </button>
+          <div className="flex items-center gap-4 shrink-0">
+            <button
+              type="button"
+              onClick={() => {
+                if (onNavigateDevelopers) {
+                  onNavigateDevelopers();
+                } else {
+                  window.location.href = '/developers';
+                }
+              }}
+              data-testid="open-developer-api-btn"
+              className="group shrink-0 text-xs sm:text-sm font-semibold whitespace-nowrap inline-flex items-center gap-1.5 px-2.5 py-1 rounded bg-blue-600/20 border border-blue-500/30 text-blue-300 hover:bg-blue-600/30 hover:text-white transition cursor-pointer"
+            >
+              <Code className="h-3.5 w-3.5 text-blue-400" />
+              <span>Public Developer API</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => onNavigateDownload('movie', tmdbId.trim() || '128')}
+              data-testid="sample-download-link"
+              className="group shrink-0 text-sm font-medium whitespace-nowrap inline-flex items-center text-zinc-100 hover:text-blue-400 transition cursor-pointer"
+            >
+              <span>Sample Link</span>
+              <ArrowRight
+                className="ms-1 -mt-0.5 inline-flex opacity-60 transition-transform group-hover:translate-x-0.5 h-4 w-4"
+                aria-hidden="true"
+              />
+            </button>
+          </div>
         </div>
       </div>
 

@@ -179,6 +179,8 @@ describe('ZXC[STREAM] URL Builder & Route Utilities', () => {
     assert.equal(qAutoplayOff.introEnd, 60);
 
     assert.deepEqual(parseAppRoute('/'), { page: 'home' });
+    assert.deepEqual(parseAppRoute('/developers'), { page: 'developers' });
+    assert.deepEqual(parseAppRoute('/api-docs'), { page: 'developers' });
     assert.deepEqual(parseAppRoute('/download/movie/128'), {
       page: 'download',
       mediaType: 'movie',

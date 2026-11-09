@@ -15,6 +15,7 @@ import { HomePage } from './components/HomePage';
 import { DownloadPage } from './components/DownloadPage';
 import { CustomPlayerView } from './components/CustomPlayerView';
 import { AnimePlayer } from './anime/AnimePlayer';
+import { DeveloperDashboardPage } from './components/DeveloperDashboardPage';
 
 export default function App() {
   const [route, setRoute] = useState<AppRoute>(() => parseAppRoute(window.location.pathname));
@@ -41,12 +42,24 @@ export default function App() {
     }
   };
 
+  if (route.page === 'developers') {
+    return (
+      <DeveloperDashboardPage
+        onNavigateHome={() => navigateTo('/')}
+        onNavigateDownload={(mediaType: MediaType, tmdbId: string) =>
+          navigateTo(`/download/${mediaType}/${tmdbId}`)
+        }
+      />
+    );
+  }
+
   if (route.page === 'download') {
     return (
       <DownloadPage
         mediaType={route.mediaType}
         tmdbId={route.tmdbId}
         onNavigateHome={() => navigateTo('/')}
+        onNavigateDevelopers={() => navigateTo('/developers')}
         onSelectMedia={(newMediaType: MediaType, newTmdbId: string) =>
           navigateTo(`/download/${newMediaType}/${newTmdbId}`)
         }
@@ -111,6 +124,7 @@ export default function App() {
     <HomePage
       announcementOpen={announcementOpen}
       onDismissAnnouncement={() => setAnnouncementOpen(false)}
+      onNavigateDevelopers={() => navigateTo('/developers')}
       onNavigateDownload={(mediaType: MediaType, tmdbId: string) =>
         navigateTo(`/download/${mediaType}/${tmdbId}`)
       }

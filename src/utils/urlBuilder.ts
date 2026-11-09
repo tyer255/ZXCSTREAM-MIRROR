@@ -47,7 +47,8 @@ export type AppRoute =
       season: number;
       episode: number;
       mediaType?: 'movie' | 'tv';
-    };
+    }
+  | { page: 'developers' };
 
 export interface RawOrionDub {
   type?: number;
@@ -724,6 +725,10 @@ export function parseAppRoute(pathname: string): AppRoute {
   }
 
   const [first, second, third, fourth, fifth] = segments;
+
+  if (first === 'developers' || first === 'developer' || first === 'api-docs') {
+    return { page: 'developers' };
+  }
 
   if (first === 'download' && (second === 'movie' || second === 'tv') && third) {
     return {
