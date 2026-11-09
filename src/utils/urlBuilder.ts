@@ -40,6 +40,8 @@ export type AppRoute =
       page: 'download';
       mediaType: MediaType;
       tmdbId: string;
+      season?: number;
+      episode?: number;
     }
   | {
       page: 'anime';
@@ -213,10 +215,58 @@ export function buildPlayerUrl(options: PlayerUrlOptions): string {
 export function buildDownloadUrl(
   mediaType: MediaType,
   tmdbId: string,
+  baseOrigin?: string,
+  season?: number | string,
+  episode?: number | string
+): string {
+  const origin = (baseOrigin ?? getDefaultOrigin()).replace(/\/+$/, '');
+  const cleanId = encodeURIComponent(tmdbId.trim());
+  if (mediaType === 'tv' && season !== undefined && episode !== undefined) {
+    const s = encodeURIComponent(String(season).trim() || '1');
+    const ep = encodeURIComponent(String(episode).trim() || '1');
+    return `${origin}/download/tv/${cleanId}/${s}/${ep}`;
+  }
+  return `${origin}/download/${mediaType}/${cleanId}`;
+}
+
+export function buildSimpleApiJsonUrl(
+  mediaType: MediaType,
+  tmdbId: string,
+  season: number | string = 1,
+  episode: number | string = 1,
   baseOrigin?: string
 ): string {
   const origin = (baseOrigin ?? getDefaultOrigin()).replace(/\/+$/, '');
-  return `${origin}/download/${mediaType}/${encodeURIComponent(tmdbId.trim())}`;
+  const cleanId = encodeURIComponent(tmdbId.trim() || (mediaType === 'tv' ? '1396' : '128'));
+  if (mediaType === 'tv') {
+    const s = encodeURIComponent(String(season).trim() || '1');
+    const ep = encodeURIComponent(String(episode).trim() || '1');
+    return `${origin}/api/v1/download/tv/${cleanId}/${s}/${ep}`;
+  }
+  return `${origin}/api/v1/download/movie/${cleanId}`;
+}
+
+export function buildSimpleDirectMp4Url(
+  mediaType: MediaType,
+  tmdbId: string,
+  options?: {
+    season?: number | string;
+    episode?: number | string;
+    lang?: string;
+    quality?: string;
+    baseOrigin?: string;
+  }
+): string {
+  const origin = (options?.baseOrigin ?? getDefaultOrigin()).replace(/\/+$/, '');
+  const cleanId = encodeURIComponent(tmdbId.trim() || (mediaType === 'tv' ? '1396' : '128'));
+  const lang = encodeURIComponent((options?.lang || 'hi').trim().toLowerCase());
+  const quality = encodeURIComponent((options?.quality || '1080p').trim().toLowerCase());
+  if (mediaType === 'tv') {
+    const s = encodeURIComponent(String(options?.season ?? 1).trim() || '1');
+    const ep = encodeURIComponent(String(options?.episode ?? 1).trim() || '1');
+    return `${origin}/api/v1/dl/tv/${cleanId}/${s}/${ep}?lang=${lang}&quality=${quality}`;
+  }
+  return `${origin}/api/v1/dl/movie/${cleanId}?lang=${lang}&quality=${quality}`;
 }
 
 export function buildEmbedIframeCode(
@@ -731,10 +781,41 @@ export function parseAppRoute(pathname: string): AppRoute {
   }
 
   if (first === 'download' && (second === 'movie' || second === 'tv') && third) {
+    if (second === 'tv' && fourth) {
+      const season = Math.max(1, Number.parseInt(fourth, 10) || 1);
+      const episode = Math.max(1, Number.parseInt(fifth ?? '1', 10) || 1);
+      return {
+        page: 'download',
+        mediaType: 'tv',
+        tmdbId: third,
+        season,
+        episode,
+      };
+    }
     return {
       page: 'download',
       mediaType: second,
       tmdbId: third,
+    };
+  }
+
+  // Shorthand download route: /download/1396/1/1 (Series) or /download/128 (Movie)
+  if (first === 'download' && second && /^\d+$/.test(second)) {
+    if (third && /^\d+$/.test(third)) {
+      const season = Math.max(1, Number.parseInt(third, 10) || 1);
+      const episode = Math.max(1, Number.parseInt(fourth ?? '1', 10) || 1);
+      return {
+        page: 'download',
+        mediaType: 'tv',
+        tmdbId: second,
+        season,
+        episode,
+      };
+    }
+    return {
+      page: 'download',
+      mediaType: 'movie',
+      tmdbId: second,
     };
   }
 

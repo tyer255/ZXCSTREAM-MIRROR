@@ -17,11 +17,21 @@ import {
   Trash2,
 } from 'lucide-react';
 import { triggerNativeBrowserDownload } from '../services/downloadEngineTypes';
-import { getDefaultOrigin } from '../utils/urlBuilder';
+import {
+  buildDownloadUrl,
+  buildSimpleApiJsonUrl,
+  buildSimpleDirectMp4Url,
+  getDefaultOrigin,
+} from '../utils/urlBuilder';
 
 export interface DeveloperDashboardPageProps {
   onNavigateHome: () => void;
-  onNavigateDownload?: (mediaType: 'movie' | 'tv', tmdbId: string) => void;
+  onNavigateDownload?: (
+    mediaType: 'movie' | 'tv',
+    tmdbId: string,
+    season?: number,
+    episode?: number
+  ) => void;
 }
 
 type DashboardTab = 'overview' | 'keys' | 'jobs' | 'docs';
@@ -106,14 +116,15 @@ interface UsageMetrics {
 }
 
 const SANDBOX_PRESETS = [
-  { label: 'Princess Mononoke (Movie #128)', mediaType: 'movie' as const, tmdbId: '128', season: 1, episode: 1, lang: 'en', quality: '1080p' },
-  { label: 'Nayi Naveli (Movie #1393907)', mediaType: 'movie' as const, tmdbId: '1393907', season: 1, episode: 1, lang: 'hi', quality: '1080p' },
-  { label: 'Gladiator II (Movie #558449)', mediaType: 'movie' as const, tmdbId: '558449', season: 1, episode: 1, lang: 'en', quality: '720p' },
-  { label: 'Stranger Things S1E1 (TV #66732)', mediaType: 'tv' as const, tmdbId: '66732', season: 1, episode: 1, lang: 'en', quality: '1080p' },
+  { label: 'Breaking Bad S1E1 (TV 1396/1/1)', mediaType: 'tv' as const, tmdbId: '1396', season: 1, episode: 1, lang: 'hi', quality: '1080p' },
+  { label: 'Princess Mononoke (Movie 128)', mediaType: 'movie' as const, tmdbId: '128', season: 1, episode: 1, lang: 'hi', quality: '1080p' },
+  { label: 'Gladiator II (Movie 558449)', mediaType: 'movie' as const, tmdbId: '558449', season: 1, episode: 1, lang: 'en', quality: '1080p' },
+  { label: 'Stranger Things S1E1 (TV 66732/1/1)', mediaType: 'tv' as const, tmdbId: '66732', season: 1, episode: 1, lang: 'en', quality: '1080p' },
 ];
 
 export const DeveloperDashboardPage: React.FC<DeveloperDashboardPageProps> = ({
   onNavigateHome,
+  onNavigateDownload,
 }) => {
   const [activeTab, setActiveTab] = useState<DashboardTab>('overview');
   const [keys, setKeys] = useState<ApiKeyItem[]>([]);
@@ -144,15 +155,15 @@ export const DeveloperDashboardPage: React.FC<DeveloperDashboardPageProps> = ({
   const [keyError, setKeyError] = useState<string | null>(null);
   const [copiedTokenId, setCopiedTokenId] = useState<string | null>(null);
 
-  // Live API Sandbox state
+  // Live API Sandbox & Custom URL Builder state (defaults to TV 1396/1/1 as requested)
   const [sandboxApiKey, setSandboxApiKey] = useState<string>(
     'zxc_live_a1b2c3d4e5f60718293a4b5c6d7e8f90'
   );
-  const [sandboxMediaType, setSandboxMediaType] = useState<'movie' | 'tv'>('movie');
-  const [sandboxTmdbId, setSandboxTmdbId] = useState<string>('128');
+  const [sandboxMediaType, setSandboxMediaType] = useState<'movie' | 'tv'>('tv');
+  const [sandboxTmdbId, setSandboxTmdbId] = useState<string>('1396');
   const [sandboxSeason, setSandboxSeason] = useState<number>(1);
   const [sandboxEpisode, setSandboxEpisode] = useState<number>(1);
-  const [sandboxLang, setSandboxLang] = useState<string>('en');
+  const [sandboxLang, setSandboxLang] = useState<string>('hi');
   const [sandboxQuality, setSandboxQuality] = useState<string>('1080p');
   const [sandboxRunning, setSandboxRunning] = useState<boolean>(false);
   const [sandboxResult, setSandboxResult] = useState<DownloadJobItem | null>(null);
@@ -357,99 +368,93 @@ export const DeveloperDashboardPage: React.FC<DeveloperDashboardPageProps> = ({
 
   const activeExampleKey = newlyCreatedSecretKey?.rawKey || sandboxApiKey || defaultDemoKey;
 
-  const jsSnippet = `// 1. Request a new download job via the Public Download API
-const API_KEY = '${activeExampleKey}';
-const BASE_URL = '${baseApiUrl}';
+  // Live custom 1-line URLs based on current inputs
+  const livePageUrl = buildDownloadUrl(
+    sandboxMediaType,
+    sandboxTmdbId || (sandboxMediaType === 'tv' ? '1396' : '128'),
+    baseOrigin,
+    sandboxSeason,
+    sandboxEpisode
+  );
+  const liveDirectMp4Url = buildSimpleDirectMp4Url(
+    sandboxMediaType,
+    sandboxTmdbId || (sandboxMediaType === 'tv' ? '1396' : '128'),
+    {
+      season: sandboxSeason,
+      episode: sandboxEpisode,
+      lang: sandboxLang,
+      quality: sandboxQuality,
+      baseOrigin,
+    }
+  );
+  const liveSimpleJsonUrl = buildSimpleApiJsonUrl(
+    sandboxMediaType,
+    sandboxTmdbId || (sandboxMediaType === 'tv' ? '1396' : '128'),
+    sandboxSeason,
+    sandboxEpisode,
+    baseOrigin
+  );
 
-async function requestMovieDownload() {
-  const response = await fetch(\`\${BASE_URL}/downloads\`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': \`Bearer \${API_KEY}\`,
-    },
-    body: JSON.stringify({
-      mediaType: 'movie',
-      tmdbId: '128',
-      lang: 'en',
-      quality: '1080p',
-    }),
-  });
+  // Ready-to-share message for friend (TV 1396/1/1 + Movie 128)
+  const friendShareMessage = `✅ ZXC[STREAM] Download API Examples:
 
-  const job = await response.json();
-  if (!response.ok || !job.success) {
-    throw new Error(job.error || 'Download request failed');
-  }
+1️⃣ TV Series Example (1396/1/1 - Season 1 Episode 1):
+• Download Page: ${baseOrigin}/download/tv/1396/1/1
+• Direct MP4 Download (1-Click): ${baseApiUrl}/dl/tv/1396/1/1?lang=hi&quality=1080p
+• Simple JSON API (GET): ${baseApiUrl}/download/tv/1396/1/1
 
-  console.log('Download Job Created:', job.jobId);
+2️⃣ Movie Example (128):
+• Download Page: ${baseOrigin}/download/movie/128
+• Direct MP4 Download (1-Click): ${baseApiUrl}/dl/movie/128?lang=hi&quality=1080p
+• Simple JSON API (GET): ${baseApiUrl}/download/movie/128
 
-  // 2. Poll job progress & status using jobId
-  const statusRes = await fetch(\`\${BASE_URL}/downloads/\${job.jobId}/status\`, {
-    headers: { 'Authorization': \`Bearer \${API_KEY}\` },
-  });
-  const statusData = await statusRes.json();
-  console.log('Status:', statusData.status, statusData.progress + '%');
+Pattern:
+• Series: ${baseOrigin}/download/tv/{tmdbId}/{season}/{episode}
+• Movie:  ${baseOrigin}/download/movie/{tmdbId}`;
 
-  // 3. Use the expiring signed downloadUrl to stream or download the MP4
-  if (statusData.status === 'completed' && statusData.downloadUrl) {
-    console.log('Authorized MP4 Download URL:', statusData.downloadUrl);
-    return statusData.downloadUrl;
-  }
-}`;
+  const jsSnippet = `// ✅ SUPER SIMPLE 1-LINE METHOD (No POST body required!)
 
-  const curlSnippet = `# 1. Create a Download Job (POST /api/v1/downloads)
-curl -X POST "${baseApiUrl}/downloads" \\
-  -H "Content-Type: application/json" \\
-  -H "Authorization: Bearer ${activeExampleKey}" \\
-  -d '{
-    "mediaType": "movie",
-    "tmdbId": "128",
-    "lang": "en",
-    "quality": "1080p"
-  }'
+// 1. TV Series Example (1396/1/1 -> Season 1, Episode 1):
+const tvRes = await fetch('${baseApiUrl}/download/tv/1396/1/1');
+const tvData = await tvRes.json();
+console.log('TV Series Direct MP4 Link:', tvData.directMp4Url);
+console.log('TV Series Download Page:', tvData.downloadPageUrl);
 
-# 2. Check Download Progress & Status (GET /api/v1/downloads/:id/status)
-curl -X GET "${baseApiUrl}/downloads/job_m8x9k_4a1b2c/status" \\
-  -H "Authorization: Bearer ${activeExampleKey}"
+// 2. Movie Example (128):
+const movieRes = await fetch('${baseApiUrl}/download/movie/128');
+const movieData = await movieRes.json();
+console.log('Movie Direct MP4 Link:', movieData.directMp4Url);
+console.log('Movie Download Page:', movieData.downloadPageUrl);
 
-# 3. Download the Authorized MP4 File (GET /api/v1/downloads/:id/file)
-curl -L -o "Princess.Mononoke.1080p.EN.mp4" \\
-  "${baseApiUrl}/downloads/job_m8x9k_4a1b2c/file?token=<SIGNED_TOKEN>&expires=<EXPIRES_MS>"`;
+// 3. Or put Direct MP4 Link straight into an <a> tag on your site:
+// Series: ${baseApiUrl}/dl/tv/1396/1/1?lang=hi&quality=1080p
+// Movie:  ${baseApiUrl}/dl/movie/128?lang=hi&quality=1080p`;
+
+  const curlSnippet = `# 1️⃣ TV Series (1396/1/1) — Simple 1-Line GET JSON
+curl "${baseApiUrl}/download/tv/1396/1/1"
+
+# 2️⃣ Movie (128) — Simple 1-Line GET JSON
+curl "${baseApiUrl}/download/movie/128"
+
+# 3️⃣ Direct .mp4 File Download (TV Series 1396/1/1 & Movie 128)
+curl -L -o "Series_1396_S1E1.mp4" "${baseApiUrl}/dl/tv/1396/1/1?lang=hi&quality=1080p"
+curl -L -o "Movie_128.mp4" "${baseApiUrl}/dl/movie/128?lang=hi&quality=1080p"`;
 
   const nodeSnippet = `import fs from 'node:fs';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 
-const API_KEY = process.env.ZXC_API_KEY || '${activeExampleKey}';
 const BASE_URL = '${baseApiUrl}';
 
-export async function downloadMediaToFile(tmdbId, outputPath) {
-  // Step 1: Dispatch download job to existing Download Engine
-  const createRes = await fetch(\`\${BASE_URL}/downloads\`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'X-API-Key': API_KEY,
-    },
-    body: JSON.stringify({
-      mediaType: 'movie',
-      tmdbId: String(tmdbId),
-      lang: 'hi',
-      quality: '1080p',
-    }),
-  });
+// Download TV Series (e.g. 1396/1/1) or Movie (e.g. 128) directly to disk:
+export async function downloadMediaSimple() {
+  // TV Series 1396 Season 1 Episode 1:
+  const tvStream = await fetch(\`\${BASE_URL}/dl/tv/1396/1/1?lang=hi&quality=1080p\`);
+  await pipeline(Readable.fromWeb(tvStream.body), fs.createWriteStream('Series_1396_S1E1.mp4'));
 
-  const job = await createRes.json();
-  if (!job.success) throw new Error(job.error);
-
-  // Step 2: Stream the authorized MP4 file to disk
-  const fileRes = await fetch(job.downloadUrl);
-  if (!fileRes.ok || !fileRes.body) {
-    throw new Error(\`File stream failed with HTTP \${fileRes.status}\`);
-  }
-
-  await pipeline(Readable.fromWeb(fileRes.body), fs.createWriteStream(outputPath));
-  return { jobId: job.jobId, savedTo: outputPath };
+  // Movie 128:
+  const movieStream = await fetch(\`\${BASE_URL}/dl/movie/128?lang=hi&quality=1080p\`);
+  await pipeline(Readable.fromWeb(movieStream.body), fs.createWriteStream('Movie_128.mp4'));
 }`;
 
   return (
@@ -691,20 +696,285 @@ export async function downloadMediaToFile(tmdbId, outputPath) {
         {/* TAB 1: OVERVIEW & INTERACTIVE SANDBOX */}
         {activeTab === 'overview' && (
           <div className="space-y-8">
+            {/* ULTRA-SIMPLE 1-LINE EXAMPLES FOR SERIES (1396/1/1) & MOVIE (128) */}
+            <section
+              data-testid="simple-examples-section"
+              className="p-6 bg-zinc-900/80 border border-blue-500/30 rounded-xl space-y-5"
+            >
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-zinc-800 pb-4">
+                <div>
+                  <div className="text-xs font-mono text-blue-400 uppercase tracking-wider">
+                    Simple 1-Line URLs · Zero Setup Required
+                  </div>
+                  <h2 className="text-lg font-bold text-white mt-0.5">
+                    Ready-to-Use Examples: TV Series (1396/1/1) &amp; Movie (128)
+                  </h2>
+                  <p className="text-xs text-zinc-400 mt-0.5">
+                    Bas URL me TMDB ID (aur Series ke liye Season/Episode) lagao — koi complex code ya
+                    setup nahi chahiye.
+                  </p>
+                </div>
+
+                <button
+                  type="button"
+                  data-testid="copy-friend-examples-btn"
+                  onClick={() => copyToClipboard(friendShareMessage, 'friend-share-msg')}
+                  className="px-4 py-2.5 bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold rounded-lg inline-flex items-center gap-2 transition-colors cursor-pointer shrink-0 self-start md:self-auto"
+                >
+                  {copiedTokenId === 'friend-share-msg' ? (
+                    <>
+                      <Check className="w-4 h-4 text-emerald-300" />
+                      <span>Copied Both Examples!</span>
+                    </>
+                  ) : (
+                    <>
+                      <Copy className="w-4 h-4" />
+                      <span>Copy Both Examples (Series 1396/1/1 + Movie)</span>
+                    </>
+                  )}
+                </button>
+              </div>
+
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+                {/* Card 1: TV Series 1396/1/1 */}
+                <div className="p-4 bg-zinc-950 border border-zinc-800 rounded-xl space-y-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <div>
+                      <span className="text-xs font-mono font-semibold text-emerald-400">
+                        TV SERIES EXAMPLE (1396/1/1)
+                      </span>
+                      <h3 className="text-sm font-bold text-white mt-0.5">
+                        Breaking Bad — Season 1, Episode 1
+                      </h3>
+                    </div>
+                    {onNavigateDownload && (
+                      <button
+                        type="button"
+                        onClick={() => onNavigateDownload('tv', '1396', 1, 1)}
+                        className="px-2.5 py-1 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 rounded text-xs font-medium inline-flex items-center gap-1 cursor-pointer shrink-0"
+                      >
+                        <span>Open Page</span>
+                        <ExternalLink className="w-3 h-3" />
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="space-y-2 text-xs">
+                    <div className="p-2.5 bg-zinc-900/90 border border-zinc-800/80 rounded-lg flex items-center justify-between gap-2">
+                      <div className="min-w-0 flex-1">
+                        <div className="text-[11px] text-zinc-400">
+                          1. Download Page URL (Share / Embed):
+                        </div>
+                        <code
+                          data-testid="example-tv-page-url"
+                          className="font-mono text-zinc-100 break-all select-all"
+                        >
+                          {baseOrigin}/download/tv/1396/1/1
+                        </code>
+                      </div>
+                      <button
+                        type="button"
+                        aria-label="Copy TV Download Page URL"
+                        onClick={() =>
+                          copyToClipboard(`${baseOrigin}/download/tv/1396/1/1`, 'tv-page-url')
+                        }
+                        className="p-1.5 text-zinc-400 hover:text-white rounded hover:bg-zinc-800 cursor-pointer shrink-0"
+                      >
+                        {copiedTokenId === 'tv-page-url' ? (
+                          <Check className="w-3.5 h-3.5 text-emerald-400" />
+                        ) : (
+                          <Copy className="w-3.5 h-3.5" />
+                        )}
+                      </button>
+                    </div>
+
+                    <div className="p-2.5 bg-zinc-900/90 border border-zinc-800/80 rounded-lg flex items-center justify-between gap-2">
+                      <div className="min-w-0 flex-1">
+                        <div className="text-[11px] text-zinc-400">
+                          2. Direct 1-Click MP4 File Download Link:
+                        </div>
+                        <code
+                          data-testid="example-tv-mp4-url"
+                          className="font-mono text-emerald-400 break-all select-all"
+                        >
+                          {baseApiUrl}/dl/tv/1396/1/1?lang=hi&amp;quality=1080p
+                        </code>
+                      </div>
+                      <button
+                        type="button"
+                        aria-label="Copy TV Direct MP4 Link"
+                        onClick={() =>
+                          copyToClipboard(
+                            `${baseApiUrl}/dl/tv/1396/1/1?lang=hi&quality=1080p`,
+                            'tv-mp4-url'
+                          )
+                        }
+                        className="p-1.5 text-zinc-400 hover:text-white rounded hover:bg-zinc-800 cursor-pointer shrink-0"
+                      >
+                        {copiedTokenId === 'tv-mp4-url' ? (
+                          <Check className="w-3.5 h-3.5 text-emerald-400" />
+                        ) : (
+                          <Copy className="w-3.5 h-3.5" />
+                        )}
+                      </button>
+                    </div>
+
+                    <div className="p-2.5 bg-zinc-900/90 border border-zinc-800/80 rounded-lg flex items-center justify-between gap-2">
+                      <div className="min-w-0 flex-1">
+                        <div className="text-[11px] text-zinc-400">
+                          3. Simple 1-Line JSON API (GET):
+                        </div>
+                        <code
+                          data-testid="example-tv-json-url"
+                          className="font-mono text-blue-300 break-all select-all"
+                        >
+                          {baseApiUrl}/download/tv/1396/1/1
+                        </code>
+                      </div>
+                      <button
+                        type="button"
+                        aria-label="Copy TV JSON API URL"
+                        onClick={() =>
+                          copyToClipboard(`${baseApiUrl}/download/tv/1396/1/1`, 'tv-json-url')
+                        }
+                        className="p-1.5 text-zinc-400 hover:text-white rounded hover:bg-zinc-800 cursor-pointer shrink-0"
+                      >
+                        {copiedTokenId === 'tv-json-url' ? (
+                          <Check className="w-3.5 h-3.5 text-emerald-400" />
+                        ) : (
+                          <Copy className="w-3.5 h-3.5" />
+                        )}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Card 2: Movie 128 */}
+                <div className="p-4 bg-zinc-950 border border-zinc-800 rounded-xl space-y-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <div>
+                      <span className="text-xs font-mono font-semibold text-blue-400">
+                        MOVIE EXAMPLE (128)
+                      </span>
+                      <h3 className="text-sm font-bold text-white mt-0.5">
+                        Movie — TMDB ID 128 (Princess Mononoke)
+                      </h3>
+                    </div>
+                    {onNavigateDownload && (
+                      <button
+                        type="button"
+                        onClick={() => onNavigateDownload('movie', '128')}
+                        className="px-2.5 py-1 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 rounded text-xs font-medium inline-flex items-center gap-1 cursor-pointer shrink-0"
+                      >
+                        <span>Open Page</span>
+                        <ExternalLink className="w-3 h-3" />
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="space-y-2 text-xs">
+                    <div className="p-2.5 bg-zinc-900/90 border border-zinc-800/80 rounded-lg flex items-center justify-between gap-2">
+                      <div className="min-w-0 flex-1">
+                        <div className="text-[11px] text-zinc-400">
+                          1. Download Page URL (Share / Embed):
+                        </div>
+                        <code
+                          data-testid="example-movie-page-url"
+                          className="font-mono text-zinc-100 break-all select-all"
+                        >
+                          {baseOrigin}/download/movie/128
+                        </code>
+                      </div>
+                      <button
+                        type="button"
+                        aria-label="Copy Movie Download Page URL"
+                        onClick={() =>
+                          copyToClipboard(`${baseOrigin}/download/movie/128`, 'movie-page-url')
+                        }
+                        className="p-1.5 text-zinc-400 hover:text-white rounded hover:bg-zinc-800 cursor-pointer shrink-0"
+                      >
+                        {copiedTokenId === 'movie-page-url' ? (
+                          <Check className="w-3.5 h-3.5 text-emerald-400" />
+                        ) : (
+                          <Copy className="w-3.5 h-3.5" />
+                        )}
+                      </button>
+                    </div>
+
+                    <div className="p-2.5 bg-zinc-900/90 border border-zinc-800/80 rounded-lg flex items-center justify-between gap-2">
+                      <div className="min-w-0 flex-1">
+                        <div className="text-[11px] text-zinc-400">
+                          2. Direct 1-Click MP4 File Download Link:
+                        </div>
+                        <code
+                          data-testid="example-movie-mp4-url"
+                          className="font-mono text-emerald-400 break-all select-all"
+                        >
+                          {baseApiUrl}/dl/movie/128?lang=hi&amp;quality=1080p
+                        </code>
+                      </div>
+                      <button
+                        type="button"
+                        aria-label="Copy Movie Direct MP4 Link"
+                        onClick={() =>
+                          copyToClipboard(
+                            `${baseApiUrl}/dl/movie/128?lang=hi&quality=1080p`,
+                            'movie-mp4-url'
+                          )
+                        }
+                        className="p-1.5 text-zinc-400 hover:text-white rounded hover:bg-zinc-800 cursor-pointer shrink-0"
+                      >
+                        {copiedTokenId === 'movie-mp4-url' ? (
+                          <Check className="w-3.5 h-3.5 text-emerald-400" />
+                        ) : (
+                          <Copy className="w-3.5 h-3.5" />
+                        )}
+                      </button>
+                    </div>
+
+                    <div className="p-2.5 bg-zinc-900/90 border border-zinc-800/80 rounded-lg flex items-center justify-between gap-2">
+                      <div className="min-w-0 flex-1">
+                        <div className="text-[11px] text-zinc-400">
+                          3. Simple 1-Line JSON API (GET):
+                        </div>
+                        <code
+                          data-testid="example-movie-json-url"
+                          className="font-mono text-blue-300 break-all select-all"
+                        >
+                          {baseApiUrl}/download/movie/128
+                        </code>
+                      </div>
+                      <button
+                        type="button"
+                        aria-label="Copy Movie JSON API URL"
+                        onClick={() =>
+                          copyToClipboard(`${baseApiUrl}/download/movie/128`, 'movie-json-url')
+                        }
+                        className="p-1.5 text-zinc-400 hover:text-white rounded hover:bg-zinc-800 cursor-pointer shrink-0"
+                      >
+                        {copiedTokenId === 'movie-json-url' ? (
+                          <Check className="w-3.5 h-3.5 text-emerald-400" />
+                        ) : (
+                          <Copy className="w-3.5 h-3.5" />
+                        )}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </section>
+
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-              {/* Left 7 Cols: Interactive Live API Download Request Builder */}
+              {/* Left 7 Cols: Interactive Custom URL Builder & Live API Sandbox */}
               <div className="lg:col-span-7 p-6 bg-zinc-900/60 border border-zinc-800 rounded-xl space-y-5">
                 <div className="flex items-center justify-between gap-4 border-b border-zinc-800 pb-4">
                   <div>
                     <h2 className="text-lg font-semibold text-white">
-                      Live Public Download API Sandbox
+                      Manchaha Custom URL Builder &amp; Live API Sandbox
                     </h2>
                     <p className="text-xs text-zinc-400 mt-0.5">
-                      Dispatch a real authorized{' '}
-                      <code className="font-mono text-zinc-200">
-                        POST {baseApiUrl}/downloads
-                      </code>{' '}
-                      request to the existing Download Engine.
+                      Kisi bhi Movie ya Series ka TMDB ID, Season, Episode daalo — turant uske
+                      ready-made URLs aur live API response pao.
                     </p>
                   </div>
                   <span className="text-xs font-mono text-emerald-400 shrink-0">
@@ -871,6 +1141,87 @@ export async function downloadMediaToFile(tmdbId, outputPath) {
                     </div>
                   )}
 
+                  {/* Live Custom Generated URLs */}
+                  <div className="p-3.5 bg-zinc-950 border border-zinc-800 rounded-xl space-y-2.5 text-xs">
+                    <div className="text-[11px] font-semibold text-zinc-300 uppercase tracking-wider">
+                      Your Live Custom URLs ({sandboxMediaType.toUpperCase()}{' '}
+                      {sandboxTmdbId || (sandboxMediaType === 'tv' ? '1396' : '128')}
+                      {sandboxMediaType === 'tv' ? `/${sandboxSeason}/${sandboxEpisode}` : ''})
+                    </div>
+
+                    <div className="flex items-center justify-between gap-2 p-2 bg-zinc-900 rounded-lg border border-zinc-800/80">
+                      <div className="min-w-0 flex-1">
+                        <span className="text-zinc-400 mr-2">Page URL:</span>
+                        <code
+                          data-testid="live-custom-page-url"
+                          className="font-mono text-zinc-100 break-all select-all"
+                        >
+                          {livePageUrl}
+                        </code>
+                      </div>
+                      <button
+                        type="button"
+                        aria-label="Copy Live Page URL"
+                        onClick={() => copyToClipboard(livePageUrl, 'live-page-url')}
+                        className="p-1.5 text-zinc-400 hover:text-white rounded hover:bg-zinc-800 cursor-pointer shrink-0"
+                      >
+                        {copiedTokenId === 'live-page-url' ? (
+                          <Check className="w-3.5 h-3.5 text-emerald-400" />
+                        ) : (
+                          <Copy className="w-3.5 h-3.5" />
+                        )}
+                      </button>
+                    </div>
+
+                    <div className="flex items-center justify-between gap-2 p-2 bg-zinc-900 rounded-lg border border-zinc-800/80">
+                      <div className="min-w-0 flex-1">
+                        <span className="text-zinc-400 mr-2">Direct MP4:</span>
+                        <code
+                          data-testid="live-custom-mp4-url"
+                          className="font-mono text-emerald-400 break-all select-all"
+                        >
+                          {liveDirectMp4Url}
+                        </code>
+                      </div>
+                      <button
+                        type="button"
+                        aria-label="Copy Live Direct MP4 URL"
+                        onClick={() => copyToClipboard(liveDirectMp4Url, 'live-mp4-url')}
+                        className="p-1.5 text-zinc-400 hover:text-white rounded hover:bg-zinc-800 cursor-pointer shrink-0"
+                      >
+                        {copiedTokenId === 'live-mp4-url' ? (
+                          <Check className="w-3.5 h-3.5 text-emerald-400" />
+                        ) : (
+                          <Copy className="w-3.5 h-3.5" />
+                        )}
+                      </button>
+                    </div>
+
+                    <div className="flex items-center justify-between gap-2 p-2 bg-zinc-900 rounded-lg border border-zinc-800/80">
+                      <div className="min-w-0 flex-1">
+                        <span className="text-zinc-400 mr-2">JSON API:</span>
+                        <code
+                          data-testid="live-custom-json-url"
+                          className="font-mono text-blue-300 break-all select-all"
+                        >
+                          {liveSimpleJsonUrl}
+                        </code>
+                      </div>
+                      <button
+                        type="button"
+                        aria-label="Copy Live JSON API URL"
+                        onClick={() => copyToClipboard(liveSimpleJsonUrl, 'live-json-url')}
+                        className="p-1.5 text-zinc-400 hover:text-white rounded hover:bg-zinc-800 cursor-pointer shrink-0"
+                      >
+                        {copiedTokenId === 'live-json-url' ? (
+                          <Check className="w-3.5 h-3.5 text-emerald-400" />
+                        ) : (
+                          <Copy className="w-3.5 h-3.5" />
+                        )}
+                      </button>
+                    </div>
+                  </div>
+
                   {sandboxError && (
                     <div
                       role="alert"
@@ -881,7 +1232,7 @@ export async function downloadMediaToFile(tmdbId, outputPath) {
                     </div>
                   )}
 
-                  <div className="flex items-center gap-3 pt-1">
+                  <div className="flex flex-wrap items-center gap-3 pt-1">
                     <button
                       type="submit"
                       disabled={sandboxRunning}
@@ -896,10 +1247,27 @@ export async function downloadMediaToFile(tmdbId, outputPath) {
                       ) : (
                         <>
                           <Play className="w-3.5 h-3.5" />
-                          <span>Send API Download Request</span>
+                          <span>Test Live API Response</span>
                         </>
                       )}
                     </button>
+                    {onNavigateDownload && (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          onNavigateDownload(
+                            sandboxMediaType,
+                            sandboxTmdbId.trim() || (sandboxMediaType === 'tv' ? '1396' : '128'),
+                            sandboxSeason,
+                            sandboxEpisode
+                          )
+                        }
+                        className="px-4 py-2.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-100 text-xs font-medium rounded-lg inline-flex items-center gap-1.5 transition-colors cursor-pointer whitespace-nowrap"
+                      >
+                        <span>Open Download Page</span>
+                        <ExternalLink className="w-3.5 h-3.5" />
+                      </button>
+                    )}
                   </div>
                 </form>
 

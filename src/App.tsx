@@ -46,9 +46,18 @@ export default function App() {
     return (
       <DeveloperDashboardPage
         onNavigateHome={() => navigateTo('/')}
-        onNavigateDownload={(mediaType: MediaType, tmdbId: string) =>
-          navigateTo(`/download/${mediaType}/${tmdbId}`)
-        }
+        onNavigateDownload={(
+          mediaType: MediaType,
+          tmdbId: string,
+          season?: number,
+          episode?: number
+        ) => {
+          if (mediaType === 'tv' && season && episode) {
+            navigateTo(`/download/tv/${tmdbId}/${season}/${episode}`);
+          } else {
+            navigateTo(`/download/${mediaType}/${tmdbId}`);
+          }
+        }}
       />
     );
   }
@@ -58,10 +67,16 @@ export default function App() {
       <DownloadPage
         mediaType={route.mediaType}
         tmdbId={route.tmdbId}
+        initialSeason={route.season}
+        initialEpisode={route.episode}
         onNavigateHome={() => navigateTo('/')}
         onNavigateDevelopers={() => navigateTo('/developers')}
         onSelectMedia={(newMediaType: MediaType, newTmdbId: string) =>
-          navigateTo(`/download/${newMediaType}/${newTmdbId}`)
+          navigateTo(
+            newMediaType === 'tv'
+              ? `/download/tv/${newTmdbId}/1/1`
+              : `/download/movie/${newTmdbId}`
+          )
         }
       />
     );

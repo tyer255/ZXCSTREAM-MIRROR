@@ -2515,7 +2515,8 @@ async function handleDownloadFileStream(
     sourceUrl = '',
   } = queryParams;
 
-  const cleanTitle = (title || (mediaType === 'tv' ? 'Series' : 'Movie'))
+  const catalogMatch = getMediaByTmdbId(mediaType === 'tv' ? 'tv' : 'movie', String(tmdbId));
+  const cleanTitle = (title || catalogMatch?.title || (mediaType === 'tv' ? 'Series' : 'Movie'))
     .replace(/[^a-zA-Z0-9_\-\s]/g, '')
     .trim()
     .replace(/\s+/g, '.');
@@ -2564,13 +2565,18 @@ async function handleDownloadFileStream(
   }
 
   try {
-    const { directSources } = await gatherDirectDownloadSources({
-      mediaType: mediaType === 'tv' ? 'tv' : 'movie',
-      tmdbId: String(tmdbId),
-      season: Number(season) || 1,
-      episode: Number(episode) || 1,
-      title: String(title || ''),
-    });
+    const { directSources } = await Promise.race([
+      gatherDirectDownloadSources({
+        mediaType: mediaType === 'tv' ? 'tv' : 'movie',
+        tmdbId: String(tmdbId),
+        season: Number(season) || 1,
+        episode: Number(episode) || 1,
+        title: String(title || catalogMatch?.title || ''),
+      }),
+      new Promise<{ directSources: any[]; matchedPost: null }>((r) =>
+        setTimeout(() => r({ directSources: [], matchedPost: null }), 1500)
+      ),
+    ]);
     if (directSources.length > 0) {
       const parseH = (q: string) =>
         q.toUpperCase() === '4K' ? 2160 : Number((q.match(/(\d{3,4})/) || [])[1]) || 1080;
@@ -2970,14 +2976,19 @@ apiRouter.post('/v1/downloads', async (req, res) => {
 
   try {
     // Delegate directly to the EXISTING Download Engine
-    const { directSources, matchedPost } = await gatherDirectDownloadSources({
-      mediaType: validReq.mediaType,
-      tmdbId: validReq.tmdbId,
-      season: validReq.season,
-      episode: validReq.episode,
-      title: validReq.title || '',
-      year: validReq.year || '',
-    });
+    const { directSources, matchedPost } = await Promise.race([
+      gatherDirectDownloadSources({
+        mediaType: validReq.mediaType,
+        tmdbId: validReq.tmdbId,
+        season: validReq.season,
+        episode: validReq.episode,
+        title: validReq.title || '',
+        year: validReq.year || '',
+      }),
+      new Promise<{ directSources: any[]; matchedPost: any }>((r) =>
+        setTimeout(() => r({ directSources: [], matchedPost: null }), 1800)
+      ),
+    ]);
 
     const fallbackPostTitle = matchedPost?.title
       ? matchedPost.title.replace(/\b(19\d{2}|20\d{2})\b.*$/i, '').trim()
@@ -3274,6 +3285,279 @@ apiRouter.all('/v1/downloads/:id/file', async (req, res) => {
     sourceUrl: job.directUrl || job.internalDownloadUrl || '',
   });
 });
+
+// ==========================================
+// SIMPLE 1-LINE URL ENDPOINTS (TV Series e.g. tv/1396/1/1 & Movie e.g. movie/128)
+// Allows external websites & friends to integrate with a single URL (no POST body required)
+// ==========================================
+
+async function handleSimpleGetDownloadJson(
+  req: express.Request,
+  res: express.Response,
+  params: {
+    mediaType: 'movie' | 'tv';
+    tmdbId: string;
+    season?: number;
+    episode?: number;
+  }
+) {
+  const t0 = Date.now();
+  const rawKey =
+    extractApiKeyFromRequest(
+      req.headers as Record<string, string | string[] | undefined>,
+      req.query as Record<string, unknown>
+    ) || DEFAULT_DEMO_API_KEY;
+
+  const auth = publicDownloadApiManager.authenticateKey(rawKey);
+  if (!auth.authenticated || !auth.key) {
+    return res.status(401).json({
+      success: false,
+      code: auth.code || 'UNAUTHORIZED',
+      error: auth.error,
+    });
+  }
+
+  const lang = typeof req.query.lang === 'string' && req.query.lang.trim() ? req.query.lang.trim() : 'hi';
+  const quality =
+    typeof req.query.quality === 'string' && req.query.quality.trim()
+      ? req.query.quality.trim()
+      : '1080p';
+
+  const validation = validateDownloadRequestInput({
+    mediaType: params.mediaType,
+    tmdbId: params.tmdbId,
+    season: params.season ?? (req.query.season ? Number(req.query.season) : 1),
+    episode: params.episode ?? (req.query.episode ? Number(req.query.episode) : 1),
+    lang,
+    quality,
+  });
+
+  if (!validation.valid) {
+    return res.status(400).json({
+      success: false,
+      code: validation.code,
+      error: validation.error,
+    });
+  }
+
+  const validReq = validation.data;
+  const job = publicDownloadApiManager.createDownloadJob({
+    key: auth.key,
+    request: validReq,
+  });
+
+  try {
+    const { directSources, matchedPost } = await Promise.race([
+      gatherDirectDownloadSources({
+        mediaType: validReq.mediaType,
+        tmdbId: validReq.tmdbId,
+        season: validReq.season,
+        episode: validReq.episode,
+        title: '',
+        year: '',
+      }),
+      new Promise<{ directSources: any[]; matchedPost: any }>((r) =>
+        setTimeout(() => r({ directSources: [], matchedPost: null }), 1800)
+      ),
+    ]);
+
+    const fallbackPostTitle = matchedPost?.title
+      ? matchedPost.title.replace(/\b(19\d{2}|20\d{2})\b.*$/i, '').trim()
+      : '';
+
+    const resolution = await resolveDownloadableMedia(
+      {
+        mediaType: validReq.mediaType,
+        tmdbId: validReq.tmdbId,
+        season: validReq.season,
+        episode: validReq.episode,
+        title: fallbackPostTitle || undefined,
+        year: matchedPost?.year || undefined,
+        resolvedDirectSources: directSources,
+      },
+      fetchTmdbDetailsWithFallback
+    );
+
+    const updatedJob =
+      publicDownloadApiManager.completeDownloadJobWithResolution(job.id, resolution) || job;
+
+    const origin = resolveRequestOrigin(req);
+    const s = validReq.season || 1;
+    const ep = validReq.episode || 1;
+    const pathSuffix =
+      validReq.mediaType === 'tv'
+        ? `tv/${encodeURIComponent(validReq.tmdbId)}/${s}/${ep}`
+        : `movie/${encodeURIComponent(validReq.tmdbId)}`;
+
+    publicDownloadApiManager.logActivity({
+      method: 'GET',
+      endpoint: `/api/v1/download/${pathSuffix}`,
+      statusCode: 200,
+      keyId: auth.key.id,
+      keyPrefix: auth.key.keyPrefix,
+      latencyMs: Date.now() - t0,
+      jobId: updatedJob.id,
+      summary: `Simple GET · ${updatedJob.title} (${validReq.mediaType.toUpperCase()} #${validReq.tmdbId}${
+        validReq.mediaType === 'tv' ? ` S${s}E${ep}` : ''
+      })`,
+    });
+
+    const formatted = publicDownloadApiManager.formatPublicJobResponse(updatedJob, origin);
+    const downloadPageUrl = `${origin}/download/${pathSuffix}`;
+    const directMp4Url = `${origin}/api/v1/dl/${pathSuffix}?lang=${encodeURIComponent(
+      updatedJob.lang
+    )}&quality=${encodeURIComponent(updatedJob.quality)}`;
+    return res.json({
+      ...formatted,
+      title: updatedJob.title,
+      mediaType: updatedJob.mediaType,
+      tmdbId: updatedJob.tmdbId,
+      season: updatedJob.season,
+      episode: updatedJob.episode,
+      downloadPageUrl,
+      download_page_url: downloadPageUrl,
+      directMp4Url,
+      direct_mp4_url: directMp4Url,
+      packages: formatted.availableLanguages,
+      directLinks: {
+        hindi_1080p: `${origin}/api/v1/dl/${pathSuffix}?lang=hi&quality=1080p`,
+        hindi_720p: `${origin}/api/v1/dl/${pathSuffix}?lang=hi&quality=720p`,
+        english_1080p: `${origin}/api/v1/dl/${pathSuffix}?lang=en&quality=1080p`,
+        english_720p: `${origin}/api/v1/dl/${pathSuffix}?lang=en&quality=720p`,
+      },
+    });
+  } catch (err: any) {
+    const failedJob =
+      publicDownloadApiManager.failDownloadJob(
+        job.id,
+        err?.message || 'Unexpected error in Download Engine'
+      ) || job;
+    const origin = resolveRequestOrigin(req);
+    return res
+      .status(500)
+      .json(publicDownloadApiManager.formatPublicJobResponse(failedJob, origin));
+  }
+}
+
+// 1-Line GET JSON API for TV Series: /api/v1/download/tv/1396/1/1
+apiRouter.get(
+  [
+    '/v1/download/tv/:tmdbId/:season/:episode',
+    '/v1/downloads/tv/:tmdbId/:season/:episode',
+    '/download/tv/:tmdbId/:season/:episode',
+  ],
+  async (req, res) => {
+    return handleSimpleGetDownloadJson(req, res, {
+      mediaType: 'tv',
+      tmdbId: String(req.params.tmdbId || '').trim(),
+      season: Math.max(1, Number(req.params.season) || 1),
+      episode: Math.max(1, Number(req.params.episode) || 1),
+    });
+  }
+);
+
+// 1-Line GET JSON API Shorthand for TV Series: /api/v1/download/1396/1/1
+apiRouter.get(
+  ['/v1/download/:tmdbId/:season/:episode', '/v1/downloads/:tmdbId/:season/:episode'],
+  async (req, res, next) => {
+    const tmdbId = String(req.params.tmdbId || '').trim();
+    if (!/^\d+$/.test(tmdbId)) return next();
+    return handleSimpleGetDownloadJson(req, res, {
+      mediaType: 'tv',
+      tmdbId,
+      season: Math.max(1, Number(req.params.season) || 1),
+      episode: Math.max(1, Number(req.params.episode) || 1),
+    });
+  }
+);
+
+// 1-Line GET JSON API for Movies & TV default S1E1: /api/v1/download/movie/128
+apiRouter.get(
+  [
+    '/v1/download/movie/:tmdbId',
+    '/v1/downloads/movie/:tmdbId',
+    '/download/movie/:tmdbId',
+    '/v1/download/tv/:tmdbId',
+    '/v1/downloads/tv/:tmdbId',
+  ],
+  async (req, res) => {
+    const isTv = req.path.includes('/tv/');
+    return handleSimpleGetDownloadJson(req, res, {
+      mediaType: isTv ? 'tv' : 'movie',
+      tmdbId: String(req.params.tmdbId || '').trim(),
+      season: 1,
+      episode: 1,
+    });
+  }
+);
+
+// 1-Click Direct MP4 File Download for TV Series: /api/v1/dl/tv/1396/1/1
+apiRouter.all(
+  ['/v1/dl/tv/:tmdbId/:season/:episode', '/v1/dl/:tmdbId/:season/:episode', '/dl/tv/:tmdbId/:season/:episode'],
+  async (req, res) => {
+    const tmdbId = String(req.params.tmdbId || '1396').trim();
+    const season = String(Math.max(1, Number(req.params.season) || 1));
+    const episode = String(Math.max(1, Number(req.params.episode) || 1));
+    const lang = typeof req.query.lang === 'string' && req.query.lang.trim() ? req.query.lang.trim() : 'hi';
+    const quality =
+      typeof req.query.quality === 'string' && req.query.quality.trim()
+        ? req.query.quality.trim()
+        : '1080p';
+
+    publicDownloadApiManager.logActivity({
+      method: req.method,
+      endpoint: `/api/v1/dl/tv/${tmdbId}/${season}/${episode}`,
+      statusCode: 200,
+      keyId: 'direct-dl',
+      keyPrefix: 'direct-link',
+      latencyMs: 1,
+      summary: `Direct MP4 Stream · TV #${tmdbId} S${season}E${episode} (${quality} · ${lang.toUpperCase()})`,
+    });
+
+    return handleDownloadFileStream(req, res, {
+      ...(req.query as Record<string, string>),
+      mediaType: 'tv',
+      tmdbId,
+      season,
+      episode,
+      lang,
+      quality,
+    });
+  }
+);
+
+// 1-Click Direct MP4 File Download for Movie: /api/v1/dl/movie/128
+apiRouter.all(
+  ['/v1/dl/movie/:tmdbId', '/v1/dl/:tmdbId', '/dl/movie/:tmdbId'],
+  async (req, res) => {
+    const tmdbId = String(req.params.tmdbId || '128').trim();
+    const lang = typeof req.query.lang === 'string' && req.query.lang.trim() ? req.query.lang.trim() : 'hi';
+    const quality =
+      typeof req.query.quality === 'string' && req.query.quality.trim()
+        ? req.query.quality.trim()
+        : '1080p';
+
+    publicDownloadApiManager.logActivity({
+      method: req.method,
+      endpoint: `/api/v1/dl/movie/${tmdbId}`,
+      statusCode: 200,
+      keyId: 'direct-dl',
+      keyPrefix: 'direct-link',
+      latencyMs: 1,
+      summary: `Direct MP4 Stream · Movie #${tmdbId} (${quality} · ${lang.toUpperCase()})`,
+    });
+
+    return handleDownloadFileStream(req, res, {
+      ...(req.query as Record<string, string>),
+      mediaType: 'movie',
+      tmdbId,
+      season: '1',
+      episode: '1',
+      lang,
+      quality,
+    });
+  }
+);
 
 // Dedicated Subtitle Download Endpoint (.srt format)
 apiRouter.get('/download/subtitle', async (req, res) => {

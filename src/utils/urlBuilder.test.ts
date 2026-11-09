@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import {
   buildPlayerUrl,
   buildDownloadUrl,
+  buildSimpleApiJsonUrl,
+  buildSimpleDirectMp4Url,
   formatRuntime,
   calculateStarRating,
   formatVideoTime,
@@ -134,6 +136,26 @@ describe('ZXC[STREAM] URL Builder & Route Utilities', () => {
       'https://zxcstream-mirror.vercel.app/download/tv/66732'
     );
     assert.equal(
+      buildDownloadUrl('tv', '1396', undefined, 1, 1),
+      'https://zxcstream-mirror.vercel.app/download/tv/1396/1/1'
+    );
+    assert.equal(
+      buildSimpleApiJsonUrl('tv', '1396', 1, 1),
+      'https://zxcstream-mirror.vercel.app/api/v1/download/tv/1396/1/1'
+    );
+    assert.equal(
+      buildSimpleApiJsonUrl('movie', '128'),
+      'https://zxcstream-mirror.vercel.app/api/v1/download/movie/128'
+    );
+    assert.equal(
+      buildSimpleDirectMp4Url('tv', '1396', { season: 1, episode: 1, lang: 'hi', quality: '1080p' }),
+      'https://zxcstream-mirror.vercel.app/api/v1/dl/tv/1396/1/1?lang=hi&quality=1080p'
+    );
+    assert.equal(
+      buildSimpleDirectMp4Url('movie', '128', { lang: 'hi', quality: '1080p' }),
+      'https://zxcstream-mirror.vercel.app/api/v1/dl/movie/128?lang=hi&quality=1080p'
+    );
+    assert.equal(
       buildDownloadUrl('movie', '128', 'https://custom-domain.com'),
       'https://custom-domain.com/download/movie/128'
     );
@@ -185,6 +207,20 @@ describe('ZXC[STREAM] URL Builder & Route Utilities', () => {
       page: 'download',
       mediaType: 'movie',
       tmdbId: '128',
+    });
+    assert.deepEqual(parseAppRoute('/download/tv/1396/1/1'), {
+      page: 'download',
+      mediaType: 'tv',
+      tmdbId: '1396',
+      season: 1,
+      episode: 1,
+    });
+    assert.deepEqual(parseAppRoute('/download/1396/1/1'), {
+      page: 'download',
+      mediaType: 'tv',
+      tmdbId: '1396',
+      season: 1,
+      episode: 1,
     });
     assert.deepEqual(parseAppRoute('/player/tv/66732/1/2'), {
       page: 'player',

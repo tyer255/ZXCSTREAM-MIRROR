@@ -19,6 +19,8 @@ import { triggerNativeBrowserDownload } from '../services/downloadEngineTypes';
 export interface DownloadPageProps {
   mediaType: MediaType;
   tmdbId: string;
+  initialSeason?: number;
+  initialEpisode?: number;
   onNavigateHome: () => void;
   onNavigateDevelopers?: () => void;
   onSelectMedia: (mediaType: MediaType, tmdbId: string) => void;
@@ -29,6 +31,8 @@ type DownloadTab = 'Overview' | 'Trailer' | 'Download' | 'Stream';
 export const DownloadPage: React.FC<DownloadPageProps> = ({
   mediaType,
   tmdbId,
+  initialSeason,
+  initialEpisode,
   onNavigateHome,
   onNavigateDevelopers,
   onSelectMedia,
@@ -69,12 +73,17 @@ export const DownloadPage: React.FC<DownloadPageProps> = ({
 
   const [activeTab, setActiveTab] = useState<DownloadTab>('Overview');
   const [selectedDub, setSelectedDub] = useState<string>('en');
-  const [selectedSeason, setSelectedSeason] = useState<number>(1);
-  const [selectedEpisode, setSelectedEpisode] = useState<number>(1);
+  const [selectedSeason, setSelectedSeason] = useState<number>(initialSeason || 1);
+  const [selectedEpisode, setSelectedEpisode] = useState<number>(initialEpisode || 1);
   const [downloadedId, setDownloadedId] = useState<string | null>(null);
   const [isTrailerPlaying, setIsTrailerPlaying] = useState<boolean>(false);
   const [liveStreamData, setLiveStreamData] = useState<any>(null);
   const [isResolvingStream, setIsResolvingStream] = useState<boolean>(false);
+
+  useEffect(() => {
+    if (initialSeason) setSelectedSeason(initialSeason);
+    if (initialEpisode) setSelectedEpisode(initialEpisode);
+  }, [initialSeason, initialEpisode, tmdbId]);
 
   useEffect(() => {
     let isMounted = true;
@@ -280,6 +289,7 @@ export const DownloadPage: React.FC<DownloadPageProps> = ({
           <div className="flex items-center gap-1.5 overflow-x-auto py-0.5">
             <span className="text-[11px] font-mono text-zinc-400 mr-1 hidden sm:inline">
               ENDPOINT: {getDefaultOrigin()}/download/{mediaType}/{media.tmdbId}
+              {mediaType === 'tv' ? `/${selectedSeason}/${selectedEpisode}` : ''}
             </span>
             {QUICK_SAMPLE_ITEMS.slice(0, 4).map((item) => {
               const isCurrent = item.mediaType === mediaType && item.tmdbId === media.tmdbId;
