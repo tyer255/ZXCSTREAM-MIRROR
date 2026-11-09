@@ -139,6 +139,37 @@ describe('Vegamovies (vegamovies1.co.in) Discovery & Fast-DL Stream Resolver', (
     const dlBtnHtml = `<a id="download-button" href="dl.php?code=66ac333f0d319&secret=b83a4dc87da4cf53" class="button">Download Now</a>`;
     const prepUrl = parseFastDlButtonHref(dlBtnHtml, 'https://fast-dl.one/dl/66ac333f0d319');
     assert.ok(prepUrl);
-    assert.ok(prepUrl.startsWith('https://fast-dl.one/dl.php?code=66ac333f0d319&secret=b83a4dc87da4cf53&prepare=1'));
+    assert.ok(prepUrl.startsWith('https://fast-dl.one/dl/dl.php?code=66ac333f0d319&secret=b83a4dc87da4cf53&prepare=1'));
+  });
+
+  it('matches romanized Hindi spelling variations (Nai Naveli vs Nayi Naveli) and nested h3 headings', () => {
+    const score = scoreVegaCandidatePost(
+      'https://vegamovies6.co.in/59682-nayi-naveli-2026-hindi-audio-hdtc-720p-480p-1080p.html',
+      'Download Nayi Naveli (2026) Hindi Audio HDTC 480p [500MB] || 720p [1.2GB] || 1080p [2.5GB]',
+      {
+        title: 'Nai Naveli',
+        originalTitle: 'Nayi Naveli',
+        year: '',
+        mediaType: 'movie',
+      }
+    );
+    assert.ok(score >= 95, `Expected high score for Nayi Naveli, got ${score}`);
+
+    const nestedH3Html = `
+      <h3 style="text-align: center;"><span style="color: #eef425;">Nayi Naveli (2026) <span style="color: #ff5733;">Single Audio</span> {Hindi} 480p x264 [550MB]</span></h3>
+      <h3 style="text-align: center;"><div><a href="https://nexdrive.you/genxfm784776479893/" target="_blank"><button class="dwd-button">Download Now</button></a></div></h3>
+      <h3 style="text-align: center;"><span style="color: #eef425;">Nayi Naveli (2026) <span style="color: #ff5733;">Single Audio</span> {Hindi} 1080p 10Bit HEVC [1.5GB]</span></h3>
+      <h3 style="text-align: center;"><div><a href="https://nexdrive.you/genxfm784776479901/" target="_blank"><button class="dwd-button">Download Now</button></a></div></h3>
+      <h3 style="text-align: center;"><span style="color: #eef425;">Nayi Naveli (2026) <span style="color: #ff5733;">Single Audio</span> {Hindi} 1080p x264 [2.6GB]</span></h3>
+      <h3 style="text-align: center;"><div><a href="https://nexdrive.you/genxfm784776479906/" target="_blank"><button class="dwd-button">Download Now</button></a></div></h3>
+    `;
+    const meta = extractVegaDetailMetadata(nestedH3Html);
+    assert.equal(meta.nexDriveLinks.length, 3);
+    assert.equal(meta.nexDriveLinks[0].quality, '480p');
+    assert.equal(meta.nexDriveLinks[0].isHevc, false);
+    assert.equal(meta.nexDriveLinks[1].quality, '1080p');
+    assert.equal(meta.nexDriveLinks[1].isHevc, true);
+    assert.equal(meta.nexDriveLinks[2].quality, '1080p');
+    assert.equal(meta.nexDriveLinks[2].isHevc, false);
   });
 });

@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Player UI</title>
+<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+html,body{margin:0;height:100%;background:#000}
+body{display:flex;align-items:center;justify-content:center}
+html,body{overflow:hidden}
+#stage{position:relative;width:min(100vw,calc(100vh*1604/720));aspect-ratio:1604/720;container-type:inline-size;font-family:'Poppins','Helvetica Neue',Arial,sans-serif;overflow:hidden;background:#000}
+@media (orientation:portrait){#stage{position:fixed;top:0;left:100vw;width:100vh;height:100vw;aspect-ratio:auto;transform-origin:0 0;transform:rotate(90deg)}}
+svg{width:100%;height:100%;display:block;font-family:inherit}
+#dlhit{cursor:pointer}
+#ov{position:absolute;inset:0;background:rgba(0,0,0,.35);opacity:0;pointer-events:none;transition:opacity .25s}
+#ov.on{opacity:1;pointer-events:auto}
+.card{position:absolute;top:1.2cqw;right:1.2cqw;bottom:1.2cqw;width:42cqw;border-radius:2.2cqw;overflow:hidden;background:linear-gradient(135deg,rgba(255,255,255,.20),rgba(255,255,255,.06) 45%,rgba(255,255,255,.10));backdrop-filter:blur(2.6cqw) saturate(1.9) brightness(1.15);-webkit-backdrop-filter:blur(2.6cqw) saturate(1.9) brightness(1.15);border:1px solid rgba(255,255,255,.28);box-shadow:inset 0 1px 0 rgba(255,255,255,.5),inset 0 -1px 0 rgba(255,255,255,.1),inset 0 0 3cqw rgba(255,255,255,.06),0 2cqw 6cqw rgba(0,0,0,.5);display:flex;flex-direction:column;color:#fff;transform:translateX(115%);transition:transform .28s cubic-bezier(.2,.8,.2,1)}
+#ov.on .card{transform:none}
+.hd{display:flex;align-items:center;gap:1cqw;padding:2.2cqw 2.4cqw 1cqw}
+.hd .t{flex:1;min-width:0}
+.hd h2{margin:0;font-size:2cqw;font-weight:600}
+.hd p{margin:.2cqw 0 0;font-size:1.3cqw;color:#8b8b94}
+.x{width:4.6cqw;height:4.6cqw;margin-right:-1cqw;border:0;background:none;display:grid;place-items:center;cursor:pointer}
+.x svg{width:2.4cqw;height:2.4cqw}
+.body{flex:1;overflow-y:auto;padding:0 2.4cqw}
+.lbl{font-size:1.2cqw;letter-spacing:.15cqw;color:#8b8b94;font-weight:500;margin:1.4cqw 0 .7cqw}
+.lbl.off{opacity:.45}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:.8cqw}
+.row{display:flex;align-items:center;box-sizing:border-box;min-height:5.6cqw;padding:.6cqw 1.2cqw;border:1px solid rgba(255,255,255,.16);background:rgba(255,255,255,.08);border-radius:1.2cqw;color:#fff;font:inherit;font-size:1.6cqw;font-weight:500;cursor:pointer;text-align:left;box-shadow:inset 0 1px 0 rgba(255,255,255,.18)}
+.row small{display:block;margin-top:.1cqw;font-size:1.2cqw;font-weight:400;color:rgba(255,255,255,.62)}
+.row .r{flex:none;width:2cqw;height:2cqw;margin-right:1.2cqw;border:.22cqw solid rgba(255,255,255,.4);border-radius:50%;box-sizing:border-box;position:relative}
+.row.sel{border-color:#fff;background:rgba(255,255,255,.2)}
+.row.sel .r{border-color:#fff}
+.row.sel .r:after{content:"";position:absolute;inset:.36cqw;border-radius:50%;background:#fff}
+.row:disabled{opacity:.38;cursor:default}
+.ft{padding:1.4cqw 2.4cqw 2cqw}
+.go{width:100%;height:5.8cqw;border:0;border-radius:1.2cqw;background:#fff;color:#111;font:inherit;font-size:1.7cqw;font-weight:600;position:relative;overflow:hidden;cursor:pointer}
+.go:disabled{background:rgba(255,255,255,.1);color:rgba(255,255,255,.4);cursor:default}
+.go .bar{position:absolute;left:0;top:0;bottom:0;width:0;background:rgba(255,255,255,.22)}
+.go span{position:relative}
+</style></head><body>
+<div id="stage">
+<svg viewBox="0 0 1604 720" xmlns="http://www.w3.org/2000/svg">
+<rect width="1604" height="720" fill="#000"/>
+
+<!-- download pill -->
+<rect x="1287" y="39" width="212" height="64" rx="32" fill="rgba(255,255,255,.22)" stroke="rgba(255,255,255,.32)" stroke-width="2"/>
+<g class="s" stroke-width="3.6"><path d="M1318 73v9a4 4 0 0 0 4 4h20a4 4 0 0 0 4-4v-9"/><path d="M1332 54v22M1322 67l10 10 10-10"/></g>
+<text x="1365" y="79" class="w" font-size="23" font-weight="500" textLength="108" lengthAdjust="spacingAndGlyphs">Download</text>
+<rect id="dlhit" x="1286" y="38" width="214" height="66" rx="33" fill="transparent"/>
+</svg>
+<div id="ov"><div class="card" role="dialog" aria-modal="true">
+<div class="hd"><div class="t"><h2>Download</h2><p>Princess Mononoke · 1997 · 2h 13m</p></div><button class="x" id="cl" aria-label="Close"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round"><path d="M5 5l14 14M19 5L5 19"/></svg></button></div>
+<div class="body">
+<div class="lbl">LANGUAGE</div><div class="grid" id="langs"></div>
+<div class="lbl off" id="s2">QUALITY</div><div class="grid" id="quals"></div>
+<div style="height:1cqw"></div></div>
+<div class="ft"><button class="go" id="go" disabled><div class="bar" id="bar"></div><span id="gt">Download Now</span></button></div>
+</div></div>
+</div>
+<script>
+// MOCK DATA — replace with API response for the current title/episode
+var DATA=[
+ {id:'hi',name:'Hindi',sub:'Dubbed · 5.1',q:{'480p':'420 MB','720p':'1.1 GB','1080p':'2.4 GB'}},
+ {id:'en',name:'English',sub:'Dubbed · 5.1',q:{'480p':'430 MB','720p':'1.2 GB','1080p':'2.5 GB','4K':'7.8 GB'}},
+ {id:'ja',name:'Japanese',sub:'Original · Stereo',q:{'480p':'410 MB','720p':'1.0 GB','1080p':'2.3 GB','4K':'7.4 GB'}},
+ {id:'ta',name:'Tamil',sub:'Dubbed · Stereo',q:{'480p':'400 MB','720p':'1.0 GB'}}
+];
+var QS=['480p','720p','1080p','4K'];
+var L=null,Q=null,busy=false;
+var $=function(i){return document.getElementById(i)};
+function render(){
+ var lg=$('langs');lg.innerHTML='';
+ DATA.forEach(function(d){var b=document.createElement('button');b.className='row'+(L&&L.id===d.id?' sel':'');
+ b.innerHTML='<i class="r"></i><div>'+d.name+'<small>'+d.sub+'</small></div>';b.disabled=busy;
+ b.onclick=function(){L=d;if(Q&&!d.q[Q])Q=null;render()};lg.appendChild(b)});
+ var qs=$('quals');qs.innerHTML='';
+ $('s2').classList.toggle('off',!L);
+ QS.forEach(function(k){var b=document.createElement('button');var has=L&&L.q[k];
+ b.className='row'+(Q===k?' sel':'');
+ b.innerHTML='<i class="r"></i><div>'+k+'<small>'+(L?(has?has:'Not available'):'Select language')+'</small></div>';
+ b.disabled=!has||busy;b.onclick=function(){Q=k;render()};qs.appendChild(b)});
+ $('go').disabled=!(L&&Q)||busy;
+}
+function open_(){L=null;Q=null;busy=false;$('bar').style.width=0;$('gt').textContent='Download Now';render();$('ov').classList.add('on')}
+function close_(){$('ov').classList.remove('on')}
+$('dlhit').onclick=open_;$('cl').onclick=close_;
+$('ov').onclick=function(e){if(e.target===this)close_()};
+document.addEventListener('keydown',function(e){if(e.key==='Escape')close_()});
+// Swap this for your real file URL for (title, language, quality)
+function getUrl(){var b=new Blob(['Mock file for Princess Mononoke · '+L.name+' · '+Q],{type:'text/plain'});return URL.createObjectURL(b)}
+$('go').onclick=function(){
+ if(!(L&&Q))return;
+ var a=document.createElement('a');a.href=getUrl();a.download='Princess-Mononoke-'+L.name+'-'+Q+'.mp4';
+ document.body.appendChild(a);a.click();a.remove();
+ close_();
+};
+</script>
+</body></html>

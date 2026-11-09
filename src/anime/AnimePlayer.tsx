@@ -1801,20 +1801,18 @@ export const AnimePlayer: React.FC<AnimePlayerProps> = ({
         onOpenDownload={() => setDownloadModalOpen(true)}
       />
 
-      {downloadModalOpen && (
-        <PlayerDownloadModal
-          open={downloadModalOpen}
-          onClose={() => setDownloadModalOpen(false)}
-          mediaType={validationResult?.mediaType || initialMediaType || 'tv'}
-          tmdbId={String(tmdbId)}
-          season={currentSeason}
-          episode={currentEpisode}
-          currentPlaybackSource={activeSource?.label || 'Anime Core HLS'}
-          playbackUrl={activeSource?.url || ''}
-          availableDubs={availableAudioTracks.map((t) => ({ code: t.code, name: t.label, type: t.isDub ? 'dub' : 'sub' }))}
-          audioTracks={availableAudioTracks.map((t, idx) => ({ id: idx, label: t.label, lang: t.code }))}
-        />
-      )}
+      <PlayerDownloadModal
+        open={downloadModalOpen}
+        onClose={() => setDownloadModalOpen(false)}
+        mediaType={validationResult?.mediaType || initialMediaType || 'tv'}
+        tmdbId={String(tmdbId)}
+        season={currentSeason}
+        episode={currentEpisode}
+        currentPlaybackSource={activeSource?.label || 'Anime Core HLS'}
+        playbackUrl={activeSource?.url || ''}
+        availableDubs={availableAudioTracks.map((t) => ({ code: t.code, name: t.label, type: t.isDub ? 'dub' : 'sub' }))}
+        audioTracks={availableAudioTracks.map((t, idx) => ({ id: idx, label: t.label, lang: t.code }))}
+      />
     </div>
   );
 };

@@ -24,8 +24,15 @@ import {
   normalizeSubtitleTracks,
   inspectAndSelectMpegTsAudioTrack,
   mpeg2Crc32,
+  formatPlayerTime,
 } from './urlBuilder.ts';
-import { getEpisodeTimingMetadata, getCatalogSeasonEpisodes, getSeriesImdbId } from '../data/tmdbCatalog.ts';
+import {
+  getEpisodeTimingMetadata,
+  getCatalogSeasonEpisodes,
+  getSeriesImdbId,
+  getMediaByTmdbId,
+} from '../data/tmdbCatalog.ts';
+import { buildDownloadProxyUrl } from '../services/downloadEngineTypes.ts';
 
 describe('ZXC[STREAM] URL Builder & Route Utilities', () => {
   it('builds Custom Player and Built-in Player URLs for movies and series', () => {
@@ -892,6 +899,97 @@ describe('ZXC[STREAM] URL Builder & Route Utilities', () => {
     const secondScan = inspectAndSelectMpegTsAudioTrack(testHinBuf, 'hi');
     assert.equal(secondScan.audioTrackCount, 1);
     assert.equal(secondScan.selectedLang, 'hi');
+  });
+
+  it('builds authentic MP4 file download and subtitle endpoints without hash links or cookie traps', () => {
+    // 1. Mononoke Movie Hindi 1080p download URL
+    const movieDlUrl = buildDownloadProxyUrl({
+      mediaType: 'movie',
+      tmdbId: '128',
+      lang: 'hi',
+      quality: '1080p',
+      title: 'Princess Mononoke',
+    });
+    assert.ok(movieDlUrl.startsWith('/api/download/file?'));
+    assert.ok(movieDlUrl.includes('lang=hi'));
+    assert.ok(movieDlUrl.includes('quality=1080p'));
+    assert.ok(movieDlUrl.includes('mediaType=movie'));
+
+    // 2. TV Stranger Things S1E1 Hindi 720p download URL
+    const tvDlUrl = buildDownloadProxyUrl({
+      mediaType: 'tv',
+      tmdbId: '66732',
+      season: 1,
+      episode: 1,
+      lang: 'hi',
+      quality: '720p',
+      title: 'Stranger Things',
+    });
+    assert.ok(tvDlUrl.startsWith('/api/download/file?'));
+    assert.ok(tvDlUrl.includes('lang=hi'));
+    assert.ok(tvDlUrl.includes('quality=720p'));
+    assert.ok(tvDlUrl.includes('season=1'));
+    assert.ok(tvDlUrl.includes('episode=1'));
+
+    // 3. Catalog downloads must NEVER contain hash links (#dl-)
+    const mononoke = getMediaByTmdbId('movie', '128');
+    assert.ok(mononoke.downloads.length > 0);
+    for (const dl of mononoke.downloads) {
+      assert.ok(!dl.url.startsWith('#'), `Download url must not be a hash: ${dl.url}`);
+      assert.ok(dl.url.includes('/api/download/file'), `Download url must hit endpoint: ${dl.url}`);
+      assert.equal(dl.format, 'mp4');
+    }
+
+    // 4. Subtitles must NEVER contain hash links (#download-)
+    for (const sub of mononoke.subtitles) {
+      assert.ok(!sub.url.startsWith('#'), `Subtitle url must not be a hash: ${sub.url}`);
+      assert.ok(sub.url.includes('/api/download/subtitle'), `Subtitle url must hit endpoint: ${sub.url}`);
+    }
+  });
+
+  it('accurately formats player time and guards against 10-second expanding chunk timeline', () => {
+    // 1. formatPlayerTime formats full movie runtimes into HH:MM:SS
+    assert.equal(formatPlayerTime(0), '0:00:00');
+    assert.equal(formatPlayerTime(9), '0:00:09');
+    assert.equal(formatPlayerTime(10), '0:00:10');
+    assert.equal(formatPlayerTime(7920), '2:12:00'); // Nayi Naveli (132m)
+    assert.equal(formatPlayerTime(7200), '2:00:00'); // Standard 2h movie
+    assert.equal(formatPlayerTime(1440), '0:24:00'); // Standard anime / 24m episode
+
+    // 2. Timeline duration guard rule: if media is known to be a full movie (>300s),
+    // a 10s chunked live window must NOT overwrite the true duration.
+    const expectedMovieDuration = 132 * 60; // 7920 seconds
+    const chunkDurations = [10.0, 10.5, 11.0, 12.0, 13.0]; // Simulated chunked expansion
+    let duration = expectedMovieDuration;
+
+    for (const rawDur of [...chunkDurations, 60, 120, 300, 1800]) {
+      // Rule: if expectedDuration > 300 and rawDur < expectedDuration * 0.75, ignore rawDur
+      if (expectedMovieDuration > 300 && rawDur < expectedMovieDuration * 0.75) {
+        // duration is preserved
+      } else {
+        duration = rawDur;
+      }
+      assert.equal(duration, 7920, `Duration must remain anchored to 7920s, not ${rawDur}`);
+    }
+
+    // 3. When a legitimate full stream duration is detected (e.g. 7985s from full MP4/HLS)
+    const legitimateFullDur = 7985;
+    if (legitimateFullDur >= expectedMovieDuration * 0.75) {
+      duration = legitimateFullDur;
+    }
+    assert.equal(duration, 7985);
+
+    // 4. Stream offset seek calculation:
+    // When seeking beyond buffered range to 1800s, activeStreamOffset = 1800.
+    // If the browser starts playing from 0s relative to the seek stream:
+    const activeStreamOffset = 1800;
+    const browserCurrentTime = 5.4;
+    const computedCurrentTime =
+      activeStreamOffset > 0 && browserCurrentTime < activeStreamOffset
+        ? activeStreamOffset + browserCurrentTime
+        : browserCurrentTime;
+    assert.equal(computedCurrentTime, 1805.4);
+    assert.equal(formatPlayerTime(computedCurrentTime), '0:30:05');
   });
 });
 

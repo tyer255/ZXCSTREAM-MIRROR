@@ -13,6 +13,7 @@ import {
   getMediaByTmdbId,
 } from '../data/tmdbCatalog';
 import { CustomPlayerView } from './CustomPlayerView';
+import { triggerNativeBrowserDownload } from '../services/downloadEngineTypes';
 
 export interface DownloadPageProps {
   mediaType: MediaType;
@@ -85,28 +86,26 @@ export const DownloadPage: React.FC<DownloadPageProps> = ({
     };
   }, [mediaType, tmdbId]);
 
+  const [downloadingId, setDownloadingId] = useState<string | null>(null);
+
   useEffect(() => {
     let isMounted = true;
     if (activeTab === 'Download') {
       setIsResolvingStream(true);
-      fetch('/api/stream/resolve', {
+      fetch('/api/download/resolve', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           mediaType,
           tmdbId,
-          serverPath: 'resshin_',
           season: selectedSeason,
           episode: selectedEpisode,
-          title: media.title,
-          releaseYear: media.releaseYear,
-          dubCode: selectedDub,
         }),
       })
         .then((res) => (res.ok ? res.json() : null))
         .then((data) => {
           if (isMounted) {
-            if (data && data.links) setLiveStreamData(data);
+            if (data && data.success) setLiveStreamData(data);
             setIsResolvingStream(false);
           }
         })
@@ -117,7 +116,25 @@ export const DownloadPage: React.FC<DownloadPageProps> = ({
     return () => {
       isMounted = false;
     };
-  }, [activeTab, mediaType, tmdbId, selectedSeason, selectedEpisode, selectedDub, media.title, media.releaseYear]);
+  }, [activeTab, mediaType, tmdbId, selectedSeason, selectedEpisode]);
+
+  useEffect(() => {
+    if (activeTab === 'Download') {
+      fetch('/api/download/prepare', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          mediaType,
+          tmdbId,
+          season: selectedSeason,
+          episode: selectedEpisode,
+          lang: selectedDub,
+          quality: '1080p',
+          title: media.title || '',
+        }),
+      }).catch(() => {});
+    }
+  }, [activeTab, mediaType, tmdbId, selectedSeason, selectedEpisode, selectedDub, media.title]);
 
   const filledStars = calculateStarRating(media.voteAverage);
   const runtimeDisplay = formatRuntime(media.runtimeMinutes);
@@ -130,35 +147,117 @@ export const DownloadPage: React.FC<DownloadPageProps> = ({
     media.seasons?.find((s) => s.seasonNumber === selectedSeason) ??
     media.seasons?.[0] ?? { seasonNumber: 1, episodeCount: 8, name: 'Season 1' };
 
-  const handleTriggerDownload = (id: string, filename: string, urlToDownload?: string) => {
+  const cleanTitle = (media.title || (mediaType === 'tv' ? 'Series' : 'Movie'))
+    .replace(/[^a-zA-Z0-9_\-\s]/g, '')
+    .trim()
+    .replace(/\s+/g, '.');
+
+  const handleTriggerDownload = (
+    id: string,
+    filename: string,
+    urlToDownload?: string,
+    directUrlToDownload?: string
+  ) => {
+    setDownloadingId(id);
+    const safeUrl =
+      urlToDownload && (urlToDownload.startsWith('http') || urlToDownload.startsWith('/'))
+        ? urlToDownload
+        : `/api/download/file?mediaType=${mediaType}&tmdbId=${tmdbId}&lang=${selectedDub}&quality=1080p&title=${encodeURIComponent(
+            cleanTitle
+          )}${mediaType === 'tv' ? `&season=${selectedSeason}&episode=${selectedEpisode}` : ''}`;
+
+    triggerNativeBrowserDownload({
+      url: safeUrl,
+      directUrl: directUrlToDownload,
+      filename,
+    });
     setDownloadedId(id);
-    try {
-      const a = document.createElement('a');
-      a.href = urlToDownload || `#download-${id}`;
-      a.download = filename;
-      a.target = '_blank';
-      a.rel = 'noopener noreferrer';
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-    } catch {
-      // Ignore
-    }
+    window.setTimeout(() => {
+      setDownloadingId(null);
+    }, 800);
     window.setTimeout(() => {
       setDownloadedId((prev) => (prev === id ? null : prev));
-    }, 2500);
+    }, 5000);
   };
 
-  const activeDownloads = liveStreamData?.links?.length
-    ? liveStreamData.links.map((item: any, idx: number) => ({
-        id: `live-dl-${idx}`,
-        resolution: item.resolution || 1080,
-        sizeFormatted: item.size ? `${(Number(item.size) / (1024 * 1024 * 1024)).toFixed(2)} GB` : '1.85 GB',
-        format: item.type || 'mp4',
-        codec: 'H.264 AAC',
-        url: item.link,
+  const handleTriggerSubtitleDownload = (sub: any) => {
+    const subId = sub.id;
+    setDownloadingId(subId);
+    const filename = `${cleanTitle}.${sub.lan}.srt`;
+    const targetUrl = `/api/download/subtitle?title=${encodeURIComponent(
+      cleanTitle
+    )}&lang=${sub.lan}&langName=${encodeURIComponent(sub.lanName)}`;
+
+    triggerNativeBrowserDownload({ url: targetUrl, filename });
+    setDownloadedId(subId);
+    window.setTimeout(() => {
+      setDownloadingId(null);
+    }, 800);
+    window.setTimeout(() => {
+      setDownloadedId((prev) => (prev === subId ? null : prev));
+    }, 3500);
+  };
+
+  const matchedLangGroup = liveStreamData?.languages?.find(
+    (l: any) => l.langCode === selectedDub
+  );
+
+  const activeDownloads = matchedLangGroup?.qualities?.length
+    ? matchedLangGroup.qualities.map((item: any) => ({
+        id: `dl-${selectedDub}-${item.resolution}`,
+        resolution: item.resolution,
+        sizeFormatted: item.sizeFormatted,
+        format: 'mp4',
+        codec:
+          item.codec ||
+          (item.resolution >= 1080
+            ? 'H.264 High@L4.1 / AAC 5.1'
+            : 'H.264 Main@L3.1 / AAC 2.0'),
+        url: item.downloadUrl,
+        directUrl: item.directUrl,
       }))
-    : media.downloads;
+    : [
+        {
+          id: `dl-${selectedDub}-1080`,
+          resolution: 1080,
+          sizeFormatted: '2.48 GB',
+          format: 'mp4',
+          codec: 'H.264 High@L4.1 / AAC 5.1',
+          url: `/api/download/file?mediaType=${mediaType}&tmdbId=${tmdbId}&lang=${selectedDub}&quality=1080p&title=${encodeURIComponent(
+            cleanTitle
+          )}${mediaType === 'tv' ? `&season=${selectedSeason}&episode=${selectedEpisode}` : ''}`,
+        },
+        {
+          id: `dl-${selectedDub}-720`,
+          resolution: 720,
+          sizeFormatted: '1.15 GB',
+          format: 'mp4',
+          codec: 'H.264 Main@L3.1 / AAC 2.0',
+          url: `/api/download/file?mediaType=${mediaType}&tmdbId=${tmdbId}&lang=${selectedDub}&quality=720p&title=${encodeURIComponent(
+            cleanTitle
+          )}${mediaType === 'tv' ? `&season=${selectedSeason}&episode=${selectedEpisode}` : ''}`,
+        },
+        {
+          id: `dl-${selectedDub}-480`,
+          resolution: 480,
+          sizeFormatted: '640 MB',
+          format: 'mp4',
+          codec: 'H.264 Main@L3.1 / AAC 2.0',
+          url: `/api/download/file?mediaType=${mediaType}&tmdbId=${tmdbId}&lang=${selectedDub}&quality=480p&title=${encodeURIComponent(
+            cleanTitle
+          )}${mediaType === 'tv' ? `&season=${selectedSeason}&episode=${selectedEpisode}` : ''}`,
+        },
+        {
+          id: `dl-${selectedDub}-360`,
+          resolution: 360,
+          sizeFormatted: '380 MB',
+          format: 'mp4',
+          codec: 'H.264 Main@L3.1 / AAC 2.0',
+          url: `/api/download/file?mediaType=${mediaType}&tmdbId=${tmdbId}&lang=${selectedDub}&quality=360p&title=${encodeURIComponent(
+            cleanTitle
+          )}${mediaType === 'tv' ? `&season=${selectedSeason}&episode=${selectedEpisode}` : ''}`,
+        },
+      ];
 
   return (
     <main className="min-h-screen bg-zinc-950 text-zinc-50">
@@ -455,9 +554,12 @@ export const DownloadPage: React.FC<DownloadPageProps> = ({
                   <div className="space-y-2">
                     {activeDownloads.map((dl: any) => {
                       const isDone = downloadedId === dl.id;
-                      const fileLabel = `${media.title.replace(/\s+/g, '_')}_${
-                        mediaType === 'tv' ? `S${selectedSeason}E${selectedEpisode}_` : ''
-                      }${dl.resolution}p_${selectedDub.toUpperCase()}.${dl.format}`;
+                      const isCurrentDownloading = downloadingId === dl.id;
+                      const filePart =
+                        mediaType === 'tv'
+                          ? `S${String(selectedSeason).padStart(2, '0')}E${String(selectedEpisode).padStart(2, '0')}`
+                          : 'Movie';
+                      const fileLabel = `${cleanTitle}.${filePart}.${dl.resolution}p.${selectedDub.toUpperCase()}.${dl.format}`;
 
                       return (
                         <div
@@ -468,24 +570,38 @@ export const DownloadPage: React.FC<DownloadPageProps> = ({
                             <p className="font-medium text-zinc-100">
                               {dl.resolution}p
                               <span className="ml-2 text-xs font-normal text-zinc-400">
-                                ({DUB_LANGUAGES.find((d) => d.code === selectedDub)?.label ?? 'Original'})
+                                ({DUB_LANGUAGES.find((d) => d.code === selectedDub)?.label ?? selectedDub.toUpperCase()})
                               </span>
                             </p>
                             <p className="text-xs text-zinc-400">
-                              {dl.sizeFormatted} | {dl.format} • {dl.codec}
+                              {dl.sizeFormatted} | {dl.format.toUpperCase()} • {dl.codec}
                             </p>
                           </div>
 
                           <button
                             type="button"
-                            onClick={() => handleTriggerDownload(dl.id, fileLabel, dl.url)}
+                            disabled={isCurrentDownloading}
+                            onClick={() =>
+                              handleTriggerDownload(dl.id, fileLabel, dl.url, dl.directUrl)
+                            }
                             data-testid={`download-btn-${dl.resolution}`}
-                            className="inline-flex items-center gap-2 rounded bg-red-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-red-500 transition cursor-pointer"
+                            className={`inline-flex items-center gap-2 rounded px-3 py-1.5 text-xs font-medium text-white transition cursor-pointer ${
+                              isCurrentDownloading
+                                ? 'bg-blue-600/70 cursor-wait'
+                                : isDone
+                                ? 'bg-emerald-600 hover:bg-emerald-500'
+                                : 'bg-red-600 hover:bg-red-500'
+                            }`}
                           >
-                            {isDone ? (
+                            {isCurrentDownloading ? (
+                              <>
+                                <Loader2 className="w-4 h-4 animate-spin" />
+                                <span>Starting...</span>
+                              </>
+                            ) : isDone ? (
                               <>
                                 <Check className="w-4 h-4" />
-                                <span>Started</span>
+                                <span>Downloaded MP4</span>
                               </>
                             ) : (
                               <>
@@ -505,6 +621,7 @@ export const DownloadPage: React.FC<DownloadPageProps> = ({
                   <div className="space-y-2">
                     {media.subtitles.map((sub: any) => {
                       const isDone = downloadedId === sub.id;
+                      const isSubDownloading = downloadingId === sub.id;
                       return (
                         <div
                           key={sub.id}
@@ -515,16 +632,16 @@ export const DownloadPage: React.FC<DownloadPageProps> = ({
                           </p>
                           <button
                             type="button"
-                            onClick={() =>
-                              handleTriggerDownload(
-                                sub.id,
-                                `${media.title.replace(/\s+/g, '_')}.${sub.lan}.srt`,
-                                sub.url
-                              )
-                            }
+                            disabled={isSubDownloading}
+                            onClick={() => handleTriggerSubtitleDownload(sub)}
                             className="inline-flex items-center gap-2 rounded bg-zinc-800 px-3 py-1 text-xs hover:bg-zinc-700 text-zinc-100 transition cursor-pointer"
                           >
-                            {isDone ? (
+                            {isSubDownloading ? (
+                              <>
+                                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                <span>Saving...</span>
+                              </>
+                            ) : isDone ? (
                               <>
                                 <Check className="w-3.5 h-3.5 text-emerald-400" />
                                 <span>Saved .srt</span>

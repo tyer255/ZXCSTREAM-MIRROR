@@ -14,7 +14,7 @@ async function startServer() {
   if (process.env.NODE_ENV !== 'production') {
     const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: { middlewareMode: true, host: '0.0.0.0', port: PORT },
       appType: 'spa',
     });
     app.use(vite.middlewares);
@@ -26,8 +26,8 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, () => {
-    console.log(`ZXC[STREAM] full-stack server running on http://localhost:${PORT}`);
+  app.listen(PORT, '0.0.0.0', () => {
+    console.log(`ZXC[STREAM] full-stack server running on http://0.0.0.0:${PORT}`);
   });
 }
 

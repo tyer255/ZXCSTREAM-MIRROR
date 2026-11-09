@@ -154,13 +154,13 @@ export function createActorAvatarDataUri(cast: CastMember): string {
 }
 
 const DEFAULT_SUBTITLES: SubtitleItem[] = [
-  { id: 'sub-en', lan: 'en', lanName: 'English (CC)', url: '#download-sub-en' },
-  { id: 'sub-es', lan: 'es', lanName: 'Spanish (Latinoamérica)', url: '#download-sub-es' },
-  { id: 'sub-fr', lan: 'fr', lanName: 'French (Français)', url: '#download-sub-fr' },
-  { id: 'sub-hi', lan: 'hi', lanName: 'Hindi (हिन्दी)', url: '#download-sub-hi' },
-  { id: 'sub-tl', lan: 'tl', lanName: 'Tagalog (Filipino)', url: '#download-sub-tl' },
-  { id: 'sub-pt', lan: 'pt', lanName: 'Portuguese (Brasil)', url: '#download-sub-pt' },
-  { id: 'sub-id', lan: 'id', lanName: 'Indonesian (Bahasa)', url: '#download-sub-id' },
+  { id: 'sub-en', lan: 'en', lanName: 'English (CC)', url: '/api/download/subtitle?lang=en&langName=English' },
+  { id: 'sub-es', lan: 'es', lanName: 'Spanish (Latinoamérica)', url: '/api/download/subtitle?lang=es&langName=Spanish' },
+  { id: 'sub-fr', lan: 'fr', lanName: 'French (Français)', url: '/api/download/subtitle?lang=fr&langName=French' },
+  { id: 'sub-hi', lan: 'hi', lanName: 'Hindi (हिन्दी)', url: '/api/download/subtitle?lang=hi&langName=Hindi' },
+  { id: 'sub-tl', lan: 'tl', lanName: 'Tagalog (Filipino)', url: '/api/download/subtitle?lang=tl&langName=Tagalog' },
+  { id: 'sub-pt', lan: 'pt', lanName: 'Portuguese (Brasil)', url: '/api/download/subtitle?lang=pt&langName=Portuguese' },
+  { id: 'sub-id', lan: 'id', lanName: 'Indonesian (Bahasa)', url: '/api/download/subtitle?lang=id&langName=Indonesian' },
 ];
 
 export const CATALOG_BY_KEY: Record<string, MediaCatalogEntry> = {
@@ -273,7 +273,7 @@ export const CATALOG_BY_KEY: Record<string, MediaCatalogEntry> = {
         format: 'mp4',
         fps: 24,
         codec: 'H.264 AAC 5.1',
-        url: '#dl-mononoke-1080p',
+        url: '/api/download/file?mediaType=movie&tmdbId=128&lang=hi&quality=1080p&title=Princess+Mononoke',
       },
       {
         id: 'dl-128-720',
@@ -282,7 +282,7 @@ export const CATALOG_BY_KEY: Record<string, MediaCatalogEntry> = {
         format: 'mp4',
         fps: 24,
         codec: 'H.264 AAC 2.0',
-        url: '#dl-mononoke-720p',
+        url: '/api/download/file?mediaType=movie&tmdbId=128&lang=hi&quality=720p&title=Princess+Mononoke',
       },
       {
         id: 'dl-128-480',
@@ -291,7 +291,7 @@ export const CATALOG_BY_KEY: Record<string, MediaCatalogEntry> = {
         format: 'mp4',
         fps: 24,
         codec: 'H.264 AAC',
-        url: '#dl-mononoke-480p',
+        url: '/api/download/file?mediaType=movie&tmdbId=128&lang=hi&quality=480p&title=Princess+Mononoke',
       },
     ],
     subtitles: DEFAULT_SUBTITLES,
@@ -334,7 +334,7 @@ export const CATALOG_BY_KEY: Record<string, MediaCatalogEntry> = {
         format: 'mp4',
         fps: 24,
         codec: 'HEVC 10bit Atmos',
-        url: '#dl-wildrobot-2160p',
+        url: '/api/download/file?mediaType=movie&tmdbId=1184918&lang=en&quality=2160p&title=The+Wild+Robot',
       },
       {
         id: 'dl-1184918-1080',
@@ -343,7 +343,7 @@ export const CATALOG_BY_KEY: Record<string, MediaCatalogEntry> = {
         format: 'mp4',
         fps: 24,
         codec: 'H.264 AAC 5.1',
-        url: '#dl-wildrobot-1080p',
+        url: '/api/download/file?mediaType=movie&tmdbId=1184918&lang=en&quality=1080p&title=The+Wild+Robot',
       },
       {
         id: 'dl-1184918-720',
@@ -352,7 +352,7 @@ export const CATALOG_BY_KEY: Record<string, MediaCatalogEntry> = {
         format: 'mp4',
         fps: 24,
         codec: 'H.264 AAC',
-        url: '#dl-wildrobot-720p',
+        url: '/api/download/file?mediaType=movie&tmdbId=1184918&lang=en&quality=720p&title=The+Wild+Robot',
       },
     ],
     subtitles: DEFAULT_SUBTITLES,
@@ -401,7 +401,7 @@ export const CATALOG_BY_KEY: Record<string, MediaCatalogEntry> = {
         format: 'mp4',
         fps: 24,
         codec: 'H.264 EAC3 5.1',
-        url: '#dl-st-1080p',
+        url: '/api/download/file?mediaType=tv&tmdbId=66732&season=1&episode=1&lang=en&quality=1080p&title=Stranger+Things',
       },
       {
         id: 'dl-66732-720',
@@ -410,7 +410,7 @@ export const CATALOG_BY_KEY: Record<string, MediaCatalogEntry> = {
         format: 'mp4',
         fps: 24,
         codec: 'H.264 AAC',
-        url: '#dl-st-720p',
+        url: '/api/download/file?mediaType=tv&tmdbId=66732&season=1&episode=1&lang=en&quality=720p&title=Stranger+Things',
       },
       {
         id: 'dl-66732-480',
@@ -419,7 +419,7 @@ export const CATALOG_BY_KEY: Record<string, MediaCatalogEntry> = {
         format: 'mp4',
         fps: 24,
         codec: 'H.264 AAC',
-        url: '#dl-st-480p',
+        url: '/api/download/file?mediaType=tv&tmdbId=66732&season=1&episode=1&lang=en&quality=480p&title=Stranger+Things',
       },
     ],
     subtitles: DEFAULT_SUBTITLES,
@@ -458,7 +458,7 @@ export const CATALOG_BY_KEY: Record<string, MediaCatalogEntry> = {
         format: 'mp4',
         fps: 24,
         codec: 'H.264 AAC 5.1',
-        url: '#dl-dpw-1080p',
+        url: '/api/download/file?mediaType=movie&tmdbId=533535&lang=en&quality=1080p&title=Deadpool+and+Wolverine',
       },
       {
         id: 'dl-533535-720',
@@ -467,7 +467,7 @@ export const CATALOG_BY_KEY: Record<string, MediaCatalogEntry> = {
         format: 'mp4',
         fps: 24,
         codec: 'H.264 AAC',
-        url: '#dl-dpw-720p',
+        url: '/api/download/file?mediaType=movie&tmdbId=533535&lang=en&quality=720p&title=Deadpool+and+Wolverine',
       },
     ],
     subtitles: DEFAULT_SUBTITLES,
@@ -513,7 +513,7 @@ export const CATALOG_BY_KEY: Record<string, MediaCatalogEntry> = {
         format: 'mp4',
         fps: 24,
         codec: 'H.264 AAC 5.1',
-        url: '#dl-bb-1080p',
+        url: '/api/download/file?mediaType=tv&tmdbId=1396&season=1&episode=1&lang=en&quality=1080p&title=Breaking+Bad',
       },
       {
         id: 'dl-1396-720',
@@ -522,7 +522,7 @@ export const CATALOG_BY_KEY: Record<string, MediaCatalogEntry> = {
         format: 'mp4',
         fps: 24,
         codec: 'H.264 AAC',
-        url: '#dl-bb-720p',
+        url: '/api/download/file?mediaType=tv&tmdbId=1396&season=1&episode=1&lang=en&quality=720p&title=Breaking+Bad',
       },
     ],
     subtitles: DEFAULT_SUBTITLES,
@@ -569,10 +569,12 @@ export function getMediaByTmdbId(mediaType: MediaType, tmdbId: string): MediaCat
   const accentHue = (numericSeed * 47) % 360;
   const secondaryHue = (accentHue + 65) % 360;
 
+  const syntheticTitle = mediaType === 'movie' ? `TMDB Feature #${cleanId}` : `TMDB Series #${cleanId}`;
+
   return {
     tmdbId: cleanId,
     mediaType,
-    title: mediaType === 'movie' ? `TMDB Feature #${cleanId}` : `TMDB Series #${cleanId}`,
+    title: syntheticTitle,
     tagline: 'Streaming in Full HD via ZXC[STREAM] multi-audio cloud servers.',
     overview: `Stream and download TMDB ID #${cleanId} directly through ZXC[STREAM] edge servers with multi-language audio tracks (Original, Hindi, Tagalog, Spanish, French, Portuguese) and high-bitrate 1080p streams.`,
     voteAverage: 8.1,
@@ -607,7 +609,7 @@ export function getMediaByTmdbId(mediaType: MediaType, tmdbId: string): MediaCat
         format: 'mp4',
         fps: 24,
         codec: 'H.264 AAC 5.1',
-        url: `#dl-${cleanId}-1080p`,
+        url: `/api/download/file?mediaType=${mediaType}&tmdbId=${cleanId}&quality=1080p&lang=en&title=${encodeURIComponent(syntheticTitle)}`,
       },
       {
         id: `dl-${cleanId}-720`,
@@ -616,7 +618,7 @@ export function getMediaByTmdbId(mediaType: MediaType, tmdbId: string): MediaCat
         format: 'mp4',
         fps: 24,
         codec: 'H.264 AAC',
-        url: `#dl-${cleanId}-720p`,
+        url: `/api/download/file?mediaType=${mediaType}&tmdbId=${cleanId}&quality=720p&lang=en&title=${encodeURIComponent(syntheticTitle)}`,
       },
     ],
     subtitles: DEFAULT_SUBTITLES,

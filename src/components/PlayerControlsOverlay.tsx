@@ -425,6 +425,7 @@ export const PlayerControlsOverlay: React.FC<PlayerControlsOverlayProps> = ({
     >
       <div
         ref={seekBarRef}
+        data-testid="player-seek-track"
         onMouseMove={onSeekBarMouseMove}
         onMouseLeave={onSeekBarLeave}
         onClick={onSeekBarClick}

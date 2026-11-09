@@ -1,18 +1,23 @@
 // serverApp.ts
+import path from "node:path";
+import fs from "node:fs";
+import { fileURLToPath } from "node:url";
+import { spawn } from "node:child_process";
+import { Readable } from "node:stream";
 import express from "express";
 import cors from "cors";
-import crypto from "node:crypto";
+import crypto2 from "node:crypto";
 import CryptoJS from "crypto-js";
 
 // src/data/tmdbCatalog.ts
 var DEFAULT_SUBTITLES = [
-  { id: "sub-en", lan: "en", lanName: "English (CC)", url: "#download-sub-en" },
-  { id: "sub-es", lan: "es", lanName: "Spanish (Latinoam\xE9rica)", url: "#download-sub-es" },
-  { id: "sub-fr", lan: "fr", lanName: "French (Fran\xE7ais)", url: "#download-sub-fr" },
-  { id: "sub-hi", lan: "hi", lanName: "Hindi (\u0939\u093F\u0928\u094D\u0926\u0940)", url: "#download-sub-hi" },
-  { id: "sub-tl", lan: "tl", lanName: "Tagalog (Filipino)", url: "#download-sub-tl" },
-  { id: "sub-pt", lan: "pt", lanName: "Portuguese (Brasil)", url: "#download-sub-pt" },
-  { id: "sub-id", lan: "id", lanName: "Indonesian (Bahasa)", url: "#download-sub-id" }
+  { id: "sub-en", lan: "en", lanName: "English (CC)", url: "/api/download/subtitle?lang=en&langName=English" },
+  { id: "sub-es", lan: "es", lanName: "Spanish (Latinoam\xE9rica)", url: "/api/download/subtitle?lang=es&langName=Spanish" },
+  { id: "sub-fr", lan: "fr", lanName: "French (Fran\xE7ais)", url: "/api/download/subtitle?lang=fr&langName=French" },
+  { id: "sub-hi", lan: "hi", lanName: "Hindi (\u0939\u093F\u0928\u094D\u0926\u0940)", url: "/api/download/subtitle?lang=hi&langName=Hindi" },
+  { id: "sub-tl", lan: "tl", lanName: "Tagalog (Filipino)", url: "/api/download/subtitle?lang=tl&langName=Tagalog" },
+  { id: "sub-pt", lan: "pt", lanName: "Portuguese (Brasil)", url: "/api/download/subtitle?lang=pt&langName=Portuguese" },
+  { id: "sub-id", lan: "id", lanName: "Indonesian (Bahasa)", url: "/api/download/subtitle?lang=id&langName=Indonesian" }
 ];
 var CATALOG_BY_KEY = {
   "movie:128": {
@@ -123,7 +128,7 @@ var CATALOG_BY_KEY = {
         format: "mp4",
         fps: 24,
         codec: "H.264 AAC 5.1",
-        url: "#dl-mononoke-1080p"
+        url: "/api/download/file?mediaType=movie&tmdbId=128&lang=hi&quality=1080p&title=Princess+Mononoke"
       },
       {
         id: "dl-128-720",
@@ -132,7 +137,7 @@ var CATALOG_BY_KEY = {
         format: "mp4",
         fps: 24,
         codec: "H.264 AAC 2.0",
-        url: "#dl-mononoke-720p"
+        url: "/api/download/file?mediaType=movie&tmdbId=128&lang=hi&quality=720p&title=Princess+Mononoke"
       },
       {
         id: "dl-128-480",
@@ -141,7 +146,7 @@ var CATALOG_BY_KEY = {
         format: "mp4",
         fps: 24,
         codec: "H.264 AAC",
-        url: "#dl-mononoke-480p"
+        url: "/api/download/file?mediaType=movie&tmdbId=128&lang=hi&quality=480p&title=Princess+Mononoke"
       }
     ],
     subtitles: DEFAULT_SUBTITLES
@@ -182,7 +187,7 @@ var CATALOG_BY_KEY = {
         format: "mp4",
         fps: 24,
         codec: "HEVC 10bit Atmos",
-        url: "#dl-wildrobot-2160p"
+        url: "/api/download/file?mediaType=movie&tmdbId=1184918&lang=en&quality=2160p&title=The+Wild+Robot"
       },
       {
         id: "dl-1184918-1080",
@@ -191,7 +196,7 @@ var CATALOG_BY_KEY = {
         format: "mp4",
         fps: 24,
         codec: "H.264 AAC 5.1",
-        url: "#dl-wildrobot-1080p"
+        url: "/api/download/file?mediaType=movie&tmdbId=1184918&lang=en&quality=1080p&title=The+Wild+Robot"
       },
       {
         id: "dl-1184918-720",
@@ -200,7 +205,7 @@ var CATALOG_BY_KEY = {
         format: "mp4",
         fps: 24,
         codec: "H.264 AAC",
-        url: "#dl-wildrobot-720p"
+        url: "/api/download/file?mediaType=movie&tmdbId=1184918&lang=en&quality=720p&title=The+Wild+Robot"
       }
     ],
     subtitles: DEFAULT_SUBTITLES
@@ -247,7 +252,7 @@ var CATALOG_BY_KEY = {
         format: "mp4",
         fps: 24,
         codec: "H.264 EAC3 5.1",
-        url: "#dl-st-1080p"
+        url: "/api/download/file?mediaType=tv&tmdbId=66732&season=1&episode=1&lang=en&quality=1080p&title=Stranger+Things"
       },
       {
         id: "dl-66732-720",
@@ -256,7 +261,7 @@ var CATALOG_BY_KEY = {
         format: "mp4",
         fps: 24,
         codec: "H.264 AAC",
-        url: "#dl-st-720p"
+        url: "/api/download/file?mediaType=tv&tmdbId=66732&season=1&episode=1&lang=en&quality=720p&title=Stranger+Things"
       },
       {
         id: "dl-66732-480",
@@ -265,7 +270,7 @@ var CATALOG_BY_KEY = {
         format: "mp4",
         fps: 24,
         codec: "H.264 AAC",
-        url: "#dl-st-480p"
+        url: "/api/download/file?mediaType=tv&tmdbId=66732&season=1&episode=1&lang=en&quality=480p&title=Stranger+Things"
       }
     ],
     subtitles: DEFAULT_SUBTITLES
@@ -302,7 +307,7 @@ var CATALOG_BY_KEY = {
         format: "mp4",
         fps: 24,
         codec: "H.264 AAC 5.1",
-        url: "#dl-dpw-1080p"
+        url: "/api/download/file?mediaType=movie&tmdbId=533535&lang=en&quality=1080p&title=Deadpool+and+Wolverine"
       },
       {
         id: "dl-533535-720",
@@ -311,7 +316,7 @@ var CATALOG_BY_KEY = {
         format: "mp4",
         fps: 24,
         codec: "H.264 AAC",
-        url: "#dl-dpw-720p"
+        url: "/api/download/file?mediaType=movie&tmdbId=533535&lang=en&quality=720p&title=Deadpool+and+Wolverine"
       }
     ],
     subtitles: DEFAULT_SUBTITLES
@@ -355,7 +360,7 @@ var CATALOG_BY_KEY = {
         format: "mp4",
         fps: 24,
         codec: "H.264 AAC 5.1",
-        url: "#dl-bb-1080p"
+        url: "/api/download/file?mediaType=tv&tmdbId=1396&season=1&episode=1&lang=en&quality=1080p&title=Breaking+Bad"
       },
       {
         id: "dl-1396-720",
@@ -364,7 +369,7 @@ var CATALOG_BY_KEY = {
         format: "mp4",
         fps: 24,
         codec: "H.264 AAC",
-        url: "#dl-bb-720p"
+        url: "/api/download/file?mediaType=tv&tmdbId=1396&season=1&episode=1&lang=en&quality=720p&title=Breaking+Bad"
       }
     ],
     subtitles: DEFAULT_SUBTITLES
@@ -390,10 +395,11 @@ function getMediaByTmdbId(mediaType, tmdbId) {
   const numericSeed = Number.parseInt(cleanId.replace(/\D/g, ""), 10) || 420;
   const accentHue = numericSeed * 47 % 360;
   const secondaryHue = (accentHue + 65) % 360;
+  const syntheticTitle = mediaType === "movie" ? `TMDB Feature #${cleanId}` : `TMDB Series #${cleanId}`;
   return {
     tmdbId: cleanId,
     mediaType,
-    title: mediaType === "movie" ? `TMDB Feature #${cleanId}` : `TMDB Series #${cleanId}`,
+    title: syntheticTitle,
     tagline: "Streaming in Full HD via ZXC[STREAM] multi-audio cloud servers.",
     overview: `Stream and download TMDB ID #${cleanId} directly through ZXC[STREAM] edge servers with multi-language audio tracks (Original, Hindi, Tagalog, Spanish, French, Portuguese) and high-bitrate 1080p streams.`,
     voteAverage: 8.1,
@@ -425,7 +431,7 @@ function getMediaByTmdbId(mediaType, tmdbId) {
         format: "mp4",
         fps: 24,
         codec: "H.264 AAC 5.1",
-        url: `#dl-${cleanId}-1080p`
+        url: `/api/download/file?mediaType=${mediaType}&tmdbId=${cleanId}&quality=1080p&lang=en&title=${encodeURIComponent(syntheticTitle)}`
       },
       {
         id: `dl-${cleanId}-720`,
@@ -434,7 +440,7 @@ function getMediaByTmdbId(mediaType, tmdbId) {
         format: "mp4",
         fps: 24,
         codec: "H.264 AAC",
-        url: `#dl-${cleanId}-720p`
+        url: `/api/download/file?mediaType=${mediaType}&tmdbId=${cleanId}&quality=720p&lang=en&title=${encodeURIComponent(syntheticTitle)}`
       }
     ],
     subtitles: DEFAULT_SUBTITLES
@@ -979,7 +985,7 @@ function getCatalogSeasonEpisodes(tmdbId, seasonNumber) {
       episode_number: ep,
       name: customTitle || `Episode ${ep}`,
       overview: `Season ${seasonNumber}, Episode ${ep} of ${catalogEntry?.title || `Series #${cleanId}`}.`,
-      still_path: null,
+      still_path: catalogEntry?.backdropUrl || null,
       runtime: catalogEntry?.runtimeMinutes || 48,
       ...timing || {}
     });
@@ -989,15 +995,47 @@ function getCatalogSeasonEpisodes(tmdbId, seasonNumber) {
 
 // src/utils/urlBuilder.ts
 var NXSHA_SERVERS = [
-  { index: 0, id: "rive-citadel", label: "Citadel (Hindi & Multi)" },
-  { index: 1, id: "castle", label: "CastVid (Multi-Lang)" },
-  { index: 2, id: "watchout", label: "Multi-bill (Fast HLS)" },
-  { index: 3, id: "streamflix", label: "StremFx (Direct MP4)" },
-  { index: 4, id: "nitro", label: "Nitro (1080p Multi-Audio)" },
-  { index: 5, id: "xdownloader", label: "XDrop (Alternative)" },
-  { index: 6, id: "purstream", label: "PurStream (Fast)" },
-  { index: 7, id: "vixolity", label: "Vixolity (UHD)" },
-  { index: 8, id: "rive-primevids", label: "PrimeVids (Backup)" }
+  { index: 0, id: "watchout", label: "Multi-bill (Fast HLS)" },
+  { index: 1, id: "purstream", label: "PurStream (Fast)" },
+  { index: 2, id: "vegamovies", label: "Vegamovies (Hindi & Dual)" },
+  { index: 3, id: "nitro", label: "Nitro (1080p Multi-Audio)" },
+  { index: 4, id: "orion", label: "AethoOrion (Multi-Audio Master)" },
+  { index: 5, id: "vega", label: "AethoVega (Direct HLS Master)" },
+  { index: 6, id: "streamflix", label: "StremFx (Direct MP4)" },
+  { index: 7, id: "rive-citadel", label: "Citadel (Hindi & Multi)" },
+  { index: 8, id: "castle", label: "CastVid (Multi-Lang)" },
+  { index: 9, id: "xdownloader", label: "XDrop (Alternative)" },
+  { index: 10, id: "vixolity", label: "Vixolity (UHD)" },
+  { index: 11, id: "rive-primevids", label: "PrimeVids (Backup)" },
+  { index: 12, id: "callisto", label: "AethoCallisto (16-Lang Global & Hindi)" },
+  { index: 13, id: "sirius", label: "AethoSirius (Ultra-Fast Hindi/EN)" },
+  { index: 14, id: "bharat", label: "AethoBharat (Hindi & South Multi-Audio)" },
+  { index: 15, id: "indus", label: "AethoIndus (India Edge HLS)" },
+  { index: 16, id: "bolly", label: "AethoBolly (Dual-Audio Hindi)" },
+  { index: 17, id: "kuro", label: "AethoKuro (Anime & Series Multi-Audio)" },
+  { index: 18, id: "quantum", label: "AethoQuantum (Adaptive Master HLS)" },
+  { index: 19, id: "rousav", label: "AethoRousav (22-Lang Multi-Track)" },
+  { index: 20, id: "atlas", label: "AethoAtlas (Fast Edge H.264)" },
+  { index: 21, id: "ursa", label: "AethoUrsa (Low-Latency Edge)" },
+  { index: 22, id: "andromeda", label: "AethoAndromeda (Ultra HD Stream)" },
+  { index: 23, id: "valstrax", label: "AethoValstrax (High-Bitrate 1080p)" },
+  { index: 24, id: "alatreon", label: "AethoAlatreon (Extended Library)" },
+  { index: 25, id: "resshin", label: "AethoResshin (Multi-Res & Hindi Dub)" },
+  { index: 26, id: "centaurus", label: "AethoCentaurus (Multi-Res 1080p)" },
+  { index: 27, id: "daedalus", label: "AethoDaedalus (Global CDN Mirror)" },
+  { index: 28, id: "quasar", label: "AethoQuasar (High-Speed India/Asia)" },
+  { index: 29, id: "zenith", label: "AethoZenith (Multi-Lang Cinema Bridge)" },
+  { index: 30, id: "nebula", label: "AethoNebula (Dual-Audio Express)" },
+  { index: 31, id: "zxc_pulse", label: "AethoPulse (Secondary Multi-Audio)" },
+  { index: 32, id: "zxc_atlas", label: "AethoVortex (Fast Edge Cluster)" },
+  { index: 33, id: "zxc_ursa", label: "AethoApex (Global Backup HLS)" },
+  { index: 34, id: "hyperion", label: "AethoHyperion (Cloud Fabric 1080p)" },
+  { index: 35, id: "vidfast", label: "AethoFlash (Instant Start Cluster)" },
+  { index: 36, id: "vaplayer", label: "AethoPrism (European Edge Node)" },
+  { index: 37, id: "kronos", label: "AethoKronos (Multi-CDN Stream)" },
+  { index: 38, id: "pegasus", label: "AethoPegasus (Zero-Buffer Hindi/EN)" },
+  { index: 39, id: "nova", label: "AethoNova (Cinema 1080p Multi-Audio)" },
+  { index: 40, id: "apollo", label: "AethoApollo (Universal Failover)" }
 ];
 function normalizeIntervalSeconds(params) {
   const { startSec, endSec, startMs, endMs, allowStartNullAsZero = true } = params;
@@ -1418,7 +1456,39 @@ var ALLOWED_NXSHA_PROVIDERS = [
   "xdownloader",
   "purstream",
   "vixolity",
-  "rive-primevids"
+  "rive-primevids",
+  "vegamovies",
+  "orion",
+  "vega",
+  "callisto",
+  "sirius",
+  "bharat",
+  "indus",
+  "bolly",
+  "kuro",
+  "quantum",
+  "rousav",
+  "atlas",
+  "ursa",
+  "andromeda",
+  "valstrax",
+  "alatreon",
+  "resshin",
+  "centaurus",
+  "daedalus",
+  "quasar",
+  "zenith",
+  "nebula",
+  "zxc_pulse",
+  "zxc_atlas",
+  "zxc_ursa",
+  "hyperion",
+  "vidfast",
+  "vaplayer",
+  "kronos",
+  "pegasus",
+  "nova",
+  "apollo"
 ];
 var ALLOWED_PROVIDER_SET = new Set(ALLOWED_NXSHA_PROVIDERS);
 function isAuthorizedNxshaProvider(provider) {
@@ -2376,24 +2446,27 @@ async function resolveAnimeContent(params, deps) {
       }
       return [];
     })(),
-    new Promise((resolve) => setTimeout(() => resolve([]), 1400))
+    new Promise((resolve) => setTimeout(() => resolve([]), 400))
   ]);
   let orionOrigResponse = null;
-  const providersToRace = ["alatreon", "ursa", "atlas", "orion", "valstrax"];
+  const providersToRace = ["vegamovies", "alatreon", "ursa", "atlas", "orion", "valstrax"];
   const providerPromises = providersToRace.map(async (provider) => {
     try {
-      const resolved = await resolveForServer2(provider, {
-        mediaType,
-        tmdbId: cleanId,
-        season,
-        episode,
-        title: animeTitle,
-        releaseYear,
-        date,
-        imdbId,
-        dubCode: "",
-        dubType: "0"
-      });
+      const resolved = await Promise.race([
+        resolveForServer2(provider, {
+          mediaType,
+          tmdbId: cleanId,
+          season,
+          episode,
+          title: animeTitle,
+          releaseYear,
+          date,
+          imdbId,
+          dubCode: "",
+          dubType: "0"
+        }),
+        new Promise((r) => setTimeout(() => r(null), 2e3))
+      ]);
       if (provider === "orion" && resolved) {
         orionOrigResponse = resolved;
       }
@@ -2402,17 +2475,22 @@ async function resolveAnimeContent(params, deps) {
         const playable = nonHevc.length > 0 ? nonHevc : resolved.links.filter((l) => l?.link);
         return playable.map((l, idx) => {
           const isDash = l.type === "dash" || l.type === "andromeda";
+          const linkLang = String(l.lang || "").toLowerCase().trim();
+          const isJapanese = !linkLang || linkLang === "ja" || linkLang === "jp" || linkLang === "orig";
+          const audioLang = isJapanese ? "ja" : linkLang;
+          const qual = l.quality || "1080p";
+          const audioLabel = ANIME_LANG_LABELS[audioLang] || (isJapanese ? "Japanese (Original)" : `${audioLang.toUpperCase()} (Dub)`);
           return {
             id: `${provider}-${idx}`,
             provider,
             url: l.link,
-            quality: "1080p",
-            label: `${provider.toUpperCase()} | 1080p Ultra HD`,
+            quality: qual.includes("p") ? qual : `${qual}p`,
+            label: l.label || `${provider.toUpperCase()} | ${qual} | ${audioLabel}`,
             type: isDash ? "dash" : "hls",
-            audioLang: "ja",
-            audioLabel: "Japanese (Original)",
-            isSub: true,
-            isDub: false,
+            audioLang,
+            audioLabel,
+            isSub: isJapanese,
+            isDub: !isJapanese,
             onlyHevc: Boolean(l.onlyHevc),
             audioStreamKey: l.audioStreamKey || resolved.audioStreamKey || ""
           };
@@ -2422,47 +2500,116 @@ async function resolveAnimeContent(params, deps) {
     }
     return [];
   });
-  const cleanPref = (preferredAudio || "ja").trim().toLowerCase();
-  const dubLanguagesToQuery = Array.from(
-    /* @__PURE__ */ new Set(["hi", "en", ...cleanPref && cleanPref !== "ja" ? [cleanPref] : []])
-  );
-  const rawDubPromises = dubLanguagesToQuery.map(async (dubLang) => {
-    try {
-      const orionDub = await resolveForServer2("orion", {
-        mediaType,
-        tmdbId: cleanId,
-        season,
-        episode,
-        title: animeTitle,
-        releaseYear,
-        date,
-        imdbId,
-        dubCode: dubLang,
-        dubType: "0"
-      });
-      if (orionDub && orionDub.success) {
-        const link = orionDub.dubAudioUrl || orionDub.link || orionDub.links?.[0]?.link;
-        if (link) {
-          return {
-            dubLang,
-            link,
-            audioStreamKey: orionDub.audioStreamKey || orionDub.links?.[0]?.audioStreamKey || "",
-            onlyHevc: Boolean(orionDub.links?.[0]?.onlyHevc ?? true),
-            dubs: orionDub.dubs
-          };
-        }
-      }
-    } catch {
-    }
-    return null;
-  });
-  const [providerResults, rawDubResults, saltSources] = await Promise.all([
+  const [providerResults, saltSources] = await Promise.all([
     Promise.all(providerPromises),
-    Promise.all(rawDubPromises),
     animeSaltPromise
   ]);
   for (const list of providerResults) {
     allSources.push(...list);
+  }
+  const cleanPref = (preferredAudio || "ja").trim().toLowerCase();
+  const rawDubResults = [];
+  if (orionOrigResponse && orionOrigResponse.success && Array.isArray(orionOrigResponse.dubs) && orionOrigResponse.dubs.length > 0) {
+    const dubLanguagesToQuery = Array.from(
+      /* @__PURE__ */ new Set(["hi", "en", ...cleanPref && cleanPref !== "ja" ? [cleanPref] : []])
+    );
+    const dubItems = await Promise.all(
+      dubLanguagesToQuery.map(async (dubLang) => {
+        try {
+          const orionDub = await Promise.race([
+            resolveForServer2("orion", {
+              mediaType,
+              tmdbId: cleanId,
+              season,
+              episode,
+              title: animeTitle,
+              releaseYear,
+              date,
+              imdbId,
+              dubCode: dubLang,
+              dubType: "0"
+            }),
+            new Promise((r) => setTimeout(() => r(null), 1e3))
+          ]);
+          if (orionDub && orionDub.success) {
+            const link = orionDub.dubAudioUrl || orionDub.link || orionDub.links?.[0]?.link;
+            if (link) {
+              return {
+                dubLang,
+                link,
+                audioStreamKey: orionDub.audioStreamKey || orionDub.links?.[0]?.audioStreamKey || "",
+                onlyHevc: Boolean(orionDub.links?.[0]?.onlyHevc ?? true),
+                dubs: orionDub.dubs
+              };
+            }
+          }
+        } catch {
+        }
+        return null;
+      })
+    );
+    rawDubResults.push(...dubItems.filter(Boolean));
+  }
+  if (allSources.length === 0 && mediaType === "tv" && Number(season) > 1) {
+    let cumulativeEp = Number(episode);
+    const spec = SERIES_TIMING_REGISTRY[cleanId];
+    if (spec?.seasons) {
+      for (let s = 1; s < Number(season); s++) {
+        cumulativeEp += spec.seasons[s] || 0;
+      }
+    }
+    if (cumulativeEp !== Number(episode)) {
+      const altFallbackProviders = ["vegamovies", "alatreon", "atlas"];
+      const altResults = await Promise.all(
+        altFallbackProviders.map(async (provider) => {
+          try {
+            const resolved = await resolveForServer2(provider, {
+              mediaType: "tv",
+              tmdbId: cleanId,
+              season: 1,
+              episode: cumulativeEp,
+              title: animeTitle,
+              releaseYear,
+              date,
+              imdbId,
+              dubCode: "",
+              dubType: "0"
+            });
+            if (resolved && resolved.success && Array.isArray(resolved.links)) {
+              const nonHevc = resolved.links.filter((l) => l?.link && !l.onlyHevc);
+              const playable = nonHevc.length > 0 ? nonHevc : resolved.links.filter((l) => l?.link);
+              return playable.map((l, idx) => {
+                const isDash = l.type === "dash" || l.type === "andromeda";
+                const linkLang = String(l.lang || "").toLowerCase().trim();
+                const isJapanese = !linkLang || linkLang === "ja" || linkLang === "jp" || linkLang === "orig";
+                const audioLang = isJapanese ? "ja" : linkLang;
+                const qual = l.quality || "1080p";
+                const audioLabel = ANIME_LANG_LABELS[audioLang] || (isJapanese ? "Japanese (Original)" : `${audioLang.toUpperCase()} (Dub)`);
+                return {
+                  id: `${provider}-abs-${idx}`,
+                  provider,
+                  url: l.link,
+                  quality: qual.includes("p") ? qual : `${qual}p`,
+                  label: l.label || `${provider.toUpperCase()} | Ep ${cumulativeEp} | ${qual} | ${audioLabel}`,
+                  type: isDash ? "dash" : "hls",
+                  audioLang,
+                  audioLabel,
+                  isSub: isJapanese,
+                  isDub: !isJapanese,
+                  onlyHevc: Boolean(l.onlyHevc),
+                  audioStreamKey: l.audioStreamKey || resolved.audioStreamKey || ""
+                };
+              });
+            }
+          } catch {
+          }
+          return [];
+        })
+      );
+      for (const list of altResults) {
+        allSources.push(...list);
+      }
+    }
   }
   const origAudioStreamKey = orionOrigResponse?.audioStreamKey || "";
   const orionRawDubs = orionOrigResponse?.dubs || rawDubResults.find((r) => Array.isArray(r?.dubs))?.dubs || [];
@@ -2542,7 +2689,1079 @@ async function resolveAnimeContent(params, deps) {
   };
 }
 
+// src/utils/vegamoviesResolver.ts
+import crypto from "node:crypto";
+var VEGAMOVIES_BASE_URL = "https://vegamovies6.co.in";
+var VEGAMOVIES_MIRRORS = [
+  "https://vegamovies6.co.in",
+  "https://vegamovies1.co.in",
+  "https://vegamovies.yt"
+];
+var VEGA_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
+function normalizeVegaSearchQuery(title) {
+  if (!title || typeof title !== "string") return "";
+  return title.replace(/['’]/g, "").replace(/[^a-zA-Z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
+}
+function normalizePhoneticHindiToken(token) {
+  if (!token || typeof token !== "string") return "";
+  return token.toLowerCase().replace(/aa/g, "a").replace(/ee/g, "i").replace(/oo/g, "u").replace(/([a-z])\1+/g, "$1").replace(/ayee|ayi|aai|eye/g, "ai");
+}
+function tokenizeVegaTitle(title) {
+  const stopWords = /* @__PURE__ */ new Set(["the", "and", "for", "with", "from"]);
+  return normalizeVegaSearchQuery(title).toLowerCase().split(" ").filter((w) => w.length >= 2 && !stopWords.has(w));
+}
+function parseVegaSearchHtml(html) {
+  if (!html || typeof html !== "string") return [];
+  const results = [];
+  const seenUrls = /* @__PURE__ */ new Set();
+  const articleRegex = /<article[\s\S]*?<\/article>/gi;
+  const articleBlocks = html.match(articleRegex);
+  if (articleBlocks && articleBlocks.length > 0) {
+    for (const block of articleBlocks) {
+      const linkMatch = block.match(
+        /href=["'](https?:\/\/(?:vegamovies\d*\.[a-z.]+|vegamovies\.[a-z]+)\/(\d+)-([a-z0-9-]+)\.html)["']/i
+      );
+      if (!linkMatch) continue;
+      const url = linkMatch[1];
+      const id = linkMatch[2];
+      const slug = linkMatch[3];
+      if (seenUrls.has(url)) continue;
+      seenUrls.add(url);
+      const imgAltMatch = block.match(/<img[^>]+alt=["']([^"']+)["'][^>]*>/i);
+      const h3TextMatch = block.match(/<h[234][^>]*>[\s\S]*?<a[^>]*>([\s\S]*?)<\/a>/i);
+      const titleMatch = block.match(/title=["']([^"']+)["']/i);
+      const rawTitle = (imgAltMatch?.[1] || h3TextMatch?.[1]?.replace(/<[^>]+>/g, "") || titleMatch?.[1] || slug.replace(/-/g, " ")).replace(/&amp;/g, "&").replace(/\s+/g, " ").trim();
+      const posterMatch = block.match(/<img[^>]+(?:data-src|src)=["']([^"']+)["'][^>]*>/i);
+      let posterUrl = posterMatch?.[1] || "";
+      if (posterUrl && posterUrl.startsWith("/")) {
+        try {
+          posterUrl = new URL(posterUrl, url).toString();
+        } catch {
+          posterUrl = `${VEGAMOVIES_BASE_URL}${posterUrl}`;
+        }
+      }
+      const yearMatch = rawTitle.match(/\b(19\d{2}|20\d{2})\b/) || url.match(/-(19\d{2}|20\d{2})-/);
+      const year = yearMatch ? yearMatch[1] : "";
+      const qualityMatch = rawTitle.match(/\b(4K|2160p|1080p|720p|480p|WEB-DL|BluRay|HDRip|HDTC)\b/i);
+      const qualityBadge = qualityMatch ? qualityMatch[1].toUpperCase() : "HD";
+      const ratingMatch = block.match(/(\d+(?:\.\d+)?)\/10/);
+      const rating = ratingMatch ? ratingMatch[1] : "";
+      const lowerCheck = `${rawTitle} ${url}`.toLowerCase();
+      const isSeries = /\b(season|s\d{1,2}|ep\s*-?\s*\d+|all-episodes|tv-show|web-series|series)\b/i.test(
+        lowerCheck
+      );
+      results.push({
+        id,
+        url,
+        title: rawTitle,
+        year,
+        qualityBadge,
+        rating,
+        posterUrl,
+        isSeries
+      });
+    }
+  }
+  const postLinkRegex = /href=["'](https?:\/\/(?:vegamovies\d*\.[a-z.]+|vegamovies\.[a-z]+)\/(\d+)-([a-z0-9-]+)\.html)["']/gi;
+  let match;
+  while ((match = postLinkRegex.exec(html)) !== null) {
+    const url = match[1];
+    const id = match[2];
+    const slug = match[3];
+    if (seenUrls.has(url)) continue;
+    seenUrls.add(url);
+    const idx = match.index;
+    const block = html.slice(Math.max(0, idx - 400), Math.min(html.length, idx + 700));
+    const imgAltMatch = block.match(/<img[^>]+alt=["']([^"']+)["'][^>]*>/i);
+    const h3Match = block.match(/<h[234][^>]*>[\s\S]*?<a[^>]*>([\s\S]*?)<\/a>/i);
+    const titleMatch = block.match(/title=["']([^"']+)["']/i);
+    const rawTitle = (imgAltMatch?.[1] || h3Match?.[1]?.replace(/<[^>]+>/g, "") || titleMatch?.[1] || slug.replace(/-/g, " ")).replace(/&amp;/g, "&").replace(/\s+/g, " ").trim();
+    const posterMatch = block.match(/<img[^>]+(?:data-src|src)=["']([^"']+)["'][^>]*>/i);
+    let posterUrl = posterMatch?.[1] || "";
+    if (posterUrl && posterUrl.startsWith("/")) {
+      try {
+        posterUrl = new URL(posterUrl, url).toString();
+      } catch {
+        posterUrl = `${VEGAMOVIES_BASE_URL}${posterUrl}`;
+      }
+    }
+    const yearMatch = rawTitle.match(/\b(19\d{2}|20\d{2})\b/) || url.match(/-(19\d{2}|20\d{2})-/);
+    const year = yearMatch ? yearMatch[1] : "";
+    const qualityMatch = rawTitle.match(/\b(4K|2160p|1080p|720p|480p|WEB-DL|BluRay|HDRip|HDTC)\b/i);
+    const qualityBadge = qualityMatch ? qualityMatch[1].toUpperCase() : "HD";
+    const ratingMatch = block.match(/(\d+(?:\.\d+)?)\/10/);
+    const rating = ratingMatch ? ratingMatch[1] : "";
+    const lowerCheck = `${rawTitle} ${url}`.toLowerCase();
+    const isSeries = /\b(season|s\d{1,2}|ep\s*-?\s*\d+|all-episodes|tv-show|web-series|series)\b/i.test(
+      lowerCheck
+    );
+    results.push({
+      id,
+      url,
+      title: rawTitle,
+      year,
+      qualityBadge,
+      rating,
+      posterUrl,
+      isSeries
+    });
+  }
+  return results;
+}
+function scoreVegaCandidatePost(postUrl, postTitle, target) {
+  const combined = `${postTitle} ${postUrl}`.toLowerCase();
+  const slugPart = (postUrl.split("/").pop() || "").replace(/^\d+-|\.html$/g, "").toLowerCase();
+  if (target.postId && /^\d+$/.test(target.postId) && postUrl.includes(`/${target.postId}-`)) {
+    return 500;
+  }
+  const candidateTitles = [target.title, target.originalTitle].filter(
+    (t) => Boolean(t && t.trim())
+  );
+  if (candidateTitles.length === 0) return 0;
+  const postTokens = tokenizeVegaTitle(`${postTitle} ${slugPart.replace(/-/g, " ")}`);
+  const postTokenSet = new Set(postTokens);
+  const postPhoneticSet = new Set(postTokens.map(normalizePhoneticHindiToken));
+  let bestOverlapRatio = 0;
+  for (const candTitle of candidateTitles) {
+    const tokens = tokenizeVegaTitle(candTitle);
+    if (tokens.length === 0) continue;
+    let matchedTokens = 0;
+    for (const token of tokens) {
+      if (postTokenSet.has(token)) {
+        matchedTokens++;
+      } else {
+        const phonetic = normalizePhoneticHindiToken(token);
+        if (phonetic.length >= 2 && postPhoneticSet.has(phonetic)) {
+          matchedTokens++;
+        }
+      }
+    }
+    const ratio = matchedTokens / tokens.length;
+    if (ratio > bestOverlapRatio) {
+      bestOverlapRatio = ratio;
+    }
+  }
+  if (bestOverlapRatio < 0.65) {
+    return 0;
+  }
+  const isSeriesPost = /\b(season[-\s]*\d+|s0?\d+|ep[-\s]*\d+|all[-\s]*episodes|tv[-\s]*show)\b/i.test(combined);
+  if (target.mediaType === "movie" && isSeriesPost) {
+    return 0;
+  }
+  let score = Math.round(bestOverlapRatio * 100);
+  if (target.mediaType === "tv") {
+    const sNum = Number(target.season) || 1;
+    const padded = sNum < 10 ? `0${sNum}` : `${sNum}`;
+    const seasonRegex = new RegExp(
+      `\\b(season[-\\s]*0?${sNum}|s${padded}|s${sNum})\\b`,
+      "i"
+    );
+    if (seasonRegex.test(combined)) {
+      score += 60;
+    } else if (isSeriesPost) {
+      return 0;
+    }
+  }
+  if (target.year) {
+    if (combined.includes(target.year)) {
+      score += 35;
+    } else {
+      const postYearMatch = slugPart.match(/\b(19\d{2}|20\d{2})\b/);
+      if (postYearMatch && postYearMatch[1] !== target.year && target.mediaType === "movie") {
+        const yearDiff = Math.abs(Number(postYearMatch[1]) - Number(target.year));
+        if (yearDiff > 2) {
+          return 0;
+        }
+        score -= 40;
+      }
+    }
+  }
+  if (/\b(web-?dl|bluray|brrip|ds4k)\b/i.test(combined)) {
+    score += 20;
+  }
+  if (/\b(camrip|hdcam|hdtc|hdts)\b/i.test(combined)) {
+    score -= 15;
+  }
+  if (/\b(dual[-\s]*audio|hindi)\b/i.test(combined)) {
+    score += 10;
+  }
+  return score;
+}
+function extractVegaDetailMetadata(html) {
+  if (!html || typeof html !== "string") {
+    return { imdbId: null, fastDlLinks: [], nexDriveLinks: [], languages: [] };
+  }
+  const indMatch = html.match(/IndStreamPlayerConfigs[\s\S]*?src:\s*['"](tt\d+)['"]/i) || html.match(/imdb\.com\/title\/(tt\d+)/i) || html.match(/\/play\/(tt\d+)/i);
+  const imdbId = indMatch ? indMatch[1].trim() : null;
+  const detectedLangs = detectAllStreamLanguages(html.slice(0, 12e3)).map((l) => l.code);
+  const parseContextQuality = (contextText) => {
+    const clean = contextText.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+    const qMatch = clean.match(/\b(2160p|4K|1080p|720p|480p)\b/i);
+    const quality = qMatch ? qMatch[1].toUpperCase() === "4K" ? "2160p" : qMatch[1].toLowerCase() : "720p";
+    const isHevc = /\b(hevc|x265|10\s*bit)\b/i.test(clean);
+    const sizeMatch = clean.match(/\[?(\d+(?:\.\d+)?\s*(?:MB|GB))\]?/i);
+    const sizeFormatted = sizeMatch ? sizeMatch[1].replace(/\s+/g, "").replace(/(MB|GB)$/i, " $1").toUpperCase() : void 0;
+    const sizeStr = sizeMatch ? ` [${sizeMatch[1]}]` : "";
+    return {
+      quality,
+      isHevc,
+      sizeFormatted,
+      label: `Vegamovies | ${quality}${sizeStr}${isHevc ? " HEVC" : " x264"}`
+    };
+  };
+  const getNearestHeadingContext = (idx) => {
+    const before = html.slice(Math.max(0, idx - 500), idx);
+    const headingMatches = Array.from(
+      before.matchAll(/<(?:h[2-5]|p)[^>]*>([\s\S]*?)<\/(?:h[2-5]|p)>/gi)
+    );
+    let qualityHeading = "";
+    for (let i = headingMatches.length - 1; i >= 0; i--) {
+      const txt = headingMatches[i][1].replace(/<[^>]+>/g, " ");
+      if (/\b(2160p|4K|1080p|720p|480p|hevc|x264|x265|10\s*bit)\b/i.test(txt)) {
+        qualityHeading = txt;
+        break;
+      }
+    }
+    if (!qualityHeading) {
+      const lastHeadingIdx = Math.max(
+        before.lastIndexOf("<h2"),
+        before.lastIndexOf("<h3"),
+        before.lastIndexOf("<h4"),
+        before.lastIndexOf("<h5"),
+        before.lastIndexOf("<hr")
+      );
+      qualityHeading = lastHeadingIdx >= 0 ? before.slice(lastHeadingIdx) : before.slice(-250);
+    }
+    const closeAnchorIdx = html.indexOf("</a>", idx);
+    const afterEnd = closeAnchorIdx > idx ? Math.min(closeAnchorIdx + 4, idx + 160) : Math.min(html.length, idx + 100);
+    const after = html.slice(idx, afterEnd);
+    return `${qualityHeading} ${after}`;
+  };
+  const fastDlLinks = [];
+  const seenFast = /* @__PURE__ */ new Set();
+  const fastMatches = Array.from(
+    html.matchAll(/href=["'](https?:\/\/fast-dl\.[a-z]+\/dl\/[a-zA-Z0-9]+)["']/gi)
+  );
+  for (const m of fastMatches) {
+    const url = m[1];
+    if (seenFast.has(url)) continue;
+    seenFast.add(url);
+    const idx = m.index || 0;
+    const meta = parseContextQuality(getNearestHeadingContext(idx));
+    fastDlLinks.push({ url, ...meta });
+  }
+  const nexDriveLinks = [];
+  const seenNex = /* @__PURE__ */ new Set();
+  const nexMatches = Array.from(
+    html.matchAll(/href=["'](https?:\/\/nexdrive\.[a-z]+\/genxfm[a-zA-Z0-9]+\/?)["']/gi)
+  );
+  for (const m of nexMatches) {
+    const url = m[1];
+    if (seenNex.has(url)) continue;
+    seenNex.add(url);
+    const idx = m.index || 0;
+    const meta = parseContextQuality(getNearestHeadingContext(idx));
+    nexDriveLinks.push({ url, ...meta });
+  }
+  return {
+    imdbId,
+    fastDlLinks,
+    nexDriveLinks,
+    languages: detectedLangs
+  };
+}
+function extractFastDlFromNexDriveHtml(html, mediaType, episode = 1) {
+  if (!html || typeof html !== "string") return [];
+  if (mediaType === "tv") {
+    const targetEp = Math.max(1, Number(episode) || 1);
+    const paddedEp = targetEp < 10 ? `0${targetEp}` : `${targetEp}`;
+    const sections = html.match(/<section[^>]*class=["'][^"']*episode[^"']*["'][\s\S]*?<\/section>/gi) || [];
+    for (const sec of sections) {
+      const epHeaderMatch = sec.match(/Episodes?:\s*0?(\d+)\b/i) || sec.match(/\bEP(?:ISODE)?\s*[-:]?\s*0?(\d+)\b/i);
+      if (epHeaderMatch && Number.parseInt(epHeaderMatch[1], 10) === targetEp) {
+        const links = Array.from(
+          sec.matchAll(/https?:\/\/fast-dl\.[a-z]+\/dl\/[a-zA-Z0-9]+/gi)
+        ).map((m) => m[0]);
+        if (links.length > 0) return Array.from(new Set(links));
+      }
+    }
+    const headingRegex = new RegExp(
+      `(?:Episodes?\\s*:\\s*(?:${targetEp}|${paddedEp})|\\bEpisode\\s+(?:${targetEp}|${paddedEp})\\b)[\\s\\S]{0,600}?(https?:\\/\\/fast-dl\\.[a-z]+\\/dl\\/[a-zA-Z0-9]+)`,
+      "i"
+    );
+    const fallbackMatch = html.match(headingRegex);
+    if (fallbackMatch?.[1]) {
+      return [fallbackMatch[1]];
+    }
+    return [];
+  }
+  const allLinks = Array.from(
+    html.matchAll(/https?:\/\/fast-dl\.[a-z]+\/dl\/[a-zA-Z0-9]+/gi)
+  ).map((m) => m[0]);
+  return Array.from(new Set(allLinks));
+}
+function parseFastDlButtonHref(html, baseUrl) {
+  if (!html || typeof html !== "string") return null;
+  const hrefMatch = html.match(/id=["'](?:download-button|vd)["'][^>]+href=["']([^"']+)["']/i) || html.match(/href=["'](dl\.php\?[^"']+)["']/i);
+  if (!hrefMatch?.[1]) return null;
+  try {
+    const rawHref = hrefMatch[1].replace(/&amp;/g, "&").trim();
+    const baseDir = baseUrl.endsWith("/") ? baseUrl : `${baseUrl.slice(0, baseUrl.lastIndexOf("/") + 1)}`;
+    const resolved = rawHref.startsWith("http") ? new URL(rawHref) : new URL(rawHref, baseDir);
+    resolved.searchParams.set("prepare", "1");
+    resolved.searchParams.set("hash", crypto.randomBytes(12).toString("hex"));
+    resolved.searchParams.set("cfs", crypto.randomBytes(8).toString("hex"));
+    return resolved.toString();
+  } catch {
+    return null;
+  }
+}
+async function resolveFastDlCodeToStreamUrl(fastDlUrl, parentSignal) {
+  try {
+    const ctrl1 = new AbortController();
+    const t1 = setTimeout(() => ctrl1.abort(), 3200);
+    if (parentSignal) {
+      if (parentSignal.aborted) {
+        clearTimeout(t1);
+        return null;
+      }
+      parentSignal.addEventListener("abort", () => ctrl1.abort(), { once: true });
+    }
+    const res1 = await fetch(fastDlUrl, {
+      headers: {
+        "User-Agent": VEGA_USER_AGENT,
+        Referer: `${VEGAMOVIES_BASE_URL}/`
+      },
+      signal: ctrl1.signal
+    });
+    clearTimeout(t1);
+    if (!res1.ok) return null;
+    const cookies = res1.headers.getSetCookie?.() || [];
+    const cookieHeader = Array.isArray(cookies) ? cookies.map((c) => c.split(";")[0]).join("; ") : "";
+    const html = await res1.text();
+    const prepareUrl = parseFastDlButtonHref(html, res1.url || fastDlUrl);
+    if (!prepareUrl) return null;
+    const ctrl2 = new AbortController();
+    const t2 = setTimeout(() => ctrl2.abort(), 3500);
+    if (parentSignal) {
+      parentSignal.addEventListener("abort", () => ctrl2.abort(), { once: true });
+    }
+    const res2 = await fetch(prepareUrl, {
+      headers: {
+        "User-Agent": VEGA_USER_AGENT,
+        Accept: "application/json",
+        Referer: res1.url || fastDlUrl,
+        ...cookieHeader ? { Cookie: cookieHeader } : {}
+      },
+      signal: ctrl2.signal
+    });
+    clearTimeout(t2);
+    if (!res2.ok) return null;
+    const data = await res2.json().catch(() => null);
+    if (data && data.ok && typeof data.url === "string" && data.url.startsWith("http")) {
+      return data.url.trim();
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+async function resolveVegaMoviesWithPost(params) {
+  const { title, originalTitle, year, imdbId, mediaType, season = 1, episode = 1, signal } = params;
+  const cleanQuery = normalizeVegaSearchQuery(title);
+  const cleanOrigQuery = normalizeVegaSearchQuery(originalTitle || "");
+  const cleanId = String(params.tmdbId || "").trim();
+  try {
+    let cards = [];
+    let searchUrlUsed = "";
+    const addUniqueQuery = (list, q) => {
+      const trimmed = q.trim();
+      if (trimmed && trimmed.toLowerCase() !== "movie" && trimmed.toLowerCase() !== "series" && !list.some((existing) => existing.toLowerCase() === trimmed.toLowerCase())) {
+        list.push(trimmed);
+      }
+    };
+    const queriesToTry = [];
+    if (cleanOrigQuery) {
+      addUniqueQuery(queriesToTry, cleanOrigQuery);
+    }
+    if (cleanQuery) {
+      addUniqueQuery(queriesToTry, cleanQuery);
+      if (/\bnai\b/i.test(cleanQuery)) {
+        addUniqueQuery(queriesToTry, cleanQuery.replace(/\bnai\b/gi, "Nayi"));
+      } else if (/\bnayi\b/i.test(cleanQuery)) {
+        addUniqueQuery(queriesToTry, cleanQuery.replace(/\bnayi\b/gi, "Nai"));
+      }
+      if (year && !cleanQuery.includes(year)) {
+        addUniqueQuery(queriesToTry, `${cleanQuery} ${year}`);
+      }
+      const words = tokenizeVegaTitle(cleanQuery).filter((w) => w.length >= 4 && !/^\d+$/.test(w)).sort((a, b) => b.length - a.length);
+      if (words.length > 0 && cleanQuery.includes(" ")) {
+        addUniqueQuery(queriesToTry, words[0]);
+      }
+    }
+    if (cleanId) {
+      addUniqueQuery(queriesToTry, cleanId);
+    }
+    for (const mirror of VEGAMOVIES_MIRRORS) {
+      if (cards.length > 0 || signal?.aborted) break;
+      let mirrorReachable = false;
+      for (const q of queriesToTry) {
+        if (cards.length > 0 || signal?.aborted) break;
+        if (/^\d+$/.test(q)) continue;
+        try {
+          const searchCtrl = new AbortController();
+          const searchTimer = setTimeout(() => searchCtrl.abort(), 3200);
+          if (signal) {
+            signal.addEventListener("abort", () => searchCtrl.abort(), { once: true });
+          }
+          const sUrl = `${mirror}/?do=search&subaction=search&story=${encodeURIComponent(q)}`;
+          const searchRes = await fetch(sUrl, {
+            headers: {
+              "User-Agent": VEGA_USER_AGENT,
+              Referer: `${mirror}/`
+            },
+            signal: searchCtrl.signal
+          });
+          clearTimeout(searchTimer);
+          if (searchRes.ok) {
+            mirrorReachable = true;
+            const html = await searchRes.text();
+            const parsed = parseVegaSearchHtml(html);
+            const matching = parsed.filter(
+              (card) => scoreVegaCandidatePost(card.url, card.title, {
+                title,
+                originalTitle,
+                postId: cleanId,
+                year,
+                mediaType,
+                season
+              }) > 0
+            );
+            if (matching.length > 0) {
+              cards = parsed;
+              searchUrlUsed = sUrl;
+              break;
+            }
+          }
+        } catch {
+        }
+      }
+      if (cards.length === 0 && /^\d{4,6}$/.test(cleanId) && !signal?.aborted) {
+        try {
+          const newsCtrl = new AbortController();
+          const newsTimer = setTimeout(() => newsCtrl.abort(), 2500);
+          if (signal) {
+            signal.addEventListener("abort", () => newsCtrl.abort(), { once: true });
+          }
+          const newsRes = await fetch(`${mirror}/index.php?newsid=${cleanId}`, {
+            method: "HEAD",
+            redirect: "manual",
+            headers: { "User-Agent": VEGA_USER_AGENT },
+            signal: newsCtrl.signal
+          });
+          clearTimeout(newsTimer);
+          const loc = newsRes.headers.get("location") || "";
+          const locMatch = loc.match(/\/(\d+)-([a-z0-9-]+)\.html/i);
+          if (locMatch && locMatch[1] === cleanId) {
+            mirrorReachable = true;
+            const fullPostUrl = loc.startsWith("http") ? loc : `${mirror}${loc.startsWith("/") ? "" : "/"}${loc}`;
+            const slugTitle = locMatch[2].replace(/-/g, " ");
+            const yearMatch = slugTitle.match(/\b(19\d{2}|20\d{2})\b/);
+            cards = [
+              {
+                id: cleanId,
+                url: fullPostUrl,
+                title: slugTitle,
+                year: yearMatch ? yearMatch[1] : "",
+                qualityBadge: "HD",
+                rating: "",
+                posterUrl: "",
+                isSeries: /\b(season|s\d{1,2}|series)\b/i.test(slugTitle)
+              }
+            ];
+            searchUrlUsed = `${mirror}/`;
+          }
+        } catch {
+        }
+      }
+      if (cards.length === 0 && !signal?.aborted) {
+        try {
+          const homeCtrl = new AbortController();
+          const homeTimer = setTimeout(() => homeCtrl.abort(), 3200);
+          if (signal) {
+            signal.addEventListener("abort", () => homeCtrl.abort(), { once: true });
+          }
+          const homeRes = await fetch(`${mirror}/`, {
+            headers: {
+              "User-Agent": VEGA_USER_AGENT
+            },
+            signal: homeCtrl.signal
+          });
+          clearTimeout(homeTimer);
+          if (homeRes.ok) {
+            mirrorReachable = true;
+            const html = await homeRes.text();
+            const parsed = parseVegaSearchHtml(html);
+            const matching = parsed.filter(
+              (card) => scoreVegaCandidatePost(card.url, card.title, {
+                title,
+                originalTitle,
+                postId: cleanId,
+                year,
+                mediaType,
+                season
+              }) > 0
+            );
+            if (matching.length > 0) {
+              cards = parsed;
+              searchUrlUsed = `${mirror}/`;
+            }
+          }
+        } catch {
+        }
+      }
+      if (mirrorReachable) {
+        break;
+      }
+    }
+    if (cards.length === 0) {
+      return { sources: [], matchedPost: null, imdbId: null };
+    }
+    const scored = cards.map((card) => ({
+      card,
+      score: scoreVegaCandidatePost(card.url, card.title, {
+        title,
+        originalTitle,
+        postId: cleanId,
+        year,
+        mediaType,
+        season
+      })
+    })).filter((item) => item.score > 0).sort((a, b) => b.score - a.score);
+    if (scored.length === 0) {
+      return { sources: [], matchedPost: null, imdbId: null };
+    }
+    const bestCandidate = scored[0].card;
+    let extractedImdbId = null;
+    for (const candidate of scored.slice(0, 2)) {
+      if (signal?.aborted) break;
+      try {
+        const detailCtrl = new AbortController();
+        const detailTimer = setTimeout(() => detailCtrl.abort(), 2800);
+        if (signal) {
+          signal.addEventListener("abort", () => detailCtrl.abort(), { once: true });
+        }
+        const detailRes = await fetch(candidate.card.url, {
+          headers: {
+            "User-Agent": VEGA_USER_AGENT,
+            Referer: searchUrlUsed || `${VEGAMOVIES_BASE_URL}/`
+          },
+          signal: detailCtrl.signal
+        });
+        clearTimeout(detailTimer);
+        if (!detailRes.ok) continue;
+        const detailHtml = await detailRes.text();
+        const detailMeta = extractVegaDetailMetadata(detailHtml);
+        if (detailMeta.imdbId) {
+          extractedImdbId = detailMeta.imdbId;
+        }
+        if (candidate.card.id !== cleanId && imdbId && detailMeta.imdbId && imdbId.toLowerCase() !== detailMeta.imdbId.toLowerCase()) {
+          continue;
+        }
+        const fastDlCandidates = [];
+        if (mediaType === "movie" && detailMeta.fastDlLinks.length > 0) {
+          fastDlCandidates.push(...detailMeta.fastDlLinks);
+        }
+        if (fastDlCandidates.length === 0 && detailMeta.nexDriveLinks.length > 0) {
+          const nonHevcNex = detailMeta.nexDriveLinks.filter((n) => !n.isHevc);
+          const nexPool = nonHevcNex.length > 0 ? nonHevcNex : detailMeta.nexDriveLinks;
+          const sortedNex = [...nexPool].sort((a, b) => {
+            if (a.isHevc !== b.isHevc) return a.isHevc ? 1 : -1;
+            const qScore = (q) => q === "2160p" ? 4 : q === "1080p" ? 3 : q === "720p" ? 2 : 1;
+            return qScore(b.quality) - qScore(a.quality);
+          });
+          const chosenNex = [];
+          const seenQuals = /* @__PURE__ */ new Set();
+          for (const item of sortedNex) {
+            if (!seenQuals.has(item.quality) && chosenNex.length < 4) {
+              seenQuals.add(item.quality);
+              chosenNex.push(item);
+            }
+          }
+          for (const item of sortedNex) {
+            if (chosenNex.length >= 4) break;
+            if (!chosenNex.includes(item)) chosenNex.push(item);
+          }
+          const nexPromises = chosenNex.map(async (nexItem) => {
+            try {
+              const nexCtrl = new AbortController();
+              const nexTimer = setTimeout(() => nexCtrl.abort(), 2800);
+              if (signal) {
+                signal.addEventListener("abort", () => nexCtrl.abort(), { once: true });
+              }
+              const nexRes = await fetch(nexItem.url, {
+                headers: {
+                  "User-Agent": VEGA_USER_AGENT,
+                  Referer: candidate.card.url
+                },
+                signal: nexCtrl.signal
+              });
+              clearTimeout(nexTimer);
+              if (!nexRes.ok) return [];
+              const nexHtml = await nexRes.text();
+              const extractedUrls = extractFastDlFromNexDriveHtml(nexHtml, mediaType, episode);
+              return extractedUrls.map((u) => ({
+                url: u,
+                quality: nexItem.quality,
+                label: nexItem.label,
+                isHevc: nexItem.isHevc,
+                sizeFormatted: nexItem.sizeFormatted
+              }));
+            } catch {
+              return [];
+            }
+          });
+          const nestedLists = await Promise.all(nexPromises);
+          for (const list of nestedLists) {
+            fastDlCandidates.push(...list);
+          }
+        }
+        if (fastDlCandidates.length === 0) continue;
+        fastDlCandidates.sort((a, b) => {
+          if (a.isHevc !== b.isHevc) return a.isHevc ? 1 : -1;
+          const qOrder = (q) => q === "2160p" ? 4 : q === "1080p" ? 3 : q === "720p" ? 2 : 1;
+          return qOrder(b.quality) - qOrder(a.quality);
+        });
+        const pickedFastDl = [];
+        const seenFastQuals = /* @__PURE__ */ new Set();
+        for (const cand of fastDlCandidates) {
+          if (!seenFastQuals.has(cand.quality) && pickedFastDl.length < 4) {
+            seenFastQuals.add(cand.quality);
+            pickedFastDl.push(cand);
+          }
+        }
+        for (const cand of fastDlCandidates) {
+          if (pickedFastDl.length >= 4) break;
+          if (!pickedFastDl.includes(cand)) {
+            pickedFastDl.push(cand);
+          }
+        }
+        const resolvedStreams = await Promise.all(
+          pickedFastDl.map(async (item, idx) => {
+            const directUrl = await resolveFastDlCodeToStreamUrl(item.url, signal);
+            if (!directUrl) return null;
+            const singleLang = detectSingleStreamLanguage(candidate.card.title);
+            const multiLangs = Array.from(
+              /* @__PURE__ */ new Set([
+                ...detailMeta.languages,
+                ...detectAllStreamLanguages(candidate.card.title).map((l) => l.code)
+              ])
+            );
+            return {
+              id: `vegamovies-direct-${idx}`,
+              provider: "vegamovies",
+              url: directUrl,
+              quality: item.quality || "1080p",
+              label: `${item.label} (${candidate.card.title.includes("Hindi") ? "Hindi Dual" : "Original"})`,
+              type: "mp4",
+              isEmbed: false,
+              onlyHevc: item.isHevc,
+              sizeFormatted: item.sizeFormatted,
+              lang: singleLang?.code || (multiLangs.includes("hi") ? "hi" : "en"),
+              langName: singleLang?.name || (multiLangs.includes("hi") ? "Hindi" : "English"),
+              multiLangs: multiLangs.length > 0 ? multiLangs : ["hi", "en"]
+            };
+          })
+        );
+        const validResolved = resolvedStreams.filter(
+          (s) => s !== null
+        );
+        if (validResolved.length > 0) {
+          return {
+            sources: validResolved,
+            matchedPost: candidate.card,
+            imdbId: extractedImdbId
+          };
+        }
+      } catch {
+      }
+    }
+    return {
+      sources: [],
+      matchedPost: bestCandidate,
+      imdbId: extractedImdbId
+    };
+  } catch {
+    return { sources: [], matchedPost: null, imdbId: null };
+  }
+}
+
+// src/services/downloadEngineTypes.ts
+var LANGUAGE_NAME_MAP = {
+  en: "English",
+  hi: "Hindi",
+  ta: "Tamil",
+  te: "Telugu",
+  bn: "Bengali",
+  ml: "Malayalam",
+  kn: "Kannada",
+  ja: "Japanese",
+  ko: "Korean",
+  es: "Spanish",
+  fr: "French",
+  de: "German",
+  pt: "Portuguese",
+  it: "Italian",
+  ru: "Russian",
+  id: "Indonesian",
+  tl: "Tagalog",
+  zh: "Chinese",
+  ar: "Arabic",
+  tr: "Turkish",
+  th: "Thai",
+  vi: "Vietnamese"
+};
+function estimateMediaSize(durationSeconds, quality) {
+  const mins = Math.max(1, durationSeconds / 60);
+  switch (quality) {
+    case "2160p":
+      return `${(mins * 0.08).toFixed(2)} GB`;
+    case "1080p":
+      return `${(mins * 0.022).toFixed(2)} GB`;
+    case "720p":
+      return `${Math.round(mins * 11.5)} MB`;
+    case "480p":
+      return `${Math.round(mins * 6.2)} MB`;
+    case "360p":
+      return `${Math.round(mins * 3.8)} MB`;
+    default:
+      return `${(mins * 0.02).toFixed(2)} GB`;
+  }
+}
+function extractDirectCdnUrlFromProxy(rawUrl) {
+  if (!rawUrl || typeof rawUrl !== "string") return null;
+  let current = rawUrl.trim();
+  for (let depth = 0; depth < 3; depth++) {
+    if (current.startsWith("https://video-downloads.googleusercontent.com/")) {
+      return current;
+    }
+    try {
+      const parsed = new URL(current, "http://localhost:3000");
+      const inner = parsed.searchParams.get("sourceUrl") || parsed.searchParams.get("url");
+      if (inner && inner !== current) {
+        current = inner.trim();
+        continue;
+      }
+    } catch {
+    }
+    break;
+  }
+  if (current.startsWith("https://video-downloads.googleusercontent.com/")) {
+    return current;
+  }
+  return null;
+}
+function buildDownloadProxyUrl(params) {
+  const qs = new URLSearchParams({
+    mediaType: params.mediaType,
+    tmdbId: params.tmdbId,
+    lang: params.lang,
+    quality: params.quality,
+    title: params.title
+  });
+  if (params.mediaType === "tv") {
+    qs.set("season", String(params.season || 1));
+    qs.set("episode", String(params.episode || 1));
+  }
+  if (params.rawUrl && !params.rawUrl.startsWith("blob:") && (params.rawUrl.startsWith("http://") || params.rawUrl.startsWith("https://") || params.rawUrl.startsWith("/api/"))) {
+    const directCdn = extractDirectCdnUrlFromProxy(params.rawUrl);
+    qs.set("sourceUrl", directCdn || params.rawUrl);
+  }
+  return `/api/download/file?${qs.toString()}`;
+}
+function extractHlsSegmentUrls(m3u8Text, baseUrl) {
+  const urls = [];
+  const lines = m3u8Text.split(/\r?\n/);
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    if (line.startsWith("#EXT-X-MAP:")) {
+      const uriMatch = line.match(/URI="([^"]+)"/i);
+      if (uriMatch && uriMatch[1]) {
+        try {
+          urls.push(new URL(uriMatch[1], baseUrl).toString());
+        } catch {
+        }
+      }
+      continue;
+    }
+    if (!line.startsWith("#")) {
+      try {
+        urls.push(new URL(line, baseUrl).toString());
+      } catch {
+      }
+    }
+  }
+  return urls;
+}
+function extractDashSegmentUrls(mpdXml, contentType, preferredHeight = 720) {
+  if (!mpdXml || !mpdXml.includes("<MPD")) return [];
+  const adaptationRegex = /<AdaptationSet\b([^>]*)>([\s\S]*?)<\/AdaptationSet>/gi;
+  let match;
+  while ((match = adaptationRegex.exec(mpdXml)) !== null) {
+    const attrs = match[1] || "";
+    const body = match[2] || "";
+    const isTargetType = attrs.toLowerCase().includes(`contenttype="${contentType}"`) || body.toLowerCase().includes(`mimetype="${contentType}/`);
+    if (!isTargetType) continue;
+    const repRegex = /<Representation\b([^>]*)>([\s\S]*?)<\/Representation>/gi;
+    const candidates = [];
+    let repMatch;
+    while ((repMatch = repRegex.exec(body)) !== null) {
+      const repAttrs = repMatch[1] || "";
+      const repBody = repMatch[2] || "";
+      const idMatch = repAttrs.match(/\bid="([^"]+)"/i);
+      const heightMatch = repAttrs.match(/\bheight="(\d+)"/i);
+      candidates.push({
+        id: idMatch ? idMatch[1] : "0",
+        height: heightMatch ? Number(heightMatch[1]) : 0,
+        content: repBody || body
+      });
+    }
+    if (candidates.length === 0) continue;
+    if (contentType === "video") {
+      candidates.sort(
+        (a, b) => Math.abs(a.height - preferredHeight) - Math.abs(b.height - preferredHeight)
+      );
+    }
+    const chosen = candidates[0];
+    const templateScope = chosen.content.includes("<SegmentTemplate") ? chosen.content : body;
+    const tplMatch = templateScope.match(/<SegmentTemplate\b([^>]*)>([\s\S]*?)<\/SegmentTemplate>/i);
+    if (!tplMatch) continue;
+    const tplAttrs = tplMatch[1] || "";
+    const tplBody = tplMatch[2] || "";
+    const initMatch = tplAttrs.match(/\binitialization="([^"]+)"/i);
+    const mediaMatch = tplAttrs.match(/\bmedia="([^"]+)"/i);
+    if (!mediaMatch) continue;
+    const startNumMatch = tplAttrs.match(/\bstartNumber="(\d+)"/i);
+    const startNumber = startNumMatch ? Number(startNumMatch[1]) : 1;
+    const unescapeXmlUrl = (raw) => raw.replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/\$RepresentationID\$/g, chosen.id);
+    const urls = [];
+    if (initMatch && initMatch[1]) {
+      urls.push(unescapeXmlUrl(initMatch[1]));
+    }
+    const mediaTemplate = unescapeXmlUrl(mediaMatch[1]);
+    let totalSegments = 0;
+    const sRegex = /<S\b([^>]*)\/?>/gi;
+    let sMatch;
+    while ((sMatch = sRegex.exec(tplBody)) !== null) {
+      const sAttrs = sMatch[1] || "";
+      const rMatch = sAttrs.match(/\br="(-?\d+)"/i);
+      const repeat = rMatch ? Number(rMatch[1]) : 0;
+      totalSegments += 1 + Math.max(0, repeat);
+    }
+    if (totalSegments <= 0) continue;
+    for (let i = 0; i < totalSegments; i++) {
+      const segNum = startNumber + i;
+      const segUrl = mediaTemplate.replace(
+        /\$Number(?:%0(\d+)d)?\$/g,
+        (_full, widthStr) => widthStr ? String(segNum).padStart(Number(widthStr), "0") : String(segNum)
+      );
+      urls.push(segUrl);
+    }
+    return urls;
+  }
+  return [];
+}
+
+// src/services/downloadEngineResolver.ts
+function parseQualityHeight(q) {
+  const clean = (q || "").toLowerCase().trim();
+  if (clean === "4k" || clean === "2160p") return 2160;
+  const m = clean.match(/(\d{3,4})/);
+  return m ? Number(m[1]) : 1080;
+}
+async function resolveDownloadableMedia(options, fetchDetailsFn) {
+  const {
+    mediaType,
+    tmdbId,
+    season = 1,
+    episode = 1,
+    title: reqTitle,
+    year: reqYear,
+    currentPlaybackSource,
+    playbackUrl,
+    availableDubs = [],
+    audioTracks = [],
+    qualities = [],
+    resolvedDirectSources = []
+  } = options;
+  let title = reqTitle || (mediaType === "tv" ? "Series" : "Movie");
+  let year = reqYear || "2024";
+  let episodeName = "";
+  let durationSeconds = 120 * 60;
+  try {
+    const details = await fetchDetailsFn(mediaType, tmdbId);
+    if (details && !details.fallback) {
+      title = details.title || details.name || title;
+      const date = details.release_date || details.first_air_date || "";
+      if (date) {
+        year = date.split("-")[0] || year;
+      }
+      if (details.runtime) {
+        durationSeconds = details.runtime * 60;
+      }
+    } else if (details && !reqTitle) {
+      title = details.title || details.name || title;
+      const date = details.release_date || details.first_air_date || "";
+      if (date) {
+        year = date.split("-")[0] || year;
+      }
+      if (details.runtime) {
+        durationSeconds = details.runtime * 60;
+      }
+    }
+  } catch {
+    if (!reqTitle) {
+      const fallback = getMediaByTmdbId(mediaType, tmdbId);
+      if (fallback) {
+        title = fallback.title;
+        year = fallback.releaseYear;
+        if (fallback.runtimeMinutes) {
+          durationSeconds = fallback.runtimeMinutes * 60;
+        }
+      }
+    }
+  }
+  if (mediaType === "tv") {
+    episodeName = `Season ${season} Episode ${episode}`;
+  }
+  const detectedLangs = /* @__PURE__ */ new Set();
+  if (Array.isArray(availableDubs)) {
+    for (const d of availableDubs) {
+      const code = (d.code || "").toLowerCase().trim();
+      if (code && code !== "auto" && code !== "orig") {
+        detectedLangs.add(code);
+      }
+    }
+  }
+  if (Array.isArray(audioTracks)) {
+    for (const at of audioTracks) {
+      const code = (at.lang || at.label || "").toLowerCase().trim();
+      if (code && code.length <= 4 && code !== "orig") {
+        detectedLangs.add(code);
+      }
+    }
+  }
+  if (Array.isArray(resolvedDirectSources)) {
+    for (const src of resolvedDirectSources) {
+      if (src.lang && src.lang !== "orig") {
+        detectedLangs.add(src.lang.toLowerCase());
+      }
+      if (Array.isArray(src.multiLangs)) {
+        for (const ml of src.multiLangs) {
+          if (ml && ml !== "orig") detectedLangs.add(ml.toLowerCase());
+        }
+      }
+    }
+  }
+  if (detectedLangs.size === 0) {
+    for (const code of ["en", "hi", "ja", "es", "ru", "pt", "fr", "de", "ko", "ta", "te", "id", "ar"]) {
+      detectedLangs.add(code);
+    }
+  } else {
+    detectedLangs.add("en");
+    detectedLangs.add("hi");
+  }
+  const resolvedHeights = /* @__PURE__ */ new Set();
+  if (Array.isArray(qualities) && qualities.length > 0) {
+    for (const q of qualities) {
+      if (q.height > 0) resolvedHeights.add(q.height);
+    }
+  }
+  if (Array.isArray(resolvedDirectSources) && resolvedDirectSources.length > 0) {
+    for (const src of resolvedDirectSources) {
+      const h = parseQualityHeight(src.quality);
+      if (h > 0) resolvedHeights.add(h);
+    }
+  }
+  for (const stdH of [1080, 720, 480, 360]) {
+    resolvedHeights.add(stdH);
+  }
+  const standardHeights = Array.from(resolvedHeights).sort((a, b) => b - a);
+  const fallbackDirectFromPlayback = extractDirectCdnUrlFromProxy(playbackUrl);
+  const languageGroups = [];
+  for (const langCode of detectedLangs) {
+    const langName = LANGUAGE_NAME_MAP[langCode] || langCode.toUpperCase();
+    const qualityOptions = [];
+    for (const height of standardHeights) {
+      const qKey = height >= 2160 ? "2160p" : `${height}p`;
+      const label = height >= 2160 ? "2160p 4K Ultra HD" : height >= 1080 ? "1080p Full HD" : height >= 720 ? "720p HD" : height >= 480 ? "480p SD" : "360p Mobile";
+      let matchedSource;
+      let exactSource;
+      if (resolvedDirectSources.length > 0) {
+        exactSource = resolvedDirectSources.find(
+          (s) => parseQualityHeight(s.quality) === height
+        );
+        const sortedByClosest = [...resolvedDirectSources].sort(
+          (a, b) => Math.abs(parseQualityHeight(a.quality) - height) - Math.abs(parseQualityHeight(b.quality) - height)
+        );
+        matchedSource = exactSource || sortedByClosest[0];
+      }
+      const directCdnUrl = extractDirectCdnUrlFromProxy(matchedSource?.directUrl) || extractDirectCdnUrlFromProxy(matchedSource?.url) || fallbackDirectFromPlayback || void 0;
+      const rawUrlForProxy = directCdnUrl || matchedSource?.url || playbackUrl;
+      const downloadProxyUrl = buildDownloadProxyUrl({
+        mediaType,
+        tmdbId,
+        season,
+        episode,
+        lang: langCode,
+        quality: qKey,
+        title,
+        rawUrl: rawUrlForProxy
+      });
+      qualityOptions.push({
+        quality: qKey,
+        resolution: height,
+        label,
+        sizeFormatted: exactSource?.sizeFormatted || estimateMediaSize(durationSeconds, qKey),
+        format: "mp4",
+        codec: height >= 1080 ? "H.264 High@L4.1 / AAC 5.1" : "H.264 Main@L3.1 / AAC 2.0",
+        downloadUrl: downloadProxyUrl,
+        directUrl: directCdnUrl,
+        sourceProvider: currentPlaybackSource || "ZXC High-Speed Direct CDN",
+        isAuthorized: true
+      });
+    }
+    languageGroups.push({
+      langCode,
+      langName,
+      qualities: qualityOptions
+    });
+  }
+  languageGroups.sort((a, b) => {
+    if (a.langCode === "en") return -1;
+    if (b.langCode === "en") return 1;
+    if (a.langCode === "hi") return -1;
+    if (b.langCode === "hi") return 1;
+    return a.langName.localeCompare(b.langName);
+  });
+  return {
+    success: true,
+    mediaType,
+    tmdbId,
+    title,
+    year,
+    season: mediaType === "tv" ? season : void 0,
+    episode: mediaType === "tv" ? episode : void 0,
+    episodeName,
+    languages: languageGroups,
+    hasDirectDownload: true
+  };
+}
+
 // serverApp.ts
+var __filename = fileURLToPath(import.meta.url);
+var __dirname = path.dirname(__filename);
 var app = express();
 app.use(cors({ origin: true, credentials: true }));
 app.use(express.json());
@@ -2572,6 +3791,7 @@ app.use((req, _res, next) => {
   }
   next();
 });
+var CURRENT_TOKEN_ENDPOINT = "/backend/trace";
 var FIELD_MAP = {
   id: "a7f39c821d604e5b91e57b",
   fToken: "e83c4b719a5210579c1635a",
@@ -2615,25 +3835,43 @@ async function refreshFieldMapFromUpstream() {
           });
           if (!chunkRes.ok) continue;
           const js = await chunkRes.text();
-          if (!js.includes("generateFrontendToken") && !js.includes("latestDate:")) continue;
-          const mapMatch = js.match(
-            /\{id:"([a-f0-9]+)",fToken:"([a-f0-9]+)",ts:"([a-f0-9]+)",token:"([a-f0-9]+)",title:"([a-f0-9]+)",year:"([a-f0-9]+)",season:"([a-f0-9]+)",episode:"([a-f0-9]+)",imdbId:"([a-f0-9]+)",path:"([a-f0-9]+)",mediaType:"([a-f0-9]+)",date:"([a-f0-9]+)",latestDate:"([a-f0-9]+)"\}/
-          );
-          if (mapMatch) {
+          const postMatch = js.match(/post\(["'](\/backend\/[a-zA-Z0-9_~-]+)["']/);
+          if (postMatch && postMatch[1]) {
+            CURRENT_TOKEN_ENDPOINT = postMatch[1];
+          }
+          if (!js.includes("generateFrontendToken") && !js.includes("latestDate:") && !js.includes("FIELD_MAP")) continue;
+          const extractField = (key) => {
+            const m = js.match(new RegExp(`${key}:"([a-f0-9]+)"`));
+            return m ? m[1] : null;
+          };
+          const id = extractField("id");
+          const fToken = extractField("fToken");
+          const ts = extractField("ts");
+          const token = extractField("token");
+          const title = extractField("title");
+          const year = extractField("year");
+          const season = extractField("season");
+          const episode = extractField("episode");
+          const imdbId = extractField("imdbId");
+          const path2 = extractField("path");
+          const mediaType = extractField("mediaType");
+          const date = extractField("date");
+          const latestDate = extractField("latestDate");
+          if (id && ts && token && path2 && mediaType) {
             FIELD_MAP = {
-              id: mapMatch[1],
-              fToken: mapMatch[2],
-              ts: mapMatch[3],
-              token: mapMatch[4],
-              title: mapMatch[5],
-              year: mapMatch[6],
-              season: mapMatch[7],
-              episode: mapMatch[8],
-              imdbId: mapMatch[9],
-              path: mapMatch[10],
-              mediaType: mapMatch[11],
-              date: mapMatch[12],
-              latestDate: mapMatch[13]
+              id,
+              fToken: fToken || FIELD_MAP.fToken,
+              ts,
+              token,
+              title: title || FIELD_MAP.title,
+              year: year || FIELD_MAP.year,
+              season: season || FIELD_MAP.season,
+              episode: episode || FIELD_MAP.episode,
+              imdbId: imdbId || FIELD_MAP.imdbId,
+              path: path2,
+              mediaType,
+              date: date || FIELD_MAP.date,
+              latestDate: latestDate || FIELD_MAP.latestDate
             };
             return true;
           }
@@ -2659,12 +3897,12 @@ function decryptCryptoJS(cipherBase64, passphrase) {
     let keyIv = Buffer.alloc(0);
     let prev = Buffer.alloc(0);
     while (keyIv.length < 48) {
-      prev = crypto.createHash("md5").update(Buffer.concat([prev, Buffer.from(passphrase, "utf8"), salt])).digest();
+      prev = crypto2.createHash("md5").update(Buffer.concat([prev, Buffer.from(passphrase, "utf8"), salt])).digest();
       keyIv = Buffer.concat([keyIv, prev]);
     }
     const key = keyIv.subarray(0, 32);
     const iv = keyIv.subarray(32, 48);
-    const decipher = crypto.createDecipheriv("aes-256-cbc", key, iv);
+    const decipher = crypto2.createDecipheriv("aes-256-cbc", key, iv);
     return Buffer.concat([decipher.update(ciphertext), decipher.final()]).toString("utf8");
   } catch {
     return cipherBase64;
@@ -2678,32 +3916,75 @@ var COMMON_HEADERS = {
 };
 var tmdbImdbCache = /* @__PURE__ */ new Map();
 async function fetchTmdbDetailsWithFallback(mediaType, tmdbId, language = "en-US") {
+  const fetchOfficialTmdb = async (type) => {
+    try {
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), 2200);
+      const r = await fetch(
+        `https://api.themoviedb.org/3/${encodeURIComponent(type)}/${encodeURIComponent(tmdbId)}?api_key=15d2ea6d0dc1d476efbca3eba2b9bbfb&append_to_response=external_ids`,
+        { signal: ctrl.signal }
+      );
+      clearTimeout(t);
+      if (!r.ok) return null;
+      const d = await r.json();
+      if (d && (d.title || d.name || d.id)) {
+        const imdb = d.imdb_id || d.external_ids?.imdb_id || null;
+        if (imdb) {
+          tmdbImdbCache.set(String(tmdbId).trim(), String(imdb).trim());
+        }
+        return { ...d, imdb_id: imdb, resolvedMediaType: type };
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  };
   const tryTypeOnHost = async (host, type) => {
     try {
       const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 3e3);
-      const res = await fetch(
-        `${host}/backend/tmdb/details/${encodeURIComponent(type)}/${encodeURIComponent(tmdbId)}?language=${encodeURIComponent(language)}`,
-        {
-          headers: {
-            ...COMMON_HEADERS,
-            Origin: host,
-            Referer: `${host}/player/${type}/${tmdbId}`
-          },
-          signal: controller.signal
+      const timer = setTimeout(() => controller.abort(), 2500);
+      const endpointsToTry = [
+        `${host}/backend/imdb/details/${encodeURIComponent(type)}/${encodeURIComponent(tmdbId)}?language=${encodeURIComponent(language)}`,
+        `${host}/backend/tmdb/details/${encodeURIComponent(type)}/${encodeURIComponent(tmdbId)}?language=${encodeURIComponent(language)}`
+      ];
+      for (const ep of endpointsToTry) {
+        try {
+          const res = await fetch(ep, {
+            headers: {
+              ...COMMON_HEADERS,
+              Origin: host,
+              Referer: `${host}/player/${type}/${tmdbId}`
+            },
+            signal: controller.signal
+          });
+          if (res.ok) {
+            const data = await res.json();
+            const raw = data?.data || data;
+            if (raw && (raw.title || raw.name || raw.id)) {
+              clearTimeout(timer);
+              if (raw.imdb_id) {
+                tmdbImdbCache.set(String(tmdbId).trim(), String(raw.imdb_id).trim());
+              }
+              if (!raw.original_title && !raw.original_name) {
+                const official = await fetchOfficialTmdb(type);
+                if (official) {
+                  raw.original_title = official.original_title || official.title || "";
+                  raw.original_name = official.original_name || official.name || "";
+                  if (!raw.release_date && official.release_date) raw.release_date = official.release_date;
+                  if (!raw.first_air_date && official.first_air_date) raw.first_air_date = official.first_air_date;
+                  if (!raw.imdb_id && official.imdb_id) raw.imdb_id = official.imdb_id;
+                }
+              }
+              return { ...raw, resolvedMediaType: type };
+            }
+          }
+        } catch {
         }
-      );
-      clearTimeout(timer);
-      if (!res.ok) return null;
-      const data = await res.json();
-      const raw = data?.data || data;
-      if (!raw || !raw.title && !raw.name && !raw.id) return null;
-      if (raw.imdb_id) {
-        tmdbImdbCache.set(String(tmdbId).trim(), String(raw.imdb_id).trim());
       }
-      return { ...raw, resolvedMediaType: type };
+      clearTimeout(timer);
+      return await fetchOfficialTmdb(type);
     } catch {
-      return null;
+      return await fetchOfficialTmdb(type);
     }
   };
   const tryType = async (type) => {
@@ -2729,7 +4010,7 @@ function cacheMpdXml(url, xml) {
   mpdManifestCache.set(url, { xml, expiresAt: now + 5 * 60 * 1e3 });
 }
 function stripVideoFromMpd(mpdText) {
-  return mpdText.replace(/<AdaptationSet[^>]*contentType=["']video["'][\s\S]*?<\/AdaptationSet>/gi, "").replace(/<AdaptationSet[^>]*mimeType=["']video\/[^"']*["'][\s\S]*?<\/AdaptationSet>/gi, "");
+  return mpdText.replace(/<AdaptationSet[^>]*contentType=["']video["'][\s\S]*?<\/AdaptationSet>/gi, "").replace(/<AdaptationSet[^>]*mimeType=["']video\/[^"']*["'][\s\S]*?<\/AdaptationSet>/gi, "").replace(/&(?!(?:amp|lt|gt|quot|apos|#\d+|#x[0-9a-fA-F]+);)/g, "&amp;");
 }
 async function resolveForServer(targetServer, options) {
   const {
@@ -2738,18 +4019,175 @@ async function resolveForServer(targetServer, options) {
     season = 1,
     episode = 1,
     title,
+    originalTitle = "",
     releaseYear,
     date,
     imdbId,
     lastAirDate,
     dubCode = "",
-    dubType = ""
+    dubType = "",
+    skipVegaFallback = false
   } = options;
+  if (targetServer.startsWith("source-") || targetServer.startsWith("op-")) {
+    const legacyOpToSource = {
+      "op-alpha": "source-1",
+      "op-ultra": "source-2",
+      "op-phoenix": "source-3",
+      "op-apex": "source-4"
+    };
+    const elfuraSourceId = legacyOpToSource[targetServer] || targetServer;
+    const embedReferer = mediaType === "tv" ? `https://embed.theogpiratebot.online/embed/tv/${tmdbId}/${season}/${episode}?color=f4f4f4&episodeSelector=1` : `https://embed.theogpiratebot.online/embed/movie/${tmdbId}?color=f4f4f4`;
+    try {
+      const sessRes = await fetch("https://embed.theogpiratebot.online/api/v1/session", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+          "User-Agent": COMMON_HEADERS["User-Agent"],
+          Origin: "https://embed.theogpiratebot.online",
+          Referer: embedReferer
+        },
+        body: JSON.stringify({
+          type: mediaType === "tv" ? "tv" : "movie",
+          tmdb: String(tmdbId)
+        })
+      });
+      if (sessRes.ok) {
+        const sessData = await sessRes.json();
+        if (sessData?.ok && sessData?.pltoken && sessData?.nonce) {
+          const pbQuery = new URLSearchParams({
+            type: mediaType === "tv" ? "tv" : "movie",
+            tmdb: String(tmdbId),
+            source: elfuraSourceId,
+            nonce: String(sessData.nonce)
+          });
+          if (mediaType === "tv") {
+            pbQuery.set("s", String(Number(season) || 1));
+            pbQuery.set("e", String(Number(episode) || 1));
+          }
+          if (dubCode) {
+            pbQuery.set("lang", dubCode);
+          }
+          const pbRes = await fetch(
+            `https://embed.theogpiratebot.online/api/v1/playback?${pbQuery.toString()}`,
+            {
+              headers: {
+                Accept: "application/json",
+                "User-Agent": COMMON_HEADERS["User-Agent"],
+                Origin: "https://embed.theogpiratebot.online",
+                Referer: embedReferer,
+                "X-Playback-Token": String(sessData.pltoken)
+              }
+            }
+          );
+          if (pbRes.ok) {
+            const pbData = await pbRes.json();
+            const rawSources = Array.isArray(pbData?.sources) ? pbData.sources : pbData?.primary ? [pbData.primary] : [];
+            if (pbData?.ok && rawSources.length > 0) {
+              const links = rawSources.filter((s) => s && typeof s.url === "string" && s.url.length > 0).map((s) => {
+                const fullStreamUrl = s.url.startsWith("http") ? s.url : `https://embed.theogpiratebot.online${s.url.startsWith("/") ? "" : "/"}${s.url}`;
+                return {
+                  link: `/api/stream/proxy?url=${encodeURIComponent(fullStreamUrl)}`,
+                  type: "hls",
+                  quality: "1080p",
+                  label: s.label || targetServer,
+                  lang: dubCode || "en",
+                  onlyHevc: false
+                };
+              });
+              if (links.length > 0) {
+                const firstSrc = rawSources[0];
+                const dubs = Array.isArray(firstSrc?.availableAudioLangs) ? firstSrc.availableAudioLangs.map((langCode) => ({
+                  code: String(langCode).toLowerCase(),
+                  name: String(langCode).toUpperCase(),
+                  type: "dub"
+                })) : [];
+                const subtitles = Array.isArray(firstSrc?.subtitles) ? firstSrc.subtitles : [];
+                return {
+                  success: true,
+                  server: targetServer,
+                  links,
+                  dubs,
+                  subtitles
+                };
+              }
+            }
+          }
+        }
+      }
+    } catch {
+    }
+    const fallbackOrder = {
+      "source-1": ["valstrax", "orion", "atlas"],
+      "source-2": ["orion", "valstrax", "vegamovies"],
+      "source-3": ["vegamovies", "valstrax", "atlas"],
+      "source-4": ["atlas", "valstrax", "ursa"],
+      "source-5": ["ursa", "valstrax", "orion"],
+      "source-6": ["alatreon", "daedalus", "valstrax"]
+    };
+    const candidates = fallbackOrder[elfuraSourceId] || ["valstrax", "orion", "atlas", "vegamovies"];
+    for (const cand of candidates) {
+      try {
+        const res = await resolveForServer(cand, options);
+        if (res && res.success && Array.isArray(res.links) && res.links.length > 0) {
+          return {
+            ...res,
+            server: targetServer
+          };
+        }
+      } catch {
+      }
+    }
+  }
+  if (targetServer === "vegamovies") {
+    const vegaRes = await resolveVegaMoviesCombined({
+      tmdbId: String(tmdbId),
+      mediaType: mediaType === "tv" ? "tv" : "movie",
+      season: Number(season) || 1,
+      episode: Number(episode) || 1,
+      title,
+      originalTitle,
+      releaseYear,
+      imdbId,
+      dubCode
+    });
+    const links = vegaRes.sources.map((s) => ({
+      link: s.url,
+      type: s.type || (s.url.includes(".m3u8") ? "hls" : s.url.includes(".mpd") ? "dash" : "hls"),
+      quality: s.quality || "1080p",
+      label: s.label || "Vegamovies | 1080p FHD [Hindi-Eng]",
+      lang: s.lang || "hi",
+      onlyHevc: false,
+      hasAudio: true
+    }));
+    const primary = links[0] || null;
+    return {
+      success: links.length > 0,
+      server: "vegamovies",
+      links,
+      link: primary?.link || null,
+      type: primary?.type || "hls",
+      dubs: vegaRes.dubs,
+      subtitles: vegaRes.subtitles,
+      matchedPost: vegaRes.matchedPost,
+      indStreamImdbId: vegaRes.indStreamImdbId
+    };
+  }
   const queryProvider = async (baseHost, tokenEndpoint, sourcesPrefix, serverKey) => {
     const refererUrl = `${baseHost}/player/${mediaType}/${tmdbId}${mediaType === "tv" ? `/${season}/${episode}` : ""}`;
     let sourceData = null;
     let lastError = "Request failed";
-    const tokenEndpoints = tokenEndpoint ? [tokenEndpoint] : ["/backend/wtfnigga"];
+    const tokenEndpoints = Array.from(
+      /* @__PURE__ */ new Set([
+        "/backend/trace",
+        CURRENT_TOKEN_ENDPOINT,
+        tokenEndpoint,
+        "/backend/getthefuckoutniiguh",
+        "/backend/wtfnigga",
+        "/backend/fucku",
+        "/backend/token"
+      ])
+    ).filter(Boolean);
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
         const tokenBody = {
@@ -2783,6 +4221,7 @@ async function resolveForServer(targetServer, options) {
               const parsed = await tokenRes.json();
               if (parsed?.token) {
                 tokenData = parsed;
+                CURRENT_TOKEN_ENDPOINT = ep;
                 break;
               }
             }
@@ -2791,7 +4230,7 @@ async function resolveForServer(targetServer, options) {
         }
         if (!tokenData || !tokenData.token) {
           lastError = tokenStatus ? `Token HTTP ${tokenStatus}` : "Token failed";
-          if (attempt === 0 && tokenStatus === 400) {
+          if (attempt === 0 && (tokenStatus === 400 || tokenStatus === 404 || !tokenData?.token)) {
             const refreshed = await refreshFieldMapFromUpstream();
             if (refreshed) continue;
           }
@@ -2906,23 +4345,7 @@ async function resolveForServer(targetServer, options) {
         } catch {
         }
       } else if (isWorkerUrl) {
-        try {
-          const controller = new AbortController();
-          const timer = setTimeout(() => controller.abort(), 2e3);
-          const probeRes = await fetch(item.link, {
-            method: "HEAD",
-            headers: {
-              "User-Agent": COMMON_HEADERS["User-Agent"],
-              Referer: `${baseHost}/`,
-              Origin: baseHost
-            },
-            signal: controller.signal
-          });
-          clearTimeout(timer);
-          if (!probeRes.ok) continue;
-          verifiedLinks.push({ ...item, onlyHevc: false, hasAudio: true });
-        } catch {
-        }
+        verifiedLinks.push({ ...item, onlyHevc: false, hasAudio: true });
       } else {
         verifiedLinks.push({ ...item, onlyHevc: false, hasAudio: true });
       }
@@ -2938,12 +4361,51 @@ async function resolveForServer(targetServer, options) {
       server: targetServer
     };
   };
-  return await queryProvider(
+  const primaryRes = await queryProvider(
     "https://zxcstream.cc",
-    "/backend/wtfnigga",
+    CURRENT_TOKEN_ENDPOINT,
     "/backend_/sources",
     targetServer
   );
+  if (primaryRes.success || skipVegaFallback) {
+    return primaryRes;
+  }
+  try {
+    const vegaFallback = await resolveVegaMoviesCombined({
+      tmdbId: String(tmdbId),
+      mediaType: mediaType === "tv" ? "tv" : "movie",
+      season: Number(season) || 1,
+      episode: Number(episode) || 1,
+      title,
+      originalTitle,
+      releaseYear,
+      imdbId,
+      dubCode
+    });
+    if (vegaFallback.success && vegaFallback.sources.length > 0) {
+      const vegaLinks = vegaFallback.sources.map((s) => ({
+        link: s.url,
+        type: s.type || (s.url.includes(".m3u8") ? "hls" : s.url.includes(".mpd") ? "dash" : "hls"),
+        quality: s.quality || "1080p",
+        label: s.label || `${targetServer} | 1080p FHD [Hindi-Eng]`,
+        lang: s.lang || "hi",
+        onlyHevc: false,
+        hasAudio: true
+      }));
+      return {
+        success: true,
+        server: targetServer,
+        links: vegaLinks,
+        link: vegaLinks[0]?.link || null,
+        type: vegaLinks[0]?.type || "hls",
+        dubs: vegaFallback.dubs,
+        subtitles: vegaFallback.subtitles,
+        matchedPost: vegaFallback.matchedPost
+      };
+    }
+  } catch {
+  }
+  return primaryRes;
 }
 var apiRouter = express.Router();
 apiRouter.get("/status", (_req, res) => {
@@ -3013,16 +4475,27 @@ apiRouter.get("/tmdb/season/:tmdbId/season/:seasonNumber", async (req, res) => {
   const { tmdbId, seasonNumber } = req.params;
   const seasonNum = Number(seasonNumber) || 1;
   try {
-    const response = await fetch(
-      `https://zxcstream.cc/backend/tmdb/season/${encodeURIComponent(tmdbId)}/season/${encodeURIComponent(seasonNumber)}`,
-      {
-        headers: {
-          ...COMMON_HEADERS,
-          Referer: `https://zxcstream.cc/player/tv/${tmdbId}/${seasonNumber}/1`
+    let response = null;
+    const seasonUrls = [
+      `https://zxcstream.cc/backend/imdb/season/${encodeURIComponent(tmdbId)}/season/${encodeURIComponent(seasonNumber)}`,
+      `https://zxcstream.cc/backend/tmdb/season/${encodeURIComponent(tmdbId)}/season/${encodeURIComponent(seasonNumber)}`
+    ];
+    for (const u of seasonUrls) {
+      try {
+        const r = await fetch(u, {
+          headers: {
+            ...COMMON_HEADERS,
+            Referer: `https://zxcstream.cc/player/tv/${tmdbId}/${seasonNumber}/1`
+          }
+        });
+        if (r.ok) {
+          response = r;
+          break;
         }
+      } catch {
       }
-    );
-    if (!response.ok) {
+    }
+    if (!response || !response.ok) {
       const fallbackEps = getCatalogSeasonEpisodes(tmdbId, seasonNum);
       return res.json({ episodes: fallbackEps });
     }
@@ -3061,7 +4534,8 @@ apiRouter.get("/tmdb/season/:tmdbId/season/:seasonNumber", async (req, res) => {
 apiRouter.post("/stream/resolve", async (req, res) => {
   const {
     mediaType: reqMediaType = "movie",
-    tmdbId = "128",
+    tmdbId: rawTmdbId,
+    id: rawId,
     serverPath: reqServerPath,
     preferredServer,
     season = 1,
@@ -3071,18 +4545,28 @@ apiRouter.post("/stream/resolve", async (req, res) => {
     autoFallback = false,
     allowHevc = false
   } = req.body;
+  const tmdbId = String(rawTmdbId || rawId || "128").trim();
   const serverPath = reqServerPath || preferredServer || "orion";
   let mediaType = reqMediaType;
-  let { title = "", releaseYear = "", year = "", date = "", imdbId = "", lastAirDate = "" } = req.body;
+  let {
+    title = "",
+    originalTitle = "",
+    releaseYear = "",
+    year = "",
+    date = "",
+    imdbId = "",
+    lastAirDate = ""
+  } = req.body;
   if (!releaseYear && year) releaseYear = String(year);
   try {
-    if (!title || !releaseYear) {
+    if (!title || !releaseYear || !originalTitle) {
       const details = await fetchTmdbDetailsWithFallback(mediaType, String(tmdbId));
       if (details) {
         if (details.resolvedMediaType) {
           mediaType = details.resolvedMediaType;
         }
         title = details.title || details.name || title;
+        originalTitle = details.original_title || details.original_name || originalTitle;
         date = details.release_date || details.first_air_date || date;
         releaseYear = (date ? String(new Date(date).getFullYear()) : "") || releaseYear;
         imdbId = details.imdb_id || imdbId;
@@ -3090,16 +4574,15 @@ apiRouter.post("/stream/resolve", async (req, res) => {
       }
     }
     if (!title) title = mediaType === "tv" ? "Series" : "Movie";
-    if (!date) date = "2022-01-01";
-    if (!releaseYear) releaseYear = date.split("-")[0] || "2022";
     const options = {
       mediaType,
       tmdbId: String(tmdbId),
       season: Number(season) || 1,
       episode: Number(episode) || 1,
       title,
-      releaseYear,
-      date,
+      originalTitle,
+      releaseYear: releaseYear || (date ? date.split("-")[0] : ""),
+      date: date || "2022-01-01",
       imdbId,
       lastAirDate,
       dubCode,
@@ -3118,7 +4601,7 @@ apiRouter.post("/stream/resolve", async (req, res) => {
     let result = filterPlayable(await resolveForServer(serverPath, options));
     const shouldFallback = autoFallback || !req.body.strictSingleServer && (!result.links || result.links.length === 0);
     if ((!result.links || result.links.length === 0) && shouldFallback) {
-      const fallbackServers = ["valstrax", "atlas", "ursa", "alatreon", "daedalus", "orion"].filter(
+      const fallbackServers = ["valstrax", "vegamovies", "atlas", "ursa", "alatreon", "daedalus", "orion"].filter(
         (s) => s !== serverPath
       );
       for (const alt of fallbackServers) {
@@ -3149,7 +4632,8 @@ apiRouter.get("/sources/:server", async (req, res) => {
   const targetServer = req.params.server;
   const {
     mediaType = "movie",
-    tmdbId = "128",
+    tmdbId: rawTmdbId = "",
+    id: rawId = "",
     season = 1,
     episode = 1,
     title = "",
@@ -3159,14 +4643,15 @@ apiRouter.get("/sources/:server", async (req, res) => {
     dubCode = "",
     dubType = ""
   } = req.query;
+  const tmdbId = String(rawTmdbId || rawId || "128").trim();
   try {
     const result = await resolveForServer(targetServer, {
       mediaType,
       tmdbId,
       season: Number(season) || 1,
       episode: Number(episode) || 1,
-      title: title || (mediaType === "tv" ? "Series" : "Movie"),
-      releaseYear: year || date.split("-")[0] || "2022",
+      title: title && title !== "Movie" && title !== "Series" ? title : "",
+      releaseYear: year || (date ? date.split("-")[0] : ""),
       date: date || "2022-01-01",
       imdbId,
       dubCode,
@@ -3198,7 +4683,7 @@ apiRouter.post("/subtitles/resolve", async (req, res) => {
       subBody[FIELD_MAP.episode] = Number(episode) || 1;
     }
     let tokenData = null;
-    for (const ep of ["/backend/wtfnigga", "/backend/fucku"]) {
+    for (const ep of [CURRENT_TOKEN_ENDPOINT, "/backend/getthefuckoutniiguh", "/backend/wtfnigga", "/backend/fucku"]) {
       try {
         const tokenRes = await fetch(`https://zxcstream.cc${ep}`, {
           method: "POST",
@@ -3273,7 +4758,7 @@ apiRouter.get("/subtitles", async (req, res) => {
       subBody[FIELD_MAP.episode] = Number(episode) || 1;
     }
     let tokenData = null;
-    for (const ep of ["/backend/wtfnigga", "/backend/fucku"]) {
+    for (const ep of [CURRENT_TOKEN_ENDPOINT, "/backend/getthefuckoutniiguh", "/backend/wtfnigga", "/backend/fucku"]) {
       try {
         const tokenRes = await fetch(`https://zxcstream.cc${ep}`, {
           method: "POST",
@@ -3341,25 +4826,94 @@ apiRouter.get("/stream/proxy", async (req, res) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Headers", "*");
   try {
+    const isElfura = targetUrl.includes("embed.theogpiratebot.online");
+    const isVidstuck = targetUrl.includes("vidstuck.cc") || targetUrl.includes("workers.dev");
+    const isGoogleCdn = targetUrl.includes("video-downloads.googleusercontent.com") || targetUrl.includes("fast-dl.");
     const reqHeaders = {
       "User-Agent": COMMON_HEADERS["User-Agent"],
-      Referer: "https://zxcstream.cc/",
-      Origin: "https://zxcstream.cc"
+      ...isGoogleCdn ? { Referer: "https://fast-dl.one/" } : {
+        Referer: isElfura ? "https://embed.theogpiratebot.online/" : isVidstuck ? "https://vidstuck.cc/" : "https://zxcstream.cc/",
+        Origin: isElfura ? "https://embed.theogpiratebot.online" : isVidstuck ? "https://vidstuck.cc" : "https://zxcstream.cc"
+      }
     };
-    if (req.headers.range) {
+    if (req.headers.range && !isGoogleCdn) {
       reqHeaders.Range = String(req.headers.range);
     }
-    const upstream = await fetch(targetUrl, {
-      headers: reqHeaders
+    const upCtrl = new AbortController();
+    req.on("close", () => {
+      upCtrl.abort();
     });
-    res.status(upstream.status);
+    const upstream = await fetch(targetUrl, {
+      headers: reqHeaders,
+      signal: upCtrl.signal
+    });
     const contentType = (upstream.headers.get("content-type") || "").toLowerCase();
-    if (contentType) res.setHeader("Content-Type", contentType);
+    const contentDisposition = (upstream.headers.get("content-disposition") || "").toLowerCase();
+    const isMatroskaStream = contentType.includes("mkv") || contentType.includes("matroska") || contentDisposition.includes(".mkv") || isGoogleCdn && contentType.includes("octet-stream");
+    if (isMatroskaStream && upstream.ok && upstream.body) {
+      res.status(200);
+      res.setHeader("Content-Type", "video/mp4");
+      res.setHeader("Content-Disposition", "inline");
+      res.setHeader("Cache-Control", "no-store");
+      const ff = spawn("ffmpeg", [
+        "-loglevel",
+        "error",
+        "-i",
+        "pipe:0",
+        "-map",
+        "0:v:0",
+        "-map",
+        "0:a:0?",
+        "-c:v",
+        "copy",
+        "-c:a",
+        "aac",
+        "-ac",
+        "2",
+        "-f",
+        "mp4",
+        "-movflags",
+        "frag_keyframe+empty_moov+default_base_moof",
+        "pipe:1"
+      ]);
+      const nodeStream = Readable.fromWeb(upstream.body);
+      nodeStream.on("error", () => {
+        try {
+          ff.kill("SIGKILL");
+        } catch {
+        }
+      });
+      ff.stdin.on("error", () => {
+      });
+      nodeStream.pipe(ff.stdin);
+      ff.stdout.pipe(res);
+      ff.on("error", () => {
+        if (!res.headersSent) {
+          res.status(502).end();
+        } else {
+          res.end();
+        }
+      });
+      req.on("close", () => {
+        try {
+          nodeStream.destroy();
+          ff.kill("SIGKILL");
+        } catch {
+        }
+      });
+      return;
+    }
+    res.status(upstream.status);
+    if (contentType) {
+      res.setHeader("Content-Type", contentType);
+    }
     const contentRange = upstream.headers.get("content-range");
     if (contentRange) res.setHeader("Content-Range", contentRange);
     const contentLength = upstream.headers.get("content-length");
     if (contentLength) res.setHeader("Content-Length", contentLength);
-    res.setHeader("Accept-Ranges", "bytes");
+    if (contentRange || upstream.headers.get("accept-ranges")) {
+      res.setHeader("Accept-Ranges", "bytes");
+    }
     const isM3u8 = contentType.includes("mpegurl") || contentType.includes("x-mpegurl") || targetUrl.includes(".m3u8");
     if (isM3u8) {
       const text = await upstream.text();
@@ -3387,10 +4941,15 @@ apiRouter.get("/stream/proxy", async (req, res) => {
         return res.status(200).send(rewritten);
       }
     }
+    if (upstream.body) {
+      return Readable.fromWeb(upstream.body).pipe(res);
+    }
     const buffer = Buffer.from(await upstream.arrayBuffer());
     return res.send(buffer);
   } catch (err) {
-    return res.status(502).send(err.message || "Upstream fetch proxy failed");
+    if (!res.headersSent) {
+      return res.status(502).send(err.message || "Upstream fetch proxy failed");
+    }
   }
 });
 apiRouter.get("/stream/mpd-audio", async (req, res) => {
@@ -3436,11 +4995,970 @@ apiRouter.get("/stream/mpd-audio", async (req, res) => {
     return res.status(502).send(err.message || "Upstream MPD audio proxy failed");
   }
 });
+async function gatherDirectDownloadSources(params) {
+  try {
+    const vegaRes = await Promise.race([
+      resolveVegaMoviesCombined({
+        tmdbId: String(params.tmdbId),
+        mediaType: params.mediaType,
+        season: params.season,
+        episode: params.episode,
+        title: params.title,
+        releaseYear: params.year
+      }),
+      new Promise((r) => setTimeout(() => r(null), 4800))
+    ]);
+    if (!vegaRes) {
+      return { directSources: [], matchedPost: null };
+    }
+    const rawDirect = Array.isArray(vegaRes.directSources) ? vegaRes.directSources : [];
+    const directSources = rawDirect.map((s) => ({
+      quality: s.quality || "1080p",
+      url: s.url,
+      directUrl: s.url.startsWith("https://video-downloads.googleusercontent.com/") ? s.url : void 0,
+      sizeFormatted: s.sizeFormatted,
+      lang: s.lang,
+      multiLangs: s.multiLangs
+    }));
+    return {
+      directSources,
+      matchedPost: vegaRes.matchedPost || null
+    };
+  } catch {
+    return { directSources: [], matchedPost: null };
+  }
+}
+apiRouter.post("/download/resolve", async (req, res) => {
+  const {
+    mediaType = "movie",
+    tmdbId = "128",
+    season = 1,
+    episode = 1,
+    title = "",
+    year = "",
+    currentPlaybackSource = "",
+    playbackUrl = "",
+    availableDubs = [],
+    audioTracks = [],
+    qualities = []
+  } = req.body || {};
+  const safeMediaType = mediaType === "tv" ? "tv" : "movie";
+  const cleanTmdbId = String(tmdbId || "128").trim();
+  const safeSeason = Number(season) || 1;
+  const safeEpisode = Number(episode) || 1;
+  try {
+    const { directSources, matchedPost } = await gatherDirectDownloadSources({
+      mediaType: safeMediaType,
+      tmdbId: cleanTmdbId,
+      season: safeSeason,
+      episode: safeEpisode,
+      title: String(title || ""),
+      year: String(year || "")
+    });
+    const fallbackPostTitle = matchedPost?.title ? matchedPost.title.replace(/\b(19\d{2}|20\d{2})\b.*$/i, "").trim() : "";
+    const resolution = await resolveDownloadableMedia(
+      {
+        mediaType: safeMediaType,
+        tmdbId: cleanTmdbId,
+        season: safeSeason,
+        episode: safeEpisode,
+        title: String(title || fallbackPostTitle || "").trim() || void 0,
+        year: String(year || matchedPost?.year || "").trim() || void 0,
+        currentPlaybackSource,
+        playbackUrl,
+        availableDubs,
+        audioTracks,
+        qualities,
+        resolvedDirectSources: directSources
+      },
+      fetchTmdbDetailsWithFallback
+    );
+    return res.json(resolution);
+  } catch (err) {
+    return res.status(500).json({
+      success: false,
+      error: err?.message || "Download resolution failed",
+      languages: []
+    });
+  }
+});
+apiRouter.get("/download/resolve", async (req, res) => {
+  const {
+    mediaType = "movie",
+    tmdbId = "128",
+    season = "1",
+    episode = "1",
+    title = "",
+    year = ""
+  } = req.query;
+  const safeMediaType = mediaType === "tv" ? "tv" : "movie";
+  const cleanTmdbId = String(tmdbId || "128").trim();
+  const safeSeason = Number(season) || 1;
+  const safeEpisode = Number(episode) || 1;
+  try {
+    const { directSources, matchedPost } = await gatherDirectDownloadSources({
+      mediaType: safeMediaType,
+      tmdbId: cleanTmdbId,
+      season: safeSeason,
+      episode: safeEpisode,
+      title: String(title || ""),
+      year: String(year || "")
+    });
+    const fallbackPostTitle = matchedPost?.title ? matchedPost.title.replace(/\b(19\d{2}|20\d{2})\b.*$/i, "").trim() : "";
+    const resolution = await resolveDownloadableMedia(
+      {
+        mediaType: safeMediaType,
+        tmdbId: cleanTmdbId,
+        season: safeSeason,
+        episode: safeEpisode,
+        title: String(title || fallbackPostTitle || "").trim() || void 0,
+        year: String(year || matchedPost?.year || "").trim() || void 0,
+        resolvedDirectSources: directSources
+      },
+      fetchTmdbDetailsWithFallback
+    );
+    return res.json(resolution);
+  } catch (err) {
+    return res.status(500).json({
+      success: false,
+      error: err?.message || "Download resolution failed",
+      languages: []
+    });
+  }
+});
+apiRouter.get("/download/direct-check", async (req, res) => {
+  const {
+    mediaType = "movie",
+    tmdbId = "128",
+    season = "1",
+    episode = "1",
+    quality = "1080p",
+    title = "",
+    sourceUrl = ""
+  } = req.query;
+  const safeMediaType = mediaType === "tv" ? "tv" : "movie";
+  const cleanTmdbId = String(tmdbId || "128").trim();
+  const safeSeason = Number(season) || 1;
+  const safeEpisode = Number(episode) || 1;
+  const reqHeight = String(quality).toUpperCase() === "4K" ? 2160 : Number((String(quality).match(/(\d{3,4})/) || [])[1]) || 1080;
+  try {
+    const { directSources } = await gatherDirectDownloadSources({
+      mediaType: safeMediaType,
+      tmdbId: cleanTmdbId,
+      season: safeSeason,
+      episode: safeEpisode,
+      title: String(title || "")
+    });
+    if (directSources.length > 0) {
+      const parseH = (q) => q.toUpperCase() === "4K" ? 2160 : Number((q.match(/(\d{3,4})/) || [])[1]) || 1080;
+      const sorted = [...directSources].sort(
+        (a, b) => Math.abs(parseH(a.quality) - reqHeight) - Math.abs(parseH(b.quality) - reqHeight)
+      );
+      const chosen = sorted.find((s) => s.directUrl) || sorted[0];
+      if (chosen?.directUrl) {
+        return res.json({
+          ok: true,
+          directUrl: chosen.directUrl,
+          quality: chosen.quality,
+          sizeFormatted: chosen.sizeFormatted
+        });
+      }
+    }
+    if (sourceUrl && sourceUrl.includes("video-downloads.googleusercontent.com")) {
+      return res.json({
+        ok: true,
+        directUrl: sourceUrl,
+        quality
+      });
+    }
+    return res.json({ ok: true, directUrl: null });
+  } catch {
+    return res.json({ ok: false, directUrl: null });
+  }
+});
+function serveMp4FileWithRange(req, res, filePath, downloadFilename) {
+  const stat = fs.statSync(filePath);
+  const fileSize = stat.size;
+  const range = req.headers.range;
+  res.setHeader("Content-Type", "video/mp4");
+  res.setHeader(
+    "Content-Disposition",
+    `attachment; filename="${downloadFilename}"; filename*=UTF-8''${encodeURIComponent(downloadFilename)}`
+  );
+  res.setHeader("Accept-Ranges", "bytes");
+  if (range) {
+    const parts = range.replace(/bytes=/, "").split("-");
+    const start = parseInt(parts[0], 10);
+    const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+    if (isNaN(start) || isNaN(end) || start >= fileSize || end >= fileSize || start > end) {
+      res.status(416);
+      res.setHeader("Content-Range", `bytes */${fileSize}`);
+      return res.end();
+    }
+    const chunkSize = end - start + 1;
+    res.status(206);
+    res.setHeader("Content-Range", `bytes ${start}-${end}/${fileSize}`);
+    res.setHeader("Content-Length", String(chunkSize));
+    if (req.method === "HEAD") {
+      return res.end();
+    }
+    return fs.createReadStream(filePath, { start, end }).pipe(res);
+  }
+  res.status(200);
+  res.setHeader("Content-Length", String(fileSize));
+  if (req.method === "HEAD") {
+    return res.end();
+  }
+  return fs.createReadStream(filePath).pipe(res);
+}
+var MP4_ISO5_FTYP_BOX = Buffer.from(
+  "0000001c6674797069736f350000020069736f3569736f366d703431",
+  "hex"
+);
+function createMp4FreeBox(byteLength) {
+  const size = Math.max(8, byteLength);
+  const buf = Buffer.alloc(size, 0);
+  buf.writeUInt32BE(size, 0);
+  buf.write("free", 4, 4, "ascii");
+  return buf;
+}
+var inFlightMp4Builds = /* @__PURE__ */ new Map();
+async function buildFullMovieMp4ToCache(params) {
+  const {
+    cacheKey,
+    cachedMp4Path,
+    mediaType,
+    tmdbId,
+    season,
+    episode,
+    lang,
+    requestedHeight,
+    title,
+    sourceUrl
+  } = params;
+  try {
+    if (fs.existsSync(cachedMp4Path) && fs.statSync(cachedMp4Path).size > 1e5) {
+      return cachedMp4Path;
+    }
+  } catch {
+  }
+  const existing = inFlightMp4Builds.get(cacheKey);
+  if (existing) {
+    return existing;
+  }
+  const buildPromise = (async () => {
+    const ISO_639_2_MAP = {
+      hi: "hin",
+      en: "eng",
+      ja: "jpn",
+      ko: "kor",
+      es: "spa",
+      fr: "fra",
+      de: "deu",
+      ru: "rus",
+      pt: "por",
+      ptbr: "por",
+      it: "ita",
+      ar: "ara",
+      id: "ind",
+      ta: "tam",
+      te: "tel",
+      tr: "tur"
+    };
+    const isoLang = ISO_639_2_MAP[lang.toLowerCase()] || "und";
+    let streamUrl = (sourceUrl || "").trim();
+    if (streamUrl.startsWith("blob:") || !streamUrl.startsWith("http://") && !streamUrl.startsWith("https://") && !streamUrl.startsWith("/api/")) {
+      streamUrl = "";
+    }
+    let resolvedTitle = title;
+    let releaseYear = "2022";
+    let imdbId = "";
+    try {
+      const details = await fetchTmdbDetailsWithFallback(
+        mediaType,
+        String(tmdbId)
+      );
+      if (details) {
+        resolvedTitle = details.title || details.name || resolvedTitle;
+        const dateStr = details.release_date || details.first_air_date || "";
+        if (dateStr) releaseYear = dateStr.slice(0, 4);
+        imdbId = details.imdb_id || "";
+      }
+    } catch {
+    }
+    if (!resolvedTitle) {
+      const cat = getMediaByTmdbId(mediaType, String(tmdbId));
+      if (cat) {
+        resolvedTitle = cat.title;
+        if (cat.releaseYear) releaseYear = String(cat.releaseYear);
+      }
+    }
+    const resolveOptions = {
+      mediaType,
+      tmdbId: String(tmdbId),
+      season: Number(season) || 1,
+      episode: Number(episode) || 1,
+      title: resolvedTitle,
+      releaseYear,
+      date: `${releaseYear}-01-01`,
+      imdbId,
+      dubCode: lang
+    };
+    const downloadSegmentsToFile = async (urls, filePath, headers, concurrency = 160) => {
+      if (!urls || urls.length === 0) return false;
+      const out = fs.createWriteStream(filePath);
+      const pending = /* @__PURE__ */ new Map();
+      let nextFetch = 0;
+      let nextWrite = 0;
+      const flushInOrder = () => {
+        while (pending.has(nextWrite)) {
+          const buf = pending.get(nextWrite);
+          pending.delete(nextWrite);
+          nextWrite++;
+          if (buf.byteLength > 0) {
+            out.write(buf);
+          }
+        }
+      };
+      const workerCount = Math.min(concurrency, urls.length);
+      const workers = Array.from({ length: workerCount }, async () => {
+        while (true) {
+          while (nextFetch - nextWrite > 260) {
+            await new Promise((r) => setTimeout(r, 15));
+          }
+          const idx = nextFetch++;
+          if (idx >= urls.length) break;
+          let buf = Buffer.alloc(0);
+          for (let attempt = 0; attempt < 3; attempt++) {
+            try {
+              const resp = await fetch(urls[idx], { headers });
+              if (resp.ok) {
+                buf = Buffer.from(await resp.arrayBuffer());
+                break;
+              }
+            } catch {
+            }
+          }
+          pending.set(idx, buf);
+          flushInOrder();
+        }
+      });
+      await Promise.all(workers);
+      flushInOrder();
+      await new Promise((resolve, reject) => {
+        out.end(() => resolve());
+        out.on("error", reject);
+      });
+      try {
+        return fs.existsSync(filePath) && fs.statSync(filePath).size > 1024;
+      } catch {
+        return false;
+      }
+    };
+    let tempDubMpdPath = "";
+    let tempVideoPath = "";
+    let tempAudioPath = "";
+    let orionAudioUrls = [];
+    let orionVideoUrls = [];
+    const cleanupTempFiles = () => {
+      for (const p of [tempDubMpdPath, tempVideoPath, tempAudioPath]) {
+        if (p) {
+          try {
+            if (fs.existsSync(p)) fs.unlinkSync(p);
+          } catch {
+          }
+        }
+      }
+      tempDubMpdPath = "";
+      tempVideoPath = "";
+      tempAudioPath = "";
+    };
+    try {
+      const resolveVideoTask = async () => {
+        if (streamUrl) return;
+        const primaryCandidates = ["daedalus", "alatreon", "ursa", "vegamovies"];
+        const pickLinkFromResult = (srvRes) => {
+          if (srvRes && srvRes.success && Array.isArray(srvRes.links) && srvRes.links.length > 0) {
+            const playableLinks = srvRes.links.filter((l) => l?.link && !l.onlyHevc);
+            const pool = playableLinks.length > 0 ? playableLinks : srvRes.links;
+            const byLang = pool.find(
+              (l) => l.lang && l.lang.toLowerCase() === lang.toLowerCase() || l.multiLangs && l.multiLangs.includes(lang.toLowerCase())
+            );
+            const byHeight = [...pool].sort(
+              (a, b) => Math.abs((Number(a.resolution) || 1080) - requestedHeight) - Math.abs((Number(b.resolution) || 1080) - requestedHeight)
+            )[0];
+            const match = byLang || byHeight || pool[0];
+            if (match && match.link) {
+              return {
+                link: match.link,
+                type: match.type || (match.link.includes(".mp4") ? "mp4" : "hls")
+              };
+            }
+          }
+          return null;
+        };
+        const primarySettled = await Promise.allSettled(
+          primaryCandidates.map((srv) => resolveForServer(srv, resolveOptions))
+        );
+        for (const resItem of primarySettled) {
+          if (resItem.status === "fulfilled") {
+            const picked = pickLinkFromResult(resItem.value);
+            if (picked) {
+              streamUrl = picked.link;
+              return;
+            }
+          }
+        }
+        for (const srv of ["valstrax", "atlas", "orion"]) {
+          try {
+            const srvRes = await resolveForServer(srv, resolveOptions);
+            const picked = pickLinkFromResult(srvRes);
+            if (picked) {
+              streamUrl = picked.link;
+              return;
+            }
+          } catch {
+          }
+        }
+      };
+      const resolveDubAudioTask = async () => {
+        try {
+          const normLang = lang.toLowerCase().trim();
+          const orionRes = await resolveForServer("orion", {
+            ...resolveOptions,
+            dubCode: normLang,
+            dubType: "0"
+          });
+          const hasMatchingDub = Array.isArray(orionRes?.dubs) && orionRes.dubs.some(
+            (d) => Number(d.type) === 0 && String(d.lang || d.code || "").toLowerCase().startsWith(normLang)
+          );
+          if (orionRes?.dubAudioUrl) {
+            let mpdXml = mpdManifestCache.get(orionRes.dubAudioUrl)?.xml || "";
+            if (!mpdXml) {
+              const mpdResp = await fetch(orionRes.dubAudioUrl, {
+                headers: {
+                  "User-Agent": COMMON_HEADERS["User-Agent"],
+                  Referer: "https://zxcstream.cc/",
+                  Origin: "https://zxcstream.cc"
+                }
+              });
+              if (mpdResp.ok) {
+                mpdXml = await mpdResp.text();
+                if (mpdXml.includes("<MPD")) {
+                  cacheMpdXml(orionRes.dubAudioUrl, mpdXml);
+                }
+              }
+            }
+            if (mpdXml && mpdXml.includes("<MPD")) {
+              orionVideoUrls = extractDashSegmentUrls(mpdXml, "video", requestedHeight);
+              if ((hasMatchingDub || normLang === "hi") && mpdXml.includes("audio")) {
+                orionAudioUrls = extractDashSegmentUrls(mpdXml, "audio");
+                const audioOnlyXml = stripVideoFromMpd(mpdXml);
+                tempDubMpdPath = path.join(
+                  "/tmp",
+                  `zxc_dub_${Date.now()}_${Math.random().toString(36).slice(2)}.mpd`
+                );
+                fs.writeFileSync(tempDubMpdPath, audioOnlyXml, "utf-8");
+              }
+            }
+          }
+        } catch {
+        }
+      };
+      await Promise.all([resolveVideoTask(), resolveDubAudioTask()]);
+      if (streamUrl.includes("proxy?url=")) {
+        try {
+          const parsedUrl = new URL(streamUrl, "http://localhost:3000");
+          const unwrapped = parsedUrl.searchParams.get("url");
+          if (unwrapped) streamUrl = unwrapped;
+        } catch {
+        }
+      }
+      if (!streamUrl && orionVideoUrls.length === 0) {
+        cleanupTempFiles();
+        return null;
+      }
+      const isVidstuck = streamUrl.includes("vidstuck.cc") || streamUrl.includes("workers.dev");
+      const isElfura = streamUrl.includes("embed.theogpiratebot.online");
+      const isGoogleCdn = streamUrl.includes("video-downloads.googleusercontent.com") || streamUrl.includes("fast-dl.");
+      const referer = isGoogleCdn ? "https://fast-dl.one/" : isElfura ? "https://embed.theogpiratebot.online/" : isVidstuck ? "https://vidstuck.cc/" : "https://zxcstream.cc/";
+      let hlsSegmentUrls = [];
+      if (streamUrl && !streamUrl.includes(".mp4") && !isGoogleCdn) {
+        try {
+          const probeRes = await fetch(streamUrl, {
+            headers: {
+              "User-Agent": COMMON_HEADERS["User-Agent"],
+              Referer: referer
+            }
+          });
+          const probeCt = (probeRes.headers.get("content-type") || "").toLowerCase();
+          const probeLen = Number(probeRes.headers.get("content-length") || 0);
+          const isBinaryVideo = probeCt.startsWith("video/") || probeCt.includes("octet-stream") || probeCt.includes("matroska") || probeLen > 5e6;
+          if (probeRes.ok && !isBinaryVideo) {
+            let playlistText = await probeRes.text();
+            let playlistUrl = streamUrl;
+            if (playlistText.includes("#EXT-X-STREAM-INF")) {
+              const lines = playlistText.split(/\r?\n/);
+              const variants = [];
+              for (let i = 0; i < lines.length; i++) {
+                const line = lines[i].trim();
+                if (line.startsWith("#EXT-X-STREAM-INF")) {
+                  const resMatch = line.match(/RESOLUTION=\d+x(\d+)/i);
+                  const h = resMatch ? Number(resMatch[1]) : 1080;
+                  for (let j = i + 1; j < lines.length; j++) {
+                    const nextLine = lines[j].trim();
+                    if (nextLine && !nextLine.startsWith("#")) {
+                      const resolvedVarUrl = new URL(nextLine, streamUrl).toString();
+                      variants.push({ height: h, url: resolvedVarUrl });
+                      break;
+                    }
+                  }
+                }
+              }
+              if (variants.length > 0) {
+                variants.sort(
+                  (a, b) => Math.abs(a.height - requestedHeight) - Math.abs(b.height - requestedHeight)
+                );
+                streamUrl = variants[0].url;
+                playlistUrl = streamUrl;
+                const varRes = await fetch(playlistUrl, {
+                  headers: {
+                    "User-Agent": COMMON_HEADERS["User-Agent"],
+                    Referer: referer
+                  }
+                });
+                if (varRes.ok) {
+                  playlistText = await varRes.text();
+                }
+              }
+            }
+            if (playlistText.includes("#EXTINF")) {
+              hlsSegmentUrls = extractHlsSegmentUrls(playlistText, playlistUrl);
+            }
+          } else {
+            probeRes.body?.cancel().catch(() => {
+            });
+          }
+        } catch {
+        }
+      }
+      const uid = `${Date.now()}_${Math.random().toString(36).slice(2)}`;
+      const isSlowWorkersCdn = hlsSegmentUrls.length > 250 && hlsSegmentUrls[0] && hlsSegmentUrls[0].includes("workers.dev");
+      const chosenVideoUrls = !isSlowWorkersCdn && hlsSegmentUrls.length > 0 ? hlsSegmentUrls : orionVideoUrls.length > 0 ? orionVideoUrls : hlsSegmentUrls;
+      const videoDownloadTask = async () => {
+        if (chosenVideoUrls.length > 0) {
+          const candidatePath = path.join("/tmp", `zxc_vid_${uid}.ts`);
+          const ok = await downloadSegmentsToFile(
+            chosenVideoUrls,
+            candidatePath,
+            {
+              "User-Agent": COMMON_HEADERS["User-Agent"],
+              Referer: referer
+            },
+            160
+          );
+          if (ok) {
+            tempVideoPath = candidatePath;
+          }
+        }
+      };
+      const audioDownloadTask = async () => {
+        if (orionAudioUrls.length > 0) {
+          const candidatePath = path.join("/tmp", `zxc_aud_${uid}.m4a`);
+          const ok = await downloadSegmentsToFile(
+            orionAudioUrls,
+            candidatePath,
+            {
+              "User-Agent": COMMON_HEADERS["User-Agent"],
+              Referer: "https://zxcstream.cc/"
+            },
+            160
+          );
+          if (ok) {
+            tempAudioPath = candidatePath;
+          }
+        }
+      };
+      await Promise.all([videoDownloadTask(), audioDownloadTask()]);
+      const ffmpegHeaders = `Referer: ${referer}\r
+User-Agent: ${COMMON_HEADERS["User-Agent"]}\r
+`;
+      const videoInputArgs = tempVideoPath ? ["-i", tempVideoPath] : [
+        "-protocol_whitelist",
+        "file,http,https,tcp,tls,crypto",
+        "-headers",
+        ffmpegHeaders,
+        "-i",
+        streamUrl
+      ];
+      const hasSeparateAudio = Boolean(tempAudioPath || tempDubMpdPath);
+      const audioInputArgs = tempAudioPath ? ["-i", tempAudioPath] : tempDubMpdPath ? [
+        "-protocol_whitelist",
+        "file,http,https,tcp,tls,crypto",
+        "-i",
+        tempDubMpdPath
+      ] : [];
+      const cachedMp4TmpPath = `${cachedMp4Path}.tmp_${uid}`;
+      const ffmpegArgs = hasSeparateAudio ? [
+        "-y",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        ...videoInputArgs,
+        ...audioInputArgs,
+        "-map",
+        "0:v:0",
+        "-map",
+        "1:a:0",
+        "-c:v",
+        "copy",
+        "-c:a",
+        "copy",
+        "-metadata:s:a:0",
+        `language=${isoLang}`,
+        "-movflags",
+        "frag_keyframe+empty_moov+default_base_moof",
+        "-f",
+        "mp4",
+        cachedMp4TmpPath
+      ] : [
+        "-y",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        ...videoInputArgs,
+        "-c",
+        "copy",
+        "-bsf:a",
+        "aac_adtstoasc",
+        "-metadata:s:a:0",
+        `language=${isoLang}`,
+        "-movflags",
+        "frag_keyframe+empty_moov+default_base_moof",
+        "-f",
+        "mp4",
+        cachedMp4TmpPath
+      ];
+      await new Promise((resolve) => {
+        const ff = spawn("ffmpeg", ffmpegArgs, { stdio: ["ignore", "ignore", "pipe"] });
+        ff.on("close", () => resolve());
+        ff.on("error", () => resolve());
+      });
+      cleanupTempFiles();
+      if (fs.existsSync(cachedMp4TmpPath) && fs.statSync(cachedMp4TmpPath).size > 1e5) {
+        fs.renameSync(cachedMp4TmpPath, cachedMp4Path);
+        return cachedMp4Path;
+      }
+      if (fs.existsSync(cachedMp4TmpPath)) {
+        try {
+          fs.unlinkSync(cachedMp4TmpPath);
+        } catch {
+        }
+      }
+      return null;
+    } catch (err) {
+      cleanupTempFiles();
+      console.error(`[mp4 cache build error]: ${err?.message}`);
+      return null;
+    }
+  })();
+  inFlightMp4Builds.set(cacheKey, buildPromise);
+  try {
+    return await buildPromise;
+  } finally {
+    inFlightMp4Builds.delete(cacheKey);
+  }
+}
+apiRouter.post("/download/prepare", async (req, res) => {
+  const {
+    mediaType = "movie",
+    tmdbId = "128",
+    season = 1,
+    episode = 1,
+    lang = "hi",
+    quality = "1080p",
+    title = "",
+    sourceUrl = ""
+  } = req.body || {};
+  const heightMatch = String(quality).match(/(\d+)p/i);
+  const requestedHeight = heightMatch ? Number(heightMatch[1]) : 1080;
+  const cacheKey = `${mediaType}_${tmdbId}_s${season}_e${episode}_${String(lang).toLowerCase()}_${requestedHeight}p`.replace(
+    /[^a-zA-Z0-9_-]/g,
+    ""
+  );
+  const cachedMp4Path = path.join("/tmp", `zxc_cached_mp4_${cacheKey}.mp4`);
+  void buildFullMovieMp4ToCache({
+    cacheKey,
+    cachedMp4Path,
+    mediaType: String(mediaType),
+    tmdbId: String(tmdbId),
+    season: String(season),
+    episode: String(episode),
+    lang: String(lang),
+    requestedHeight,
+    title: String(title),
+    sourceUrl: String(sourceUrl)
+  });
+  return res.json({ status: "preparing", cacheKey });
+});
+apiRouter.all("/download/file", async (req, res) => {
+  if (req.method !== "GET" && req.method !== "HEAD") {
+    return res.status(405).send("Method Not Allowed");
+  }
+  const {
+    mediaType = "movie",
+    tmdbId = "128",
+    season = "1",
+    episode = "1",
+    lang = "en",
+    quality = "1080p",
+    title = "",
+    sourceUrl = ""
+  } = req.query;
+  const cleanTitle = (title || (mediaType === "tv" ? "Series" : "Movie")).replace(/[^a-zA-Z0-9_\-\s]/g, "").trim().replace(/\s+/g, ".");
+  const filePart = mediaType === "tv" ? `S${String(season).padStart(2, "0")}E${String(episode).padStart(2, "0")}` : "Movie";
+  const downloadFilename = `${cleanTitle}.${filePart}.${quality}.${lang.toUpperCase()}.mp4`;
+  const heightMatch = quality.match(/(\d+)p/i);
+  const requestedHeight = heightMatch ? Number(heightMatch[1]) : 1080;
+  const cacheKey = `${mediaType}_${tmdbId}_s${season}_e${episode}_${lang.toLowerCase()}_${requestedHeight}p`.replace(
+    /[^a-zA-Z0-9_-]/g,
+    ""
+  );
+  const cachedMp4Path = path.join("/tmp", `zxc_cached_mp4_${cacheKey}.mp4`);
+  try {
+    if (fs.existsSync(cachedMp4Path) && fs.statSync(cachedMp4Path).size > 1e5) {
+      return serveMp4FileWithRange(req, res, cachedMp4Path, downloadFilename);
+    }
+  } catch {
+  }
+  let liveStreamUrl = (sourceUrl || "").trim();
+  if (liveStreamUrl.includes("proxy?url=")) {
+    try {
+      const parsed = new URL(liveStreamUrl, "http://localhost:3000");
+      liveStreamUrl = parsed.searchParams.get("url") || liveStreamUrl;
+    } catch {
+    }
+  }
+  if (liveStreamUrl.startsWith("blob:") || !liveStreamUrl.startsWith("http://") && !liveStreamUrl.startsWith("https://")) {
+    liveStreamUrl = "";
+  }
+  try {
+    const { directSources } = await gatherDirectDownloadSources({
+      mediaType: mediaType === "tv" ? "tv" : "movie",
+      tmdbId: String(tmdbId),
+      season: Number(season) || 1,
+      episode: Number(episode) || 1,
+      title: String(title || "")
+    });
+    if (directSources.length > 0) {
+      const parseH = (q) => q.toUpperCase() === "4K" ? 2160 : Number((q.match(/(\d{3,4})/) || [])[1]) || 1080;
+      const sorted = [...directSources].sort(
+        (a, b) => Math.abs(parseH(a.quality) - requestedHeight) - Math.abs(parseH(b.quality) - requestedHeight)
+      );
+      const chosen = sorted.find((s) => s.directUrl) || sorted[0];
+      if (chosen?.directUrl) {
+        liveStreamUrl = chosen.directUrl;
+      }
+    }
+  } catch {
+  }
+  if (liveStreamUrl && liveStreamUrl.includes("video-downloads.googleusercontent.com")) {
+    try {
+      const upCtrl = new AbortController();
+      req.on("close", () => upCtrl.abort());
+      const upstream = await fetch(liveStreamUrl, {
+        headers: {
+          "User-Agent": COMMON_HEADERS["User-Agent"],
+          Referer: "https://fast-dl.one/"
+        },
+        signal: upCtrl.signal
+      });
+      if (upstream.ok && upstream.body) {
+        res.status(200);
+        res.setHeader("Content-Type", "video/mp4");
+        res.setHeader(
+          "Content-Disposition",
+          `attachment; filename="${downloadFilename}"; filename*=UTF-8''${encodeURIComponent(downloadFilename)}`
+        );
+        res.setHeader("Cache-Control", "no-cache");
+        res.setHeader("X-Content-Type-Options", "nosniff");
+        if (req.method === "HEAD") {
+          upstream.body.cancel().catch(() => {
+          });
+          return res.end();
+        }
+        const ff = spawn("ffmpeg", [
+          "-loglevel",
+          "error",
+          "-i",
+          "pipe:0",
+          "-map",
+          "0:v:0",
+          "-map",
+          "0:a:0?",
+          "-c:v",
+          "copy",
+          "-c:a",
+          "aac",
+          "-ac",
+          "2",
+          "-f",
+          "mp4",
+          "-movflags",
+          "frag_keyframe+empty_moov+default_base_moof",
+          "pipe:1"
+        ]);
+        const nodeStream = Readable.fromWeb(upstream.body);
+        nodeStream.on("error", () => {
+          try {
+            ff.kill("SIGKILL");
+          } catch {
+          }
+        });
+        ff.stdin.on("error", () => {
+        });
+        nodeStream.pipe(ff.stdin);
+        ff.stdout.pipe(res);
+        req.on("close", () => {
+          try {
+            nodeStream.destroy();
+            ff.kill("SIGKILL");
+          } catch {
+          }
+        });
+        return;
+      }
+    } catch {
+    }
+  }
+  res.status(200);
+  res.setHeader("Content-Type", "video/mp4");
+  res.setHeader(
+    "Content-Disposition",
+    `attachment; filename="${downloadFilename}"; filename*=UTF-8''${encodeURIComponent(downloadFilename)}`
+  );
+  res.setHeader("Accept-Ranges", "bytes");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  if (req.method === "HEAD") {
+    return res.end();
+  }
+  res.flushHeaders();
+  res.write(MP4_ISO5_FTYP_BOX);
+  res.write(createMp4FreeBox(16384));
+  let clientClosed = false;
+  req.on("close", () => {
+    clientClosed = true;
+  });
+  const heartbeatTimer = setInterval(() => {
+    if (!clientClosed && !res.writableEnded) {
+      try {
+        res.write(createMp4FreeBox(4096));
+      } catch {
+      }
+    }
+  }, 800);
+  const builtPath = await buildFullMovieMp4ToCache({
+    cacheKey,
+    cachedMp4Path,
+    mediaType,
+    tmdbId,
+    season,
+    episode,
+    lang,
+    requestedHeight,
+    title,
+    sourceUrl: liveStreamUrl || sourceUrl
+  });
+  clearInterval(heartbeatTimer);
+  if (clientClosed || res.writableEnded) {
+    return;
+  }
+  if (builtPath && fs.existsSync(builtPath)) {
+    let skipOffset = 0;
+    try {
+      const fd = fs.openSync(builtPath, "r");
+      const headerBuf = Buffer.alloc(16);
+      fs.readSync(fd, headerBuf, 0, 16, 0);
+      fs.closeSync(fd);
+      if (headerBuf.slice(4, 8).toString("ascii") === "ftyp") {
+        const boxLen = headerBuf.readUInt32BE(0);
+        if (boxLen >= 16 && boxLen <= 128) {
+          skipOffset = boxLen;
+        }
+      }
+    } catch {
+      skipOffset = 28;
+    }
+    return fs.createReadStream(builtPath, { start: skipOffset }).pipe(res);
+  }
+  const sampleQuality = requestedHeight >= 1080 ? "1080p" : requestedHeight >= 720 ? "720p" : requestedHeight >= 480 ? "480p" : "360p";
+  const sampleFilePath = path.join(process.cwd(), "public", "sample-media", `test_${sampleQuality}.mp4`);
+  if (fs.existsSync(sampleFilePath)) {
+    let skipOffset = 0;
+    try {
+      const fd = fs.openSync(sampleFilePath, "r");
+      const headerBuf = Buffer.alloc(16);
+      fs.readSync(fd, headerBuf, 0, 16, 0);
+      fs.closeSync(fd);
+      if (headerBuf.slice(4, 8).toString("ascii") === "ftyp") {
+        const boxLen = headerBuf.readUInt32BE(0);
+        if (boxLen >= 16 && boxLen <= 128) {
+          skipOffset = boxLen;
+        }
+      }
+    } catch {
+      skipOffset = 0;
+    }
+    return fs.createReadStream(sampleFilePath, { start: skipOffset }).pipe(res);
+  }
+  return res.end();
+});
+apiRouter.get("/download/subtitle", async (req, res) => {
+  const {
+    title = "Subtitle",
+    lang = "en",
+    langName = "English",
+    sourceUrl
+  } = req.query;
+  const cleanTitle = (title || "Subtitle").replace(/[^a-zA-Z0-9_\-\s]/g, "").trim().replace(/\s+/g, ".");
+  const filename = `${cleanTitle}.${lang}.srt`;
+  res.setHeader("Content-Type", "application/x-subrip; charset=utf-8");
+  res.setHeader(
+    "Content-Disposition",
+    `attachment; filename="${filename}"; filename*=UTF-8''${encodeURIComponent(filename)}`
+  );
+  res.setHeader("Cache-Control", "public, max-age=3600");
+  if (sourceUrl && sourceUrl.startsWith("http")) {
+    try {
+      const up = await fetch(sourceUrl, {
+        headers: {
+          "User-Agent": COMMON_HEADERS["User-Agent"],
+          Referer: "https://zxcstream.cc/"
+        }
+      });
+      if (up.ok) {
+        const text = await up.text();
+        return res.send(text);
+      }
+    } catch {
+    }
+  }
+  const srtContent = `1\r
+00:00:01,000 --> 00:00:05,000\r
+[${title} - ${langName || lang.toUpperCase()} Subtitle]\r
+\r
+2\r
+00:00:05,500 --> 00:00:10,000\r
+Synchronized with ZXC[STREAM] Player.\r
+`;
+  return res.send(srtContent);
+});
 apiRouter.get("/embed/sentinel", (req, res) => {
   const base = "https://zxcstream-mirror.vercel.app";
   const { mediaType = "movie", tmdbId = "128", season = "1", episode = "1" } = req.query;
-  const path = mediaType === "tv" ? `${base}/embed/tv/${tmdbId}/${season}/${episode}` : `${base}/embed/movie/${tmdbId}`;
-  return res.json({ embed: path });
+  const path2 = mediaType === "tv" ? `${base}/embed/tv/${tmdbId}/${season}/${episode}` : `${base}/embed/movie/${tmdbId}`;
+  return res.json({ embed: path2 });
 });
 var theIntroDbCache = /* @__PURE__ */ new Map();
 var upstreamIntroCache = /* @__PURE__ */ new Map();
@@ -3807,8 +6325,12 @@ function extractHscowAssetKey(url) {
 }
 function needsNxshaProxy(url) {
   if (!url) return false;
+  if (url.startsWith("/api/nxsha/proxy") || url.startsWith("/api/stream/proxy")) return false;
   const lower = url.toLowerCase();
-  return lower.includes("itsnitrox.tech") || lower.includes("finepulfe.xyz");
+  if (lower.includes("vidstuck.cc") || lower.includes("zxcstream.cc")) {
+    return false;
+  }
+  return true;
 }
 function wrapInNxshaProxy(url) {
   if (!url || url.startsWith("/api/nxsha/proxy")) return url;
@@ -3885,12 +6407,346 @@ async function fetchNxshaSubtitles(tmdbId, mediaType, season = 1, episode = 1, i
     return [];
   }
 }
+var AETHO_SERVER_DEFINITIONS = {
+  orion: { name: "AethoOrion", desc: "Multi-Audio Master \u2022 Hindi, Tamil, Telugu, EN (1080p)", zxcUpstream: "alatreon", preferRousav: true },
+  vega: { name: "AethoVega", desc: "Hindi / Tamil / Telugu / English Direct HLS Master", zxcUpstream: "valstrax" },
+  callisto: { name: "AethoCallisto", desc: "16-Language Global & Hindi Bridge \u2022 1080p", zxcUpstream: "alatreon", preferRousav: true },
+  sirius: { name: "AethoSirius", desc: "Ultra-Fast Direct HLS Master \u2022 Hindi / EN (1080p)", zxcUpstream: "ursa" },
+  bharat: { name: "AethoBharat", desc: "Dedicated Hindi & South Indian Multi-Audio Node", zxcUpstream: "alatreon", preferRousav: true },
+  indus: { name: "AethoIndus", desc: "India Edge \u2022 Hindi, Tamil, Telugu & English HLS", zxcUpstream: "valstrax", preferRousav: true },
+  bolly: { name: "AethoBolly", desc: "Bollywood & Hollywood Dual-Audio Hindi Server", zxcUpstream: "alatreon", preferRousav: true },
+  kuro: { name: "AethoKuro", desc: "Anime & Series Multi-Audio (Hindi / Sub / Dub)", zxcUpstream: "ursa", preferRousav: true },
+  quantum: { name: "AethoQuantum", desc: "Adaptive 1080p/720p/360p Master HLS", zxcUpstream: "atlas" },
+  rousav: { name: "AethoRousav", desc: "22-Language Multi-Track HLS + Embedded Subs", zxcUpstream: "alatreon", preferRousav: true },
+  atlas: { name: "AethoAtlas", desc: "Fast Edge H.264 HLS \u2022 Universal", zxcUpstream: "atlas" },
+  ursa: { name: "AethoUrsa", desc: "Low-Latency Edge H.264 HLS", zxcUpstream: "ursa" },
+  andromeda: { name: "AethoAndromeda", desc: "Smooth Playback & Ultra HD Stream", zxcUpstream: "valstrax" },
+  valstrax: { name: "AethoValstrax", desc: "High-Bitrate 1080p HD Stream", zxcUpstream: "valstrax" },
+  alatreon: { name: "AethoAlatreon", desc: "Extended Movie & TV Library Node", zxcUpstream: "alatreon" },
+  resshin: { name: "AethoResshin", desc: "Multi-Resolution & Hindi Dub Stream", zxcUpstream: "alatreon", preferRousav: true },
+  centaurus: { name: "AethoCentaurus", desc: "Multi-Resolution 1080p/720p/480p Stream", zxcUpstream: "ursa" },
+  daedalus: { name: "AethoDaedalus", desc: "Global CDN Mirror HLS", zxcUpstream: "ursa" },
+  quasar: { name: "AethoQuasar", desc: "High-Speed India & Asia CDN Node", zxcUpstream: "valstrax", preferRousav: true },
+  zenith: { name: "AethoZenith", desc: "Multi-Language 1080p Cinema Bridge", zxcUpstream: "alatreon", preferRousav: true },
+  nebula: { name: "AethoNebula", desc: "Dual-Audio Hindi/English Express Node", zxcUpstream: "valstrax", preferRousav: true },
+  zxc_pulse: { name: "AethoPulse", desc: "Secondary Multi-Audio Cluster", zxcUpstream: "alatreon", preferRousav: true },
+  zxc_atlas: { name: "AethoVortex", desc: "Fast Edge HLS Cluster", zxcUpstream: "atlas" },
+  zxc_ursa: { name: "AethoApex", desc: "Global Backup HLS Node", zxcUpstream: "ursa" },
+  hyperion: { name: "AethoHyperion", desc: "Cloud Fabric 1080p Node", zxcUpstream: "atlas" },
+  vidfast: { name: "AethoFlash", desc: "Ultra-Fast Instant Start Cluster", zxcUpstream: "ursa" },
+  vaplayer: { name: "AethoPrism", desc: "European Edge Cinema Node", zxcUpstream: "ursa" },
+  kronos: { name: "AethoKronos", desc: "Multi-CDN Aggregated Stream", zxcUpstream: "alatreon", preferRousav: true },
+  pegasus: { name: "AethoPegasus", desc: "Zero-Buffer Adaptive HLS (Hindi/EN)", zxcUpstream: "valstrax", preferRousav: true },
+  nova: { name: "AethoNova", desc: "High-Contrast Cinema 1080p Multi-Audio", zxcUpstream: "alatreon", preferRousav: true },
+  apollo: { name: "AethoApollo", desc: "Universal Failover Stream Node", zxcUpstream: "valstrax" }
+};
+var aethoSharedCache = /* @__PURE__ */ new Map();
+async function getAethoSharedData(params) {
+  const cleanId = String(params.tmdbId || "128").trim();
+  const mediaType = params.mediaType === "tv" ? "tv" : "movie";
+  const season = Math.max(1, Number(params.season) || 1);
+  const episode = Math.max(1, Number(params.episode) || 1);
+  const cacheKey = `${mediaType}:${cleanId}:${season}:${episode}`;
+  const now = Date.now();
+  const cached = aethoSharedCache.get(cacheKey);
+  if (cached && cached.expiresAt > now) {
+    return cached.promise;
+  }
+  const runSharedExtract = async () => {
+    let title = "";
+    let releaseYear = "";
+    let imdbId = String(
+      params.imdbId || tmdbImdbCache.get(cleanId) || getSeriesImdbId(cleanId) || ""
+    ).trim();
+    try {
+      const details = await fetchTmdbDetailsWithFallback(mediaType, cleanId);
+      if (details) {
+        title = String(details.title || details.name || "").trim();
+        const dateStr = String(details.release_date || details.first_air_date || "").trim();
+        if (dateStr) releaseYear = dateStr.slice(0, 4);
+        if (!imdbId && details.imdb_id) {
+          imdbId = String(details.imdb_id).trim();
+          tmdbImdbCache.set(cleanId, imdbId);
+        }
+      }
+    } catch {
+    }
+    if (!title) {
+      const cat = getMediaByTmdbId(mediaType, cleanId);
+      title = cat?.title || (mediaType === "tv" ? "Series" : "Movie");
+      if (!releaseYear && cat?.releaseYear) releaseYear = String(cat.releaseYear);
+    }
+    const aethoApiPromise = (async () => {
+      try {
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), 3600);
+        const qs = new URLSearchParams({
+          tmdbId: cleanId,
+          mediaType,
+          server: "callisto",
+          ...mediaType === "tv" ? { season: String(season), episode: String(episode) } : {}
+        });
+        const res = await fetch(`https://embed.aethoflix.world/api/extract?${qs.toString()}`, {
+          headers: {
+            "User-Agent": NXSHA_COMMON_HEADERS["User-Agent"],
+            Accept: "application/json",
+            Referer: `https://embed.aethoflix.world/embed/${mediaType}/${cleanId}`
+          },
+          signal: ctrl.signal
+        });
+        clearTimeout(timer);
+        if (!res.ok) return { rousavSources: [], subtitles: [], dubs: [] };
+        const data = await res.json();
+        const rawSources = Array.isArray(data?.sources) ? data.sources : [];
+        const byServer = data?.byServer && typeof data.byServer === "object" ? data.byServer : {};
+        for (const srvList of Object.values(byServer)) {
+          if (Array.isArray(srvList)) {
+            rawSources.push(...srvList);
+          }
+        }
+        const rousavSources = [];
+        const seen = /* @__PURE__ */ new Set();
+        for (const item of rawSources) {
+          let rawUrl = typeof item?.url === "string" ? item.url.trim() : "";
+          if (!rawUrl) continue;
+          if (rawUrl.includes("proxy-m3u8?")) {
+            try {
+              const parsed = new URL(rawUrl, "https://embed.aethoflix.world");
+              const inner = parsed.searchParams.get("url");
+              if (inner) rawUrl = inner.trim();
+            } catch {
+            }
+          }
+          if (!rawUrl.startsWith("http") || seen.has(rawUrl)) continue;
+          const lower = rawUrl.toLowerCase();
+          if (lower.includes("vidbolt.xyz") || lower.includes("workers.dev") || lower.includes("_h265_") || lower.includes("googleusercontent.com") || lower.includes(".mkv") || !isTrustedNxshaMediaUrl(rawUrl)) {
+            continue;
+          }
+          seen.add(rawUrl);
+          rousavSources.push({
+            id: `aetho-direct-${rousavSources.length + 1}`,
+            url: rawUrl,
+            quality: item?.quality || "1080p",
+            label: item?.label || "Aetho Direct Multi-Audio HLS (1080p)",
+            type: "hls",
+            lang: "hi",
+            langName: "Hindi",
+            multiLangs: ["hi", "en"]
+          });
+        }
+        const subtitles = normalizeSubtitleTracks([], Array.isArray(data?.subtitles) ? data.subtitles : []);
+        const dubs = [];
+        if (Array.isArray(data?.dubs)) {
+          for (const d of data.dubs) {
+            const langCode = String(d?.lang || "").trim().toLowerCase();
+            if (!langCode) continue;
+            dubs.push({
+              type: 0,
+              lang: langCode,
+              name: String(d?.name || d?.label || langCode),
+              label: String(d?.label || d?.name || langCode),
+              original: Boolean(d?.original)
+            });
+          }
+        }
+        return { rousavSources, subtitles, dubs };
+      } catch {
+        return { rousavSources: [], subtitles: [], dubs: [] };
+      }
+    })();
+    const upstreams = [
+      "alatreon",
+      "valstrax",
+      "ursa",
+      "atlas"
+    ];
+    const zxcByUpstream = {
+      alatreon: [],
+      valstrax: [],
+      ursa: [],
+      atlas: []
+    };
+    const zxcPromises = upstreams.map(async (upName) => {
+      try {
+        const res = await resolveForServer(upName, {
+          mediaType,
+          tmdbId: cleanId,
+          season,
+          episode,
+          title,
+          releaseYear: releaseYear || "2022",
+          date: `${releaseYear || "2022"}-01-01`,
+          imdbId,
+          skipVegaFallback: true
+        });
+        const links = Array.isArray(res?.links) ? res.links.filter((l) => l?.link && !l.onlyHevc) : [];
+        zxcByUpstream[upName] = links.map((l, i) => ({
+          id: `aetho-${upName}-${i + 1}`,
+          url: l.link,
+          quality: l.quality || "1080p",
+          label: `1080p FHD [Multi-Audio]`,
+          type: l.type === "dash" || l.link.includes(".mpd") || l.link.includes("andromeda") ? "dash" : "hls",
+          lang: "hi",
+          langName: "Hindi",
+          multiLangs: ["hi", "en"]
+        }));
+      } catch {
+        zxcByUpstream[upName] = [];
+      }
+    });
+    const sharedEntry = {
+      rousavSources: [],
+      zxcByUpstream,
+      subtitles: [],
+      dubs: [
+        {
+          type: 0,
+          lang: "orig",
+          name: "Original Audio",
+          label: "Original Audio",
+          original: true
+        },
+        {
+          type: 0,
+          lang: "hi",
+          name: "Hindi dub",
+          label: "Hindi",
+          original: false
+        },
+        {
+          type: 0,
+          lang: "en",
+          name: "English dub",
+          label: "English",
+          original: false
+        }
+      ]
+    };
+    await Promise.race([
+      Promise.all([aethoApiPromise, Promise.all(zxcPromises)]),
+      Promise.all(zxcPromises).then(
+        () => new Promise((resolve) => setTimeout(resolve, 400))
+      )
+    ]);
+    void aethoApiPromise.then((aethoApiRes) => {
+      if (aethoApiRes.rousavSources.length > 0) {
+        sharedEntry.rousavSources = aethoApiRes.rousavSources;
+      }
+      if (aethoApiRes.subtitles.length > 0) {
+        sharedEntry.subtitles = aethoApiRes.subtitles;
+      }
+      if (aethoApiRes.dubs.length > 0) {
+        const dubsMap = /* @__PURE__ */ new Map();
+        for (const d of sharedEntry.dubs) dubsMap.set(d.lang, d);
+        for (const d of aethoApiRes.dubs) {
+          if (!dubsMap.has(d.lang)) dubsMap.set(d.lang, d);
+        }
+        sharedEntry.dubs = Array.from(dubsMap.values());
+      }
+    });
+    const hasAnyZxc = Object.values(zxcByUpstream).some((arr) => arr.length > 0);
+    if (!hasAnyZxc && sharedEntry.rousavSources.length === 0) {
+      try {
+        const vegaRes = await resolveVegaMoviesCombined({
+          tmdbId: cleanId,
+          mediaType,
+          season,
+          episode,
+          title,
+          releaseYear,
+          imdbId
+        });
+        if (vegaRes.success && vegaRes.sources.length > 0) {
+          sharedEntry.rousavSources = vegaRes.sources;
+        }
+      } catch {
+      }
+    }
+    return sharedEntry;
+  };
+  const promise = runSharedExtract();
+  aethoSharedCache.set(cacheKey, { expiresAt: now + 6e4, promise });
+  return promise;
+}
+async function resolveAethoServerSources(params) {
+  const def = AETHO_SERVER_DEFINITIONS[params.provider];
+  if (!def) {
+    return { sources: [], subtitles: [], dubs: [] };
+  }
+  const shared = await getAethoSharedData({
+    tmdbId: params.tmdbId,
+    mediaType: params.mediaType,
+    season: params.season,
+    episode: params.episode,
+    imdbId: params.imdbId
+  });
+  const orderedPool = [];
+  const primaryZxc = shared.zxcByUpstream[def.zxcUpstream] || [];
+  const allZxc = [
+    ...primaryZxc,
+    ...shared.zxcByUpstream.alatreon || [],
+    ...shared.zxcByUpstream.valstrax || [],
+    ...shared.zxcByUpstream.ursa || [],
+    ...shared.zxcByUpstream.atlas || []
+  ];
+  if (def.preferRousav && shared.rousavSources.length > 0) {
+    orderedPool.push(...shared.rousavSources, ...allZxc);
+  } else {
+    orderedPool.push(...allZxc, ...shared.rousavSources);
+  }
+  const seenUrls = /* @__PURE__ */ new Set();
+  const finalSources = [];
+  for (const src of orderedPool) {
+    if (!src?.url || seenUrls.has(src.url)) continue;
+    seenUrls.add(src.url);
+    const playableUrl = src.url.includes("vidstuck.cc") && !src.url.startsWith("/api/stream/proxy") ? `/api/stream/proxy?url=${encodeURIComponent(src.url)}` : src.url;
+    finalSources.push({
+      ...src,
+      url: playableUrl,
+      org_uri: src.url,
+      id: `${params.provider}-${finalSources.length + 1}`,
+      provider: params.provider,
+      label: `${def.name} | ${src.quality || "1080p"} [${def.desc}]`
+    });
+  }
+  return {
+    sources: finalSources,
+    subtitles: shared.subtitles,
+    dubs: shared.dubs
+  };
+}
 async function fetchNxshaSources(provider, tmdbId, mediaType, season = 1, episode = 1, imdbId = "", parentSignal) {
   if (!isAuthorizedNxshaProvider(provider)) {
     return { sources: [], subtitles: [], dubs: [] };
   }
   if (parentSignal?.aborted) {
     throw new Error("Aborted before fetchNxshaSources start");
+  }
+  if (provider === "vegamovies") {
+    const vegaRes = await resolveVegaMoviesCombined({
+      tmdbId: String(tmdbId || ""),
+      mediaType: mediaType === "tv" ? "tv" : "movie",
+      season: Number(season) || 1,
+      episode: Number(episode) || 1,
+      imdbId,
+      parentSignal
+    });
+    return {
+      sources: vegaRes.sources,
+      subtitles: vegaRes.subtitles,
+      dubs: vegaRes.dubs
+    };
+  }
+  if (provider in AETHO_SERVER_DEFINITIONS) {
+    return resolveAethoServerSources({
+      provider,
+      tmdbId: String(tmdbId || ""),
+      mediaType: mediaType === "tv" ? "tv" : "movie",
+      season: Number(season) || 1,
+      episode: Number(episode) || 1,
+      imdbId,
+      parentSignal
+    });
   }
   try {
     const fetchWithLang = async (ex_lang) => {
@@ -4301,8 +7157,8 @@ var handleNxshaResolve = async (req, res) => {
   const raceResult = await raceNxshaProviders({
     providers: candidateProviders,
     concurrencyLimit: 6,
-    providerTimeoutMs: 4800,
-    overallTimeoutMs: 7500,
+    providerTimeoutMs: 6500,
+    overallTimeoutMs: 8500,
     queryProvider: async (provider, signal) => {
       if (provider === "rive-citadel") {
         return getCitadelSources();
@@ -4343,16 +7199,18 @@ var handleNxshaResolve = async (req, res) => {
     const winner = raceResult.winner;
     const mergedSources = [...winner.sources];
     const existingUrls = new Set(mergedSources.map((s) => s.url));
-    if (citadelState.resolved && citadelState.resolved.sources.length > 0) {
-      for (const citSrc of citadelState.resolved.sources) {
-        if (citSrc?.url && !existingUrls.has(citSrc.url) && validatePlayableNxshaSource(citSrc).valid) {
-          existingUrls.add(citSrc.url);
-          mergedSources.push(citSrc);
+    if (!strictSingleServer && (winner.provider === "rive-citadel" || preferredServer === "rive-citadel")) {
+      if (citadelState.resolved && citadelState.resolved.sources.length > 0) {
+        for (const citSrc of citadelState.resolved.sources) {
+          if (citSrc?.url && !existingUrls.has(citSrc.url) && validatePlayableNxshaSource(citSrc).valid) {
+            existingUrls.add(citSrc.url);
+            mergedSources.push(citSrc);
+          }
         }
-      }
-      for (const d of citadelState.resolved.dubs) {
-        if (d?.lang && !allDubsMap.has(d.lang) && mergedSources.some((s) => s.lang === d.lang)) {
-          allDubsMap.set(d.lang, d);
+        for (const d of citadelState.resolved.dubs) {
+          if (d?.lang && !allDubsMap.has(d.lang) && mergedSources.some((s) => s.lang === d.lang)) {
+            allDubsMap.set(d.lang, d);
+          }
         }
       }
     }
@@ -4416,11 +7274,11 @@ var handleNxshaResolve = async (req, res) => {
     );
     const year = releaseStr.slice(0, 4);
     const fallbackRace = await raceNxshaProviders({
-      providers: ["valstrax", "atlas", "ursa", "orion"],
+      providers: ["valstrax", "vegamovies", "atlas", "ursa", "orion"],
       allowUnauthorizedProviders: true,
-      concurrencyLimit: 4,
-      providerTimeoutMs: 4500,
-      overallTimeoutMs: 5500,
+      concurrencyLimit: 5,
+      providerTimeoutMs: 6500,
+      overallTimeoutMs: 7500,
       queryProvider: async (fallbackSrv) => {
         const resolved = await resolveForServer(fallbackSrv, {
           mediaType,
@@ -4428,25 +7286,31 @@ var handleNxshaResolve = async (req, res) => {
           season,
           episode,
           title,
+          originalTitle: String(details?.original_title || details?.original_name || ""),
           releaseYear: year,
           date: releaseStr,
           lastAirDate: String(details?.last_air_date || ""),
           imdbId,
           dubCode: "",
-          dubType: "0"
+          dubType: "0",
+          skipVegaFallback: fallbackSrv !== "vegamovies"
         });
         const playableLinks = Array.isArray(resolved?.links) ? resolved.links.filter((l) => l?.link && !l.onlyHevc) : [];
         return {
-          sources: playableLinks.map((l) => ({
-            id: `verified-${fallbackSrv}`,
-            provider: fallbackSrv,
-            url: l.link,
-            quality: "1080p",
-            label: "1080p | Original",
-            type: l.type === "dash" || l.type === "andromeda" ? "dash" : "hls",
-            lang: "en",
-            langName: "Original"
-          })),
+          sources: playableLinks.map((l) => {
+            const playableUrl = l.link.includes("vidstuck.cc") && !l.link.startsWith("/api/stream/proxy") ? `/api/stream/proxy?url=${encodeURIComponent(l.link)}` : l.link;
+            return {
+              id: `verified-${fallbackSrv}`,
+              provider: fallbackSrv,
+              url: playableUrl,
+              org_uri: l.link,
+              quality: l.quality || "1080p",
+              label: l.label || "1080p | Original",
+              type: l.type === "mp4" ? "mp4" : l.type === "dash" || l.type === "andromeda" ? "dash" : "hls",
+              lang: l.lang || "en",
+              langName: "Original"
+            };
+          }),
           subtitles: [],
           dubs: Array.isArray(resolved?.dubs) ? resolved.dubs : []
         };
@@ -4552,11 +7416,23 @@ apiRouter.get("/anime/validate/:tmdbId", async (req, res) => {
     });
   }
 });
+var animeResolveCache = /* @__PURE__ */ new Map();
 var handleAnimeResolve = async (req, res) => {
-  const params = {
+  const rawParams = {
     ...req.query,
     ...req.body
   };
+  const params = {
+    ...rawParams,
+    tmdbId: String(rawParams.tmdbId || rawParams.id || "").trim(),
+    mediaType: rawParams.mediaType || rawParams.type || "tv"
+  };
+  const cacheKey = `${params.mediaType}:${params.tmdbId}:${params.season || 1}:${params.episode || 1}:${params.preferredAudio || "ja"}`;
+  const now = Date.now();
+  const cached = animeResolveCache.get(cacheKey);
+  if (cached && cached.expiresAt > now) {
+    return res.json(cached.data);
+  }
   try {
     const result = await resolveAnimeContent(params, {
       fetchTmdbDetailsWithFallback,
@@ -4565,6 +7441,13 @@ var handleAnimeResolve = async (req, res) => {
     if (!result.success) {
       const isValidationRejection = result.error?.includes("Anime Core") || result.error?.includes("dedicated to Anime") || result.error?.includes("Western Animation") || result.error?.includes("Live-Action");
       return res.status(isValidationRejection ? 400 : 404).json(result);
+    }
+    if (result.success && result.sources && result.sources.length > 0) {
+      animeResolveCache.set(cacheKey, { expiresAt: now + 5 * 60 * 1e3, data: result });
+      if (animeResolveCache.size > 200) {
+        const oldestKey = animeResolveCache.keys().next().value;
+        if (oldestKey) animeResolveCache.delete(oldestKey);
+      }
     }
     return res.json(result);
   } catch (err) {
@@ -4576,6 +7459,408 @@ var handleAnimeResolve = async (req, res) => {
 };
 apiRouter.post("/anime/resolve", handleAnimeResolve);
 apiRouter.get("/anime/resolve", handleAnimeResolve);
+var vegaCombinedCache = /* @__PURE__ */ new Map();
+async function resolveVegaMoviesCombined(params) {
+  const cleanId = String(params.tmdbId || "128").trim();
+  const mediaType = params.mediaType === "tv" ? "tv" : "movie";
+  const season = Math.max(1, Number(params.season) || 1);
+  const episode = Math.max(1, Number(params.episode) || 1);
+  const requestedDub = String(params.dubCode || "hi").trim().toLowerCase();
+  const cacheKey = `${mediaType}:${cleanId}:${season}:${episode}:${requestedDub}`;
+  const now = Date.now();
+  const cached = vegaCombinedCache.get(cacheKey);
+  if (cached && cached.expiresAt > now && !params.parentSignal?.aborted) {
+    return cached.promise;
+  }
+  const runResolution = async () => {
+    let title = String(params.title || "").trim();
+    if (title === "Movie" || title === "Series") {
+      title = "";
+    }
+    let originalTitle = String(params.originalTitle || "").trim();
+    let releaseYear = String(params.releaseYear || "").trim();
+    if (releaseYear === "2022" && !params.title) {
+      releaseYear = "";
+    }
+    let imdbId = String(
+      params.imdbId || tmdbImdbCache.get(cleanId) || getSeriesImdbId(cleanId) || ""
+    ).trim();
+    if (!title || !originalTitle || !imdbId || !releaseYear) {
+      try {
+        const details = await fetchTmdbDetailsWithFallback(mediaType, cleanId);
+        if (details) {
+          title = title || String(details.title || details.name || "").trim();
+          originalTitle = originalTitle || String(details.original_title || details.original_name || "").trim();
+          const dateStr = String(details.release_date || details.first_air_date || "").trim();
+          if (!releaseYear && dateStr) releaseYear = dateStr.slice(0, 4);
+          if (!imdbId && details.imdb_id) {
+            imdbId = String(details.imdb_id).trim();
+            tmdbImdbCache.set(cleanId, imdbId);
+          }
+        }
+      } catch {
+      }
+    }
+    if (!title) {
+      const cat = getMediaByTmdbId(mediaType, cleanId);
+      title = cat?.title || "";
+      if (!releaseYear && cat?.releaseYear) releaseYear = String(cat.releaseYear);
+    }
+    const pirateSourcesPromise = (async () => {
+      try {
+        const embedReferer = mediaType === "tv" ? `https://embed.theogpiratebot.online/embed/tv/${cleanId}/${season}/${episode}?color=f4f4f4&episodeSelector=1` : `https://embed.theogpiratebot.online/embed/movie/${cleanId}?color=f4f4f4`;
+        const sessCtrl = new AbortController();
+        const sessTimer = setTimeout(() => sessCtrl.abort(), 3500);
+        if (params.parentSignal) {
+          params.parentSignal.addEventListener("abort", () => sessCtrl.abort(), { once: true });
+        }
+        const sessRes = await fetch("https://embed.theogpiratebot.online/api/v1/session", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Accept: "application/json",
+            "User-Agent": COMMON_HEADERS["User-Agent"],
+            Origin: "https://embed.theogpiratebot.online",
+            Referer: embedReferer
+          },
+          body: JSON.stringify({
+            type: mediaType === "tv" ? "tv" : "movie",
+            tmdb: String(cleanId)
+          }),
+          signal: sessCtrl.signal
+        });
+        clearTimeout(sessTimer);
+        if (!sessRes.ok) return { sources: [], subtitles: [] };
+        const sessData = await sessRes.json();
+        if (!sessData?.ok || !sessData?.pltoken || !sessData?.nonce) {
+          return { sources: [], subtitles: [] };
+        }
+        const candidateSources = ["source-3", "source-2", "source-4", "source-1"];
+        for (const src of candidateSources) {
+          if (params.parentSignal?.aborted) break;
+          try {
+            const pbQuery = new URLSearchParams({
+              type: mediaType === "tv" ? "tv" : "movie",
+              tmdb: String(cleanId),
+              source: src,
+              nonce: String(sessData.nonce),
+              lang: requestedDub
+            });
+            if (mediaType === "tv") {
+              pbQuery.set("s", String(season));
+              pbQuery.set("e", String(episode));
+            }
+            const pbCtrl = new AbortController();
+            const pbTimer = setTimeout(() => pbCtrl.abort(), 3500);
+            if (params.parentSignal) {
+              params.parentSignal.addEventListener("abort", () => pbCtrl.abort(), { once: true });
+            }
+            const pbRes = await fetch(
+              `https://embed.theogpiratebot.online/api/v1/playback?${pbQuery.toString()}`,
+              {
+                headers: {
+                  Accept: "application/json",
+                  "User-Agent": COMMON_HEADERS["User-Agent"],
+                  Origin: "https://embed.theogpiratebot.online",
+                  Referer: embedReferer,
+                  "X-Playback-Token": String(sessData.pltoken)
+                },
+                signal: pbCtrl.signal
+              }
+            );
+            clearTimeout(pbTimer);
+            if (pbRes.ok) {
+              const pbData = await pbRes.json();
+              const rawSources = Array.isArray(pbData?.sources) ? pbData.sources : pbData?.primary ? [pbData.primary] : [];
+              if (pbData?.ok && rawSources.length > 0) {
+                const mapped = rawSources.filter((s) => s && typeof s.url === "string" && s.url.length > 0).map((s, idx) => {
+                  const fullStreamUrl = s.url.startsWith("http") ? s.url : `https://embed.theogpiratebot.online${s.url.startsWith("/") ? "" : "/"}${s.url}`;
+                  return {
+                    id: `vegamovies-pirate-${src}-${idx + 1}`,
+                    provider: "vegamovies",
+                    url: `/api/stream/proxy?url=${encodeURIComponent(fullStreamUrl)}`,
+                    type: "hls",
+                    quality: s.quality || "1080p",
+                    label: `Vegamovies | 1080p FHD [Hindi & Dual Audio]`,
+                    lang: requestedDub,
+                    langName: requestedDub === "en" ? "English" : "Hindi",
+                    multiLangs: ["hi", "en"]
+                  };
+                });
+                const subs = Array.isArray(rawSources[0]?.subtitles) ? rawSources[0].subtitles : [];
+                if (mapped.length > 0) {
+                  return { sources: mapped, subtitles: subs };
+                }
+              }
+            }
+          } catch {
+          }
+        }
+        return { sources: [], subtitles: [] };
+      } catch {
+        return { sources: [], subtitles: [] };
+      }
+    })();
+    const directPromise = resolveVegaMoviesWithPost({
+      tmdbId: cleanId,
+      mediaType,
+      season,
+      episode,
+      title,
+      originalTitle,
+      year: releaseYear,
+      imdbId,
+      signal: params.parentSignal
+    }).catch(() => ({ sources: [], matchedPost: null, imdbId: null }));
+    const zxcServersToQuery = ["valstrax", "orion", "atlas", "ursa", "alatreon", "daedalus"];
+    const zxcPromises = zxcServersToQuery.map(async (srvName) => {
+      try {
+        const zxcRes = await Promise.race([
+          resolveForServer(srvName, {
+            mediaType,
+            tmdbId: cleanId,
+            season,
+            episode,
+            title,
+            releaseYear: releaseYear || "2022",
+            date: `${releaseYear || "2022"}-01-01`,
+            imdbId,
+            dubCode: requestedDub,
+            skipVegaFallback: true
+          }),
+          new Promise((r) => setTimeout(() => r(null), 3500))
+        ]);
+        const validLinks = Array.isArray(zxcRes?.links) ? zxcRes.links.filter((l) => l?.link && !l.onlyHevc) : [];
+        return validLinks.map((l, i) => ({
+          id: `vegamovies-${srvName}-${i + 1}`,
+          provider: "vegamovies",
+          url: l.link,
+          quality: l.quality || "1080p",
+          label: `Vegamovies | 1080p FHD [Hindi & Dual Audio]`,
+          type: l.type === "dash" || l.link.includes(".mpd") || l.link.includes("andromeda") ? "dash" : "hls",
+          isEmbed: false,
+          onlyHevc: false,
+          lang: requestedDub,
+          langName: requestedDub === "en" ? "English" : "Hindi",
+          multiLangs: ["hi", "en"]
+        }));
+      } catch {
+        return [];
+      }
+    });
+    const citadelPromise = Promise.race([
+      fetchNxshaSources(
+        "rive-citadel",
+        cleanId,
+        mediaType,
+        season,
+        episode,
+        imdbId,
+        params.parentSignal
+      ),
+      new Promise((r) => setTimeout(() => r({ sources: [] }), 2500))
+    ]).catch(() => ({ sources: [] }));
+    const [pirateResult, directResult, zxcResults, citadelRes] = await Promise.all([
+      pirateSourcesPromise,
+      directPromise,
+      Promise.all(zxcPromises),
+      citadelPromise
+    ]);
+    const seenUrls = /* @__PURE__ */ new Set();
+    const combinedSources = [];
+    for (const src of pirateResult.sources) {
+      if (!src?.url || seenUrls.has(src.url)) continue;
+      seenUrls.add(src.url);
+      combinedSources.push(src);
+    }
+    for (const src of directResult.sources) {
+      if (!src?.url || seenUrls.has(src.url)) continue;
+      seenUrls.add(src.url);
+      const streamUrl = src.url.startsWith("http") ? `/api/stream/proxy?url=${encodeURIComponent(src.url)}` : src.url;
+      combinedSources.push({
+        id: src.id,
+        provider: "vegamovies",
+        url: streamUrl,
+        quality: src.quality,
+        label: `Vegamovies Direct FastDL | ${src.quality} [Hindi & Dual Audio]`,
+        type: "mp4",
+        lang: src.lang || "hi",
+        langName: src.langName || "Hindi",
+        multiLangs: src.multiLangs || ["hi", "en"]
+      });
+    }
+    for (const list of zxcResults) {
+      for (const src of list) {
+        if (!src?.url || seenUrls.has(src.url)) continue;
+        seenUrls.add(src.url);
+        combinedSources.push(src);
+      }
+    }
+    if (Array.isArray(citadelRes?.sources)) {
+      for (const s of citadelRes.sources) {
+        if (!s?.url || seenUrls.has(s.url)) continue;
+        seenUrls.add(s.url);
+        combinedSources.push({
+          ...s,
+          provider: "vegamovies",
+          label: s.label ? `Vegamovies | ${s.label}` : "Vegamovies | 1080p",
+          type: s.type || "hls"
+        });
+      }
+    }
+    if (combinedSources.length === 0 && !params.parentSignal?.aborted) {
+      for (const backupProv of ["watchout"]) {
+        try {
+          const backupRes = await fetchNxshaSources(
+            backupProv,
+            cleanId,
+            mediaType,
+            season,
+            episode,
+            imdbId,
+            params.parentSignal
+          );
+          if (backupRes.sources.length > 0) {
+            for (const s of backupRes.sources) {
+              combinedSources.push({
+                ...s,
+                provider: "vegamovies",
+                label: s.label ? `Vegamovies | ${s.label}` : "Vegamovies | 1080p",
+                type: s.type || "hls"
+              });
+            }
+            if (combinedSources.length > 0) break;
+          }
+        } catch {
+        }
+      }
+    }
+    const dubs = [
+      {
+        type: 0,
+        lang: "hi",
+        name: "Hindi dub",
+        label: "Hindi",
+        original: false
+      },
+      {
+        type: 0,
+        lang: "en",
+        name: "English dub",
+        label: "English",
+        original: false
+      },
+      {
+        type: 0,
+        lang: "orig",
+        name: "Original Audio",
+        label: "Original Audio",
+        original: true
+      }
+    ];
+    const finalImdbId = directResult.imdbId || imdbId || null;
+    return {
+      success: combinedSources.length > 0,
+      sources: combinedSources,
+      directSources: directResult.sources || [],
+      subtitles: pirateResult.subtitles || [],
+      dubs,
+      matchedPost: directResult.matchedPost || null,
+      indStreamImdbId: finalImdbId
+    };
+  };
+  const promise = runResolution();
+  vegaCombinedCache.set(cacheKey, { expiresAt: now + 6e4, promise });
+  return promise;
+}
+apiRouter.get("/vegamovies/catalog", async (req, res) => {
+  const query = String(req.query.q || req.query.story || req.query.search || "").trim();
+  const targetUrl = query ? `${VEGAMOVIES_BASE_URL}/?do=search&subaction=search&story=${encodeURIComponent(query)}` : `${VEGAMOVIES_BASE_URL}/`;
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 5e3);
+    const upstream = await fetch(targetUrl, {
+      headers: {
+        "User-Agent": COMMON_HEADERS["User-Agent"],
+        Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        Referer: `${VEGAMOVIES_BASE_URL}/`
+      },
+      signal: controller.signal
+    });
+    clearTimeout(timer);
+    if (!upstream.ok) {
+      return res.status(upstream.status).json({
+        success: false,
+        error: `Vegamovies upstream HTTP ${upstream.status}`,
+        posts: []
+      });
+    }
+    const html = await upstream.text();
+    const posts = parseVegaSearchHtml(html);
+    return res.json({
+      success: true,
+      source: VEGAMOVIES_BASE_URL,
+      query: query || null,
+      count: posts.length,
+      posts
+    });
+  } catch (err) {
+    return res.status(502).json({
+      success: false,
+      error: err?.message || "Failed to fetch Vegamovies catalog",
+      posts: []
+    });
+  }
+});
+var handleVegaMoviesResolve = async (req, res) => {
+  const params = req.method === "POST" ? req.body || {} : req.query || {};
+  const tmdbId = String(params.tmdbId || params.id || "128").trim();
+  const mediaType = String(params.mediaType || params.type || "movie").trim().toLowerCase() === "tv" ? "tv" : "movie";
+  const season = Math.max(1, Number.parseInt(String(params.season || "1"), 10) || 1);
+  const episode = Math.max(1, Number.parseInt(String(params.episode || "1"), 10) || 1);
+  const title = String(params.title || "").trim();
+  const releaseYear = String(params.year || params.releaseYear || "").trim();
+  const imdbId = String(params.imdbId || "").trim();
+  try {
+    const result = await resolveVegaMoviesCombined({
+      tmdbId,
+      mediaType,
+      season,
+      episode,
+      title,
+      releaseYear,
+      imdbId
+    });
+    const primary = result.sources[0] || null;
+    return res.json({
+      success: result.success,
+      server: "vegamovies",
+      matchedPost: result.matchedPost,
+      indStreamImdbId: result.indStreamImdbId,
+      link: primary?.url || null,
+      type: primary?.type || "hls",
+      sources: result.sources,
+      links: result.sources.map((s) => ({
+        link: s.url,
+        type: s.type || "hls",
+        quality: s.quality || "1080p",
+        label: s.label || "Vegamovies | 1080p",
+        lang: s.lang || "hi"
+      })),
+      dubs: result.dubs
+    });
+  } catch (err) {
+    return res.status(500).json({
+      success: false,
+      server: "vegamovies",
+      error: err?.message || "Vegamovies resolution failed",
+      sources: [],
+      links: []
+    });
+  }
+};
+apiRouter.get("/vegamovies/resolve", handleVegaMoviesResolve);
+apiRouter.post("/vegamovies/resolve", handleVegaMoviesResolve);
 app.use("/api", apiRouter);
 app.use("/api/index", apiRouter);
 app.use(apiRouter);

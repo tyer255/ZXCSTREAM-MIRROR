@@ -350,6 +350,7 @@ export interface TmdbMetadata {
   seasons: TmdbSeasonSummary[];
   overview?: string;
   rating?: number | string;
+  runtime?: number;
 }
 
 export interface EpisodeItem {

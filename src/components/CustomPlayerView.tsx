@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState, useCallback } from 'react';
+import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import Hls from 'hls.js';
 import * as dashjs from 'dashjs';
 import { ChevronLeft, ChevronRight, Loader, RotateCcw, RotateCw } from 'lucide-react';
@@ -215,6 +215,28 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
   const [countdownCancelled, setCountdownCancelled] = useState<boolean>(false);
   const [nextCountdown, setNextCountdown] = useState<number | null>(null);
   const hasTriggeredNextRef = useRef<boolean>(false);
+  const activeStreamOffsetRef = useRef<number>(0);
+
+  // Compute canonical media duration from TMDB metadata or catalog to avoid fake chunked sliding windows
+  const expectedDuration = useMemo(() => {
+    if (activeMediaType === 'tv') {
+      const curEp = episodesBySeason[currentSeason]?.find((e) => e.episode_number === currentEpisode);
+      if (curEp?.runtime && curEp.runtime > 0) return curEp.runtime * 60;
+      if (metadata?.runtime && metadata.runtime > 0) return metadata.runtime * 60;
+      return 2700; // 45m standard for TV
+    }
+    if (metadata?.runtime && metadata.runtime > 0) return metadata.runtime * 60;
+    const cat = getMediaByTmdbId('movie', tmdbId);
+    if (cat?.runtimeMinutes && cat.runtimeMinutes > 0) return cat.runtimeMinutes * 60;
+    return 7200; // 120m standard for feature movies
+  }, [activeMediaType, currentSeason, currentEpisode, episodesBySeason, metadata, tmdbId]);
+
+  // Keep duration anchored to true duration, preventing fake chunked sliding live windows
+  useEffect(() => {
+    if (expectedDuration > 0 && (duration <= 0 || (expectedDuration > 300 && duration < expectedDuration * 0.75))) {
+      setDuration(expectedDuration);
+    }
+  }, [expectedDuration, duration]);
 
   // Rotating hint index matching dr component
   const [hintIndex, setHintIndex] = useState<number>(0);
@@ -296,9 +318,10 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
     setCountdownCancelled(false);
     setNextCountdown(null);
     setCurrentTime(0);
-    setDuration(0);
+    activeStreamOffsetRef.current = 0;
+    setDuration(expectedDuration > 0 ? expectedDuration : 0);
     setBufferedEnd(0);
-  }, [tmdbId, activeMediaType, currentSeason, currentEpisode]);
+  }, [tmdbId, activeMediaType, currentSeason, currentEpisode, expectedDuration]);
 
   // Reset season cache when switching series
   useEffect(() => {
@@ -497,6 +520,7 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
           : 'hls');
 
       if (
+        streamType !== 'mp4' &&
         (streamType === 'hls' ||
           streamUrl.includes('.m3u8') ||
           streamUrl.includes('/api/nxsha/proxy')) &&
@@ -653,6 +677,13 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
           ? raw.seasons.filter((s: TmdbSeasonSummary) => s.season_number > 0)
           : [];
 
+        const resolvedRuntime =
+          typeof raw.runtime === 'number' && raw.runtime > 0
+            ? raw.runtime
+            : Array.isArray(raw.episode_run_time) && raw.episode_run_time[0]
+            ? raw.episode_run_time[0]
+            : undefined;
+
         setMetadata({
           id: Number(raw.id || cleanId),
           mediaType: resolvedType,
@@ -668,6 +699,7 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
           seasons,
           overview: raw.overview || '',
           rating: raw.vote_average || raw.rating || 9.7,
+          runtime: resolvedRuntime,
         });
       })
       .catch((_err) => {
@@ -693,6 +725,7 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
           seasons,
           overview: fallback.overview || "Years after the battle with Earth's greatest enemy, Majin Buu, the planet's savior Son Goku spends his days in peace.",
           rating: (fallback as any).rating || 9.7,
+          runtime: (fallback as any).runtimeMinutes || undefined,
         });
         setMetadataError(null);
       });
@@ -1162,10 +1195,11 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
           );
         });
       } else if (
-        streamType === 'hls' ||
-        streamUrl.includes('.m3u8') ||
-        streamUrl.includes('/api/stream/proxy') ||
-        streamUrl.includes('/api/nxsha/proxy')
+        streamType !== 'mp4' &&
+        (streamType === 'hls' ||
+          streamUrl.includes('.m3u8') ||
+          streamUrl.includes('/api/stream/proxy') ||
+          streamUrl.includes('/api/nxsha/proxy'))
       ) {
         if (Hls.isSupported()) {
           const hls = new Hls({
@@ -1379,7 +1413,7 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
             const player = dashjs.MediaPlayer().create();
             dashRef.current = player;
             player.initialize(videoEl, chosenSource.url, autoplay);
-          } else if (Hls.isSupported()) {
+          } else if (chosenSource.type !== 'mp4' && Hls.isSupported()) {
             const hls = new Hls({ enableWorker: true, maxBufferLength: 30 });
             hlsRef.current = hls;
             hls.loadSource(chosenSource.url);
@@ -1744,8 +1778,21 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
             date: meta.releaseDate,
             lastAirDate: meta.lastAirDate,
             imdbId: meta.imdbId,
-            dubCode: serverIdx === 0 || serverDef.id.startsWith('source-') || serverDef.id === 'orion' ? dubCodeToUse : '',
-            dubType: (serverIdx === 0 || serverDef.id.startsWith('source-') || serverDef.id === 'orion') && dubCodeToUse ? selectedDubTypeRef.current : '',
+            dubCode:
+              serverIdx === 0 ||
+              serverDef.id.startsWith('source-') ||
+              serverDef.id === 'orion' ||
+              serverDef.id === 'vegamovies'
+                ? dubCodeToUse
+                : '',
+            dubType:
+              (serverIdx === 0 ||
+                serverDef.id.startsWith('source-') ||
+                serverDef.id === 'orion' ||
+                serverDef.id === 'vegamovies') &&
+              dubCodeToUse
+                ? selectedDubTypeRef.current
+                : '',
             preferredServer: serverDef.id,
             strictSingleServer: true,
             allowHevc,
@@ -1767,7 +1814,10 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
 
         updateServerStatus(serverIdx, 'connecting');
         loadedStreamDubRef.current =
-          serverIdx === 0 || serverDef.id.startsWith('source-') || serverDef.id === 'orion'
+          serverIdx === 0 ||
+          serverDef.id.startsWith('source-') ||
+          serverDef.id === 'orion' ||
+          serverDef.id === 'vegamovies'
             ? dubCodeToUse.toLowerCase()
             : '';
 
@@ -1825,9 +1875,10 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
             advanceToNextServer();
           });
         } else if (
-          streamType === 'hls' ||
-          streamUrl.includes('.m3u8') ||
-          streamUrl.includes('/api/stream/proxy')
+          streamType !== 'mp4' &&
+          (streamType === 'hls' ||
+            streamUrl.includes('.m3u8') ||
+            streamUrl.includes('/api/stream/proxy'))
         ) {
           if (Hls.isSupported()) {
             const hls = new Hls({
@@ -1889,20 +1940,40 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
             advanceToNextServer();
           }
         } else {
-          videoEl.src = streamUrl;
-          const onDirectError = () => {
-            videoEl.removeEventListener('error', onDirectError);
+          const candidateDirectUrls: string[] = Array.from(
+            new Set([
+              streamUrl,
+              ...(Array.isArray(data?.links)
+                ? data.links.map((l: any) => l?.link).filter((u: any): u is string => typeof u === 'string' && u.length > 0)
+                : []),
+            ])
+          );
+          let directIdx = 0;
+
+          const tryNextDirectUrl = () => {
             if (probeRunIdRef.current !== runId) return;
-            advanceToNextServer();
+            if (directIdx >= candidateDirectUrls.length) {
+              advanceToNextServer();
+              return;
+            }
+            const nextUrl = candidateDirectUrls[directIdx++];
+            videoEl.src = nextUrl;
+            const onDirectError = () => {
+              videoEl.removeEventListener('error', onDirectError);
+              if (probeRunIdRef.current !== runId) return;
+              tryNextDirectUrl();
+            };
+            videoEl.addEventListener('error', onDirectError, { once: true });
+            if (autoplay) {
+              videoEl.play().catch(() => {
+                videoEl.muted = true;
+                setMuted(true);
+                videoEl.play().catch(() => {});
+              });
+            }
           };
-          videoEl.addEventListener('error', onDirectError, { once: true });
-          if (autoplay) {
-            videoEl.play().catch(() => {
-              videoEl.muted = true;
-              setMuted(true);
-              videoEl.play().catch(() => {});
-            });
-          }
+
+          tryNextDirectUrl();
         }
       } catch {
         advanceToNextServer();
@@ -2073,7 +2144,8 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
         if (Array.isArray(data?.dubs) && data.dubs.length > 0) {
           setAvailableDubs((prev) => mergeAvailableDubs(prev, data.dubs));
         }
-        const dubMpdUrl: string | null = data?.dubAudioUrl || data?.link || null;
+        const dubMpdUrl: string | null =
+          data?.dubAudioUrl || (data?.type === 'dash' ? data?.link : null) || null;
         const audioEl = dubAudioRef.current;
         const videoEl = videoRef.current;
         if (!ok || !data?.success || !dubMpdUrl || !audioEl || !videoEl) {
@@ -2469,24 +2541,69 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
     setPausedIdleOverlay(false);
   };
 
-  // Skip -10s / +10s handler with visual overlay
-  const handleSkip = useCallback((seconds: number) => {
+  // Robust timeline seeker with proxy stream offset support
+  const seekToTime = useCallback((targetTime: number) => {
     const v = videoRef.current;
     if (!v) return;
-    const nextTime = Math.max(0, Math.min(v.duration || Infinity, v.currentTime + seconds));
-    v.currentTime = nextTime;
-    if (dubAudioRef.current) {
-      dubAudioRef.current.currentTime = nextTime;
+    const effectiveDur = duration > 0 ? duration : expectedDuration;
+    const boundedTarget = Math.max(0, Math.min(effectiveDur > 0 ? effectiveDur - 1 : Infinity, targetTime));
+
+    let isTargetBuffered = false;
+    try {
+      for (let i = 0; i < v.buffered.length; i++) {
+        if (boundedTarget >= v.buffered.start(i) && boundedTarget <= v.buffered.end(i) + 0.5) {
+          isTargetBuffered = true;
+          break;
+        }
+      }
+    } catch {
+      // ignore
     }
-    setCurrentTime(nextTime);
-    if (v.duration && nextTime < v.duration - 1) {
+
+    const currentSrc = v.src || '';
+    const isProxyStream =
+      currentSrc.includes('/api/stream/proxy') || currentSrc.includes('/api/nxsha/proxy');
+
+    if (isTargetBuffered || !isProxyStream) {
+      try {
+        v.currentTime = boundedTarget;
+      } catch {
+        // fallback
+      }
+    } else {
+      activeStreamOffsetRef.current = boundedTarget;
+      const cleanUrl = currentSrc
+        .replace(/([?&])(start|ss|t)=\d+(\.\d+)?/g, '')
+        .replace(/[?&]$/, '');
+      const sep = cleanUrl.includes('?') ? '&' : '?';
+      const seekedUrl = `${cleanUrl}${sep}start=${Math.floor(boundedTarget)}`;
+      v.src = seekedUrl;
+      v.play().catch(() => {});
+    }
+
+    if (dubAudioRef.current) {
+      try {
+        dubAudioRef.current.currentTime = boundedTarget;
+      } catch {
+        // ignore
+      }
+    }
+    setCurrentTime(boundedTarget);
+    lastReportedTimeRef.current = boundedTarget;
+    if (effectiveDur && boundedTarget < effectiveDur - 1) {
       setVideoEnded(false);
     }
-    lastReportedTimeRef.current = nextTime;
-    if (seconds < 0) {
-      setSkippedIntro(false);
-      setSkippedOutro(false);
-    }
+    setSkippedIntro(false);
+    setSkippedRecap(false);
+    setSkippedOutro(false);
+  }, [duration, expectedDuration]);
+
+  // Skip -10s / +10s handler with visual overlay
+  const handleSkip = useCallback((seconds: number) => {
+    const baseTime = currentTime;
+    const effectiveDur = duration > 0 ? duration : expectedDuration;
+    const nextTime = Math.max(0, Math.min(effectiveDur || Infinity, baseTime + seconds));
+    seekToTime(nextTime);
     const dir = seconds < 0 ? 'left' : 'right';
     setSkipFeedback((prev) => ({
       dir,
@@ -2497,7 +2614,7 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
     skipTimerRef.current = window.setTimeout(() => {
       setSkipFeedback(null);
     }, 720);
-  }, []);
+  }, [currentTime, duration, expectedDuration, seekToTime]);
 
   // Keyboard shortcuts matching zxcstream.cc player
   useEffect(() => {
@@ -2701,30 +2818,21 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
 
   // Seekbar interaction (oX component)
   const handleSeekBarMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
-    if (!seekBarRef.current || !duration) return;
+    const effectiveDur = duration > 0 ? duration : expectedDuration;
+    if (!seekBarRef.current || !effectiveDur) return;
     const rect = seekBarRef.current.getBoundingClientRect();
     const pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
     setHoverPercent(pct * 100);
-    setHoverTime(pct * duration);
+    setHoverTime(pct * effectiveDur);
   };
 
   const handleSeekBarClick = (e: React.MouseEvent<HTMLDivElement>) => {
-    if (!seekBarRef.current || !videoRef.current || !duration) return;
+    const effectiveDur = duration > 0 ? duration : expectedDuration;
+    if (!seekBarRef.current || !videoRef.current || !effectiveDur) return;
     const rect = seekBarRef.current.getBoundingClientRect();
     const pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-    const target = pct * duration;
-    videoRef.current.currentTime = target;
-    if (dubAudioRef.current) {
-      dubAudioRef.current.currentTime = target;
-    }
-    setCurrentTime(target);
-    lastReportedTimeRef.current = target;
-    if (target < duration - 1) {
-      setVideoEnded(false);
-    }
-    setSkippedIntro(false);
-    setSkippedRecap(false);
-    setSkippedOutro(false);
+    const target = pct * effectiveDur;
+    seekToTime(target);
   };
 
   // Quality change handler
@@ -3350,8 +3458,11 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
         }}
         onCanPlay={(e) => {
           const v = e.currentTarget;
-          if (v.duration && Number.isFinite(v.duration) && v.duration > 0) {
-            setDuration(v.duration);
+          const rawDur = v.duration;
+          if (Number.isFinite(rawDur) && (expectedDuration <= 300 ? rawDur > 0 : rawDur >= expectedDuration * 0.75)) {
+            setDuration(rawDur);
+          } else if (expectedDuration > 0) {
+            setDuration(expectedDuration);
           }
           hasEstablishedPlaybackRef.current = true;
           setCanPlay(true);
@@ -3370,8 +3481,11 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
         }}
         onPlaying={(e) => {
           const v = e.currentTarget;
-          if (v.duration && Number.isFinite(v.duration) && v.duration > 0) {
-            setDuration(v.duration);
+          const rawDur = v.duration;
+          if (Number.isFinite(rawDur) && (expectedDuration <= 300 ? rawDur > 0 : rawDur >= expectedDuration * 0.75)) {
+            setDuration(rawDur);
+          } else if (expectedDuration > 0) {
+            setDuration(expectedDuration);
           }
           hasEstablishedPlaybackRef.current = true;
           setCanPlay(true);
@@ -3422,8 +3536,13 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
         }}
         onLoadedMetadata={(e) => {
           const v = e.currentTarget;
-          if (v.duration && Number.isFinite(v.duration) && v.duration > 0) {
-            setDuration(v.duration);
+          if ((v.duration && v.duration > 0) || v.videoWidth > 0) {
+            const rawDur = v.duration;
+            if (Number.isFinite(rawDur) && (expectedDuration <= 300 ? rawDur > 0 : rawDur >= expectedDuration * 0.75)) {
+              setDuration(rawDur);
+            } else if (expectedDuration > 0) {
+              setDuration(expectedDuration);
+            }
             hasEstablishedPlaybackRef.current = true;
             setCanPlay(true);
             setWaiting(false);
@@ -3439,20 +3558,34 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
               updateServerStatus(currentServerIndex, 'available');
             }
           }
-          const t = v.currentTime || 0;
+          const rawCurrent = v.currentTime || 0;
+          const t =
+            activeStreamOffsetRef.current > 0 && rawCurrent < activeStreamOffsetRef.current
+              ? activeStreamOffsetRef.current + rawCurrent
+              : rawCurrent;
           lastReportedTimeRef.current = t;
           setCurrentTime(t);
         }}
         onDurationChange={(e) => {
           const v = e.currentTarget;
-          if (v.duration && Number.isFinite(v.duration) && v.duration > 0) {
-            setDuration(v.duration);
-            if (v.readyState >= 1) setCanPlay(true);
+          const rawDur = v.duration;
+          // Guard against chunked MP4 sliding live window (e.g. 10s expanding 1s at a time)
+          if (expectedDuration > 300 && rawDur < expectedDuration * 0.75) {
+            if (duration !== expectedDuration) {
+              setDuration(expectedDuration);
+            }
+          } else if (Number.isFinite(rawDur) && rawDur > 0) {
+            setDuration(rawDur);
           }
+          if (v.readyState >= 1) setCanPlay(true);
         }}
         onSeeking={(e) => {
           const v = e.currentTarget;
-          const t = v.currentTime;
+          const rawCurrent = v.currentTime || 0;
+          const t =
+            activeStreamOffsetRef.current > 0 && rawCurrent < activeStreamOffsetRef.current
+              ? activeStreamOffsetRef.current + rawCurrent
+              : rawCurrent;
           if (!isProgrammaticSkipRef.current) {
             if (resolvedTiming.recapStart !== null && t < resolvedTiming.recapStart - 2) {
               setSkippedRecap(false);
@@ -3466,11 +3599,16 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
           }
           lastReportedTimeRef.current = t;
           setCurrentTime(t);
-          if (v.duration && t < v.duration - 1) setVideoEnded(false);
+          const effectiveDur = duration > 0 ? duration : expectedDuration;
+          if (effectiveDur && t < effectiveDur - 1) setVideoEnded(false);
         }}
         onSeeked={(e) => {
           const v = e.currentTarget;
-          const t = v.currentTime;
+          const rawCurrent = v.currentTime || 0;
+          const t =
+            activeStreamOffsetRef.current > 0 && rawCurrent < activeStreamOffsetRef.current
+              ? activeStreamOffsetRef.current + rawCurrent
+              : rawCurrent;
           if (!isProgrammaticSkipRef.current) {
             if (resolvedTiming.recapStart !== null && t < resolvedTiming.recapStart - 2) {
               setSkippedRecap(false);
@@ -3484,7 +3622,8 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
           }
           lastReportedTimeRef.current = t;
           setCurrentTime(t);
-          if (v.duration && t < v.duration - 1) setVideoEnded(false);
+          const effectiveDur = duration > 0 ? duration : expectedDuration;
+          if (effectiveDur && t < effectiveDur - 1) setVideoEnded(false);
           if (usingExternalDubRef.current && dubAudioRef.current) {
             lastDriftSyncTimeRef.current = performance.now();
             dubAudioRef.current.currentTime = t;
@@ -3492,14 +3631,21 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
         }}
         onTimeUpdate={(e) => {
           const v = e.currentTarget;
-          if (v.duration && Number.isFinite(v.duration) && v.duration > 0 && duration <= 0) {
-            setDuration(v.duration);
+          const rawDur = v.duration;
+          if (Number.isFinite(rawDur) && (expectedDuration <= 300 ? rawDur > 0 : rawDur >= expectedDuration * 0.75)) {
+            setDuration(rawDur);
+          } else if (duration <= 0 && expectedDuration > 0) {
+            setDuration(expectedDuration);
           }
-          if (!canPlay && v.duration && Number.isFinite(v.duration) && v.duration > 0 && v.readyState >= 2) {
+          if (!canPlay && Number.isFinite(rawDur) && rawDur > 0 && v.readyState >= 2) {
             setCanPlay(true);
           }
           if (isProgrammaticSkipRef.current || pendingSkipSeekRef.current) return;
-          const t = v.currentTime;
+          const rawCurrent = v.currentTime || 0;
+          const t =
+            activeStreamOffsetRef.current > 0 && rawCurrent < activeStreamOffsetRef.current
+              ? activeStreamOffsetRef.current + rawCurrent
+              : rawCurrent;
           const prev = lastReportedTimeRef.current;
           if (t < prev - 3) {
             if (resolvedTiming.introStart !== null && t < resolvedTiming.introStart - 2) {
@@ -3520,11 +3666,16 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
             lastReportedTimeRef.current = t;
             setCurrentTime(t);
           }
-          if (v.duration && t < v.duration - 1 && videoEnded) {
+          const effectiveDur = duration > 0 ? duration : expectedDuration;
+          if (effectiveDur && t < effectiveDur - 1 && videoEnded) {
             setVideoEnded(false);
           }
           if (v.buffered.length > 0) {
-            const bEnd = v.buffered.end(v.buffered.length - 1);
+            const rawBEnd = v.buffered.end(v.buffered.length - 1);
+            const bEnd =
+              activeStreamOffsetRef.current > 0 && rawBEnd < activeStreamOffsetRef.current
+                ? activeStreamOffsetRef.current + rawBEnd
+                : rawBEnd;
             if (Math.abs(bEnd - bufferedEnd) >= 0.5) setBufferedEnd(bEnd);
           }
           const dubEl = dubAudioRef.current;
@@ -3556,7 +3707,11 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
           setVideoEnded(true);
           if (dubAudioRef.current) dubAudioRef.current.pause();
         }}
-        onError={() => {
+        onError={(e) => {
+          const v = e.currentTarget;
+          if (!v.getAttribute('src') && !hlsRef.current && !dashRef.current) {
+            return;
+          }
           if (!canPlay && metadata) {
             if (playerMode === 'nxsha') {
               const failingCode =
@@ -3571,13 +3726,6 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
                   selectedDub,
                   'HTMLVideoElement playback error'
                 );
-              }
-            } else {
-              const nextRunId = ++probeRunIdRef.current;
-              updateServerStatus(currentServerIndex, 'failed');
-              const nextIdx = (currentServerIndex + 1) % activeServerList.length;
-              if (servers[nextIdx]?.status === 'queue' || servers[nextIdx]?.status === 'checking' || servers[nextIdx]?.status === 'available') {
-                probeServerAtIndex(nextIdx, nextRunId, metadata, selectedDub);
               }
             }
           }
@@ -3887,25 +4035,25 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
         onOpenDownload={() => setDownloadModalOpen(true)}
       />
 
-      {downloadModalOpen && (
-        <PlayerDownloadModal
-          open={downloadModalOpen}
-          onClose={() => setDownloadModalOpen(false)}
-          mediaType={activeMediaType}
-          tmdbId={String(metadata?.id || tmdbId)}
-          season={currentSeason}
-          episode={currentEpisode}
-          currentPlaybackSource={activeServerList[currentServerIndex]?.label}
-          playbackUrl={videoRef.current?.currentSrc || ''}
-          availableDubs={availableDubs.map((d) => ({
-            code: d.lang,
-            name: d.name,
-            type: String(d.type || 'dub'),
-          }))}
-          audioTracks={audioTracks}
-          qualities={qualities}
-        />
-      )}
+      <PlayerDownloadModal
+        open={downloadModalOpen}
+        onClose={() => setDownloadModalOpen(false)}
+        mediaType={activeMediaType}
+        tmdbId={String(tmdbId)}
+        season={currentSeason}
+        episode={currentEpisode}
+        title={metadata?.title || undefined}
+        year={metadata?.year || undefined}
+        currentPlaybackSource={activeServerList[currentServerIndex]?.label}
+        playbackUrl={videoRef.current?.currentSrc || ''}
+        availableDubs={availableDubs.map((d) => ({
+          code: d.lang,
+          name: d.name,
+          type: String(d.type || 'dub'),
+        }))}
+        audioTracks={audioTracks}
+        qualities={qualities}
+      />
 
       {subtitleModalOpen && (
         <PlayerSubtitleSettingsModal
