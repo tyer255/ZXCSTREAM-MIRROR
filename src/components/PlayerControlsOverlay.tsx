@@ -368,7 +368,7 @@ export const PlayerControlsOverlay: React.FC<PlayerControlsOverlayProps> = ({
     }`}
   >
     <div className="flex items-center justify-between pointer-events-auto">
-      <div>
+      <div className="flex items-center gap-2.5">
         {showBackButton && (
           <button
             type="button"
@@ -381,6 +381,12 @@ export const PlayerControlsOverlay: React.FC<PlayerControlsOverlayProps> = ({
           >
             <BackSvg />
           </button>
+        )}
+        {playerMode === 'bingr' && (
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-amber-500/20 border border-amber-500/40 text-amber-300 font-mono text-[11px] font-bold tracking-wider">
+            <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
+            BINGR CRACK · ZERO ADS
+          </span>
         )}
       </div>
       <div className="flex items-center gap-3">
@@ -400,7 +406,7 @@ export const PlayerControlsOverlay: React.FC<PlayerControlsOverlayProps> = ({
             <span className="hidden sm:inline">Download</span>
           </button>
         )}
-        {(playerMode === 'custom' || playerMode === 'nxsha' || playerMode === 'overpower') && (
+        {(playerMode === 'custom' || playerMode === 'nxsha' || playerMode === 'overpower' || playerMode === 'bingr') && (
           <button
             type="button"
             aria-label="Toggle Servers"

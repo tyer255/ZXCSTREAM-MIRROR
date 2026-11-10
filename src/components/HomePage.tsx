@@ -12,6 +12,7 @@ import {
   ShieldCheck,
   Play,
   Flame,
+  Zap,
 } from 'lucide-react';
 import {
   DUB_LANGUAGES,
@@ -143,7 +144,9 @@ export const HomePage: React.FC<HomePageProps> = ({
 
   // Dynamic Brand Identity & Restrained Lighting per Player
   const brandTitle =
-    playerMode === 'overpower'
+    playerMode === 'bingr'
+      ? 'BINGR CRACK'
+      : playerMode === 'overpower'
       ? 'OVER POWER'
       : playerMode === 'nxsha'
       ? 'NXSHA'
@@ -152,7 +155,9 @@ export const HomePage: React.FC<HomePageProps> = ({
       : 'ZXCSTREAM';
 
   const lampRgba =
-    playerMode === 'overpower'
+    playerMode === 'bingr'
+      ? 'rgba(245, 158, 11, 0.75)'
+      : playerMode === 'overpower'
       ? 'rgba(168, 85, 247, 0.7)'
       : playerMode === 'nxsha'
       ? 'rgba(8, 145, 178, 0.7)'
@@ -161,7 +166,9 @@ export const HomePage: React.FC<HomePageProps> = ({
       : 'rgba(37, 99, 235, 0.7)';
 
   const lampGlowSoftClass =
-    playerMode === 'overpower'
+    playerMode === 'bingr'
+      ? 'bg-amber-600/10'
+      : playerMode === 'overpower'
       ? 'bg-purple-600/10'
       : playerMode === 'nxsha'
       ? 'bg-cyan-600/10'
@@ -170,7 +177,9 @@ export const HomePage: React.FC<HomePageProps> = ({
       : 'bg-blue-600/10';
 
   const lampBarClass =
-    playerMode === 'overpower'
+    playerMode === 'bingr'
+      ? 'bg-amber-500/70'
+      : playerMode === 'overpower'
       ? 'bg-purple-600/70'
       : playerMode === 'nxsha'
       ? 'bg-cyan-600/70'
@@ -179,7 +188,9 @@ export const HomePage: React.FC<HomePageProps> = ({
       : 'bg-blue-600/70';
 
   const activeButtonClass =
-    playerMode === 'overpower'
+    playerMode === 'bingr'
+      ? 'bg-amber-600 text-white shadow-md scale-100'
+      : playerMode === 'overpower'
       ? 'bg-purple-900 text-white shadow-md scale-100'
       : playerMode === 'nxsha'
       ? 'bg-cyan-900 text-white shadow-md scale-100'
@@ -294,6 +305,18 @@ export const HomePage: React.FC<HomePageProps> = ({
             >
               ANIME CORE
             </button>
+            <button
+              type="button"
+              onClick={() => handleSelectPlayer('bingr')}
+              data-testid="header-engine-bingr"
+              className={`px-3.5 py-1.5 rounded-md transition-all duration-300 cursor-pointer font-semibold ${
+                playerMode === 'bingr'
+                  ? 'bg-amber-600 text-white shadow-xs'
+                  : 'text-zinc-400 hover:text-white'
+              }`}
+            >
+              BINGR CRACK
+            </button>
           </div>
         </div>
 
@@ -359,7 +382,9 @@ export const HomePage: React.FC<HomePageProps> = ({
             </h1>
 
             <p className="text-zinc-400 text-xs lg:text-base max-w-lg mt-2">
-              {playerMode === 'anime'
+              {playerMode === 'bingr'
+                ? 'Dedicated Bingr Crack Cinema Engine for Movies & TV Shows with 100% Ad-Free playback and instant stream resolution'
+                : playerMode === 'anime'
                 ? 'Dedicated anime streaming player with TMDB anime verification and multi-audio Sub & Dub playback'
                 : playerMode === 'overpower'
                 ? 'Overpowered 4-server ultra-low-latency streaming engine with unlimited bandwidth and multi-audio'
@@ -425,6 +450,19 @@ export const HomePage: React.FC<HomePageProps> = ({
               >
                 <Play className="w-4 h-4" />
                 <span>ANIME CORE</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => handleSelectPlayer('bingr')}
+                data-testid="toggle-bingr-player"
+                className={`flex items-center gap-2 px-5 py-2.5 rounded-lg font-medium text-xs lg:text-sm cursor-pointer transition-all duration-300 ${
+                  playerMode === 'bingr'
+                    ? 'bg-amber-600 text-white shadow-md scale-100'
+                    : 'text-zinc-400 hover:text-zinc-50'
+                }`}
+              >
+                <Zap className="w-4 h-4 text-amber-300" />
+                <span>BINGR CRACK</span>
               </button>
             </div>
 
@@ -731,22 +769,41 @@ export const HomePage: React.FC<HomePageProps> = ({
           )}
 
           {/* QUERY PARAMETERS Documentation Section */}
-          {(playerMode === 'custom' || playerMode === 'nxsha' || playerMode === 'overpower') && (
+          {(playerMode === 'custom' || playerMode === 'nxsha' || playerMode === 'overpower' || playerMode === 'bingr') && (
             <div className="mt-10 w-full max-w-4xl text-left">
               <div className="space-y-5">
                 <h2 className="text-sm font-mono tracking-wider text-zinc-400 uppercase mb-6">
-                  {playerMode === 'overpower'
+                  {playerMode === 'bingr'
+                    ? 'BINGR CRACK Engine & Parameters'
+                    : playerMode === 'overpower'
                     ? 'OVER POWER Engine & Parameters'
                     : playerMode === 'nxsha'
                     ? 'NXSHA Engine & Parameters'
                     : 'Query Parameters'}
                 </h2>
 
+                {playerMode === 'bingr' && (
+                  <div className="space-y-4 text-sm border-b border-zinc-800 pb-5">
+                    <div className="font-mono text-zinc-50 text-base">BINGR CRACK Direct Endpoints</div>
+                    <p className="text-zinc-400 leading-relaxed">
+                      BINGR CRACK is a dedicated ad-free cinema player featuring instant stream resolution, multi-audio selection, full subtitles, and zero popups or redirects.
+                    </p>
+                    <div>
+                      <div className="font-mono text-xs uppercase tracking-wider text-zinc-400 mb-2">
+                        Usage
+                      </div>
+                      <pre className="bg-zinc-900 border border-zinc-800 rounded-md p-3 text-xs font-mono overflow-x-auto text-zinc-200">
+                        {`/bingr/movie/1381071\n/bingr/tv/1396/1/1\n/watch/movie/1381071`}
+                      </pre>
+                    </div>
+                  </div>
+                )}
+
                 {playerMode === 'overpower' && (
                   <div className="space-y-4 text-sm border-b border-zinc-800 pb-5">
                     <div className="font-mono text-zinc-50 text-base">OVER POWER Direct Endpoints</div>
                     <p className="text-zinc-400 leading-relaxed">
-                      OVER POWER provides direct high-performance streaming servers (Source 1–6 Multi-Audio/Direct HD, Orion I, Valstrax II, Vegamovies III, Atlas IV, Ursa V, Alatreon VI, Daedalus VII) engineered for instantaneous playback, zero rate-limiting delays, and full multi-audio support.
+                      OVER POWER provides direct high-performance streaming servers (Source 1–6 Multi-Audio/Direct HD, Orion I, Valstrax II, Vegamovies III, Atlas IV, Ursa V, Alatreon VI, Daedalus VII, Bingr Core) engineered for instantaneous playback, zero rate-limiting delays, and full multi-audio support.
                     </p>
                     <div>
                       <div className="font-mono text-xs uppercase tracking-wider text-zinc-400 mb-2">

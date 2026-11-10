@@ -27,6 +27,7 @@ import {
   inspectAndSelectMpegTsAudioTrack,
   mpeg2Crc32,
   formatPlayerTime,
+  BINGR_SERVERS,
 } from './urlBuilder.ts';
 import {
   getEpisodeTimingMetadata,
@@ -245,6 +246,30 @@ describe('ZXC[STREAM] URL Builder & Route Utilities', () => {
       tmdbId: '66732',
       season: 2,
       episode: 3,
+    });
+    assert.deepEqual(parseAppRoute('/bingr/movie/1381071'), {
+      page: 'player',
+      playerMode: 'bingr',
+      mediaType: 'movie',
+      tmdbId: '1381071',
+      season: 1,
+      episode: 1,
+    });
+    assert.deepEqual(parseAppRoute('/bingr/tv/1396/1/1'), {
+      page: 'player',
+      playerMode: 'bingr',
+      mediaType: 'tv',
+      tmdbId: '1396',
+      season: 1,
+      episode: 1,
+    });
+    assert.deepEqual(parseAppRoute('/watch/movie/1381071'), {
+      page: 'player',
+      playerMode: 'bingr',
+      mediaType: 'movie',
+      tmdbId: '1381071',
+      season: 1,
+      episode: 1,
     });
   });
 
@@ -1029,8 +1054,40 @@ describe('ZXC[STREAM] URL Builder & Route Utilities', () => {
     assert.equal(computedCurrentTime, 1805.4);
     assert.equal(formatPlayerTime(computedCurrentTime), '0:30:05');
   });
+
+  it('builds and parses Bingr Crack routes and exposes all 7 Bingr server nodes', () => {
+    assert.equal(
+      buildPlayerUrl({
+        baseOrigin: 'https://zxcstream-mirror.vercel.app',
+        playerMode: 'bingr',
+        mediaType: 'movie',
+        tmdbId: '1381071',
+      }),
+      'https://zxcstream-mirror.vercel.app/bingr/movie/1381071'
+    );
+
+    assert.deepEqual(parseAppRoute('/bingr/movie/1381071'), {
+      page: 'player',
+      playerMode: 'bingr',
+      mediaType: 'movie',
+      tmdbId: '1381071',
+      season: 1,
+      episode: 1,
+    });
+
+    assert.deepEqual(parseAppRoute('/watch/movie/1381071'), {
+      page: 'player',
+      playerMode: 'bingr',
+      mediaType: 'movie',
+      tmdbId: '1381071',
+      season: 1,
+      episode: 1,
+    });
+
+    assert.equal(BINGR_SERVERS.length, 7);
+    assert.deepEqual(
+      BINGR_SERVERS.map((s) => s.name),
+      ['Prism', 'Edge', 'Flux', 'Pulse', 'Volt', 'Nimbus', 'Citadel']
+    );
+  });
 });
-
-
-
-

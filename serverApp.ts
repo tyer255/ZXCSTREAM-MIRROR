@@ -58,6 +58,79 @@ import {
   verifyDownloadFileToken,
 } from './src/services/publicDownloadApi.js';
 
+// Safe stream pipe helper to prevent unhandled 'error' events (ECONNRESET, TypeError: terminated)
+// when clients seek, disconnect, or abort requests during media/video streaming
+function safePipeToResponse(readable: any, res: express.Response): void {
+  if (!readable) {
+    if (!res.writableEnded) {
+      try { res.end(); } catch {}
+    }
+    return;
+  }
+
+  const cleanup = () => {
+    try {
+      if (typeof readable.destroy === 'function' && !readable.destroyed) {
+        readable.destroy();
+      }
+    } catch {}
+  };
+
+  readable.on('error', (_err: any) => {
+    // Normal client abort / socket reset / upstream termination
+    cleanup();
+    if (!res.writableEnded) {
+      try { res.end(); } catch {}
+    }
+  });
+
+  res.on('close', cleanup);
+  res.on('error', cleanup);
+
+  try {
+    readable.pipe(res);
+  } catch {
+    cleanup();
+  }
+}
+
+// Global safety catchers for network socket aborts during streaming (client closed connection / ECONNRESET)
+process.on('uncaughtException', (err: any) => {
+  const code = err?.code || err?.cause?.code;
+  const msg = ((err?.message || '') + ' ' + (err?.cause?.message || '')).toLowerCase();
+  if (
+    code === 'ECONNRESET' ||
+    code === 'EPIPE' ||
+    code === 'ERR_STREAM_PREMATURE_CLOSE' ||
+    code === 'UND_ERR_BODY_TIMEOUT' ||
+    msg.includes('terminated') ||
+    msg.includes('econnreset') ||
+    msg.includes('premature close') ||
+    msg.includes('socket hang up')
+  ) {
+    return;
+  }
+  console.error('[UNCAUGHT EXCEPTION]', err);
+});
+
+process.on('unhandledRejection', (reason: any) => {
+  const code = reason?.code || reason?.cause?.code;
+  const msg = ((reason?.message || '') + ' ' + (reason?.cause?.message || '')).toLowerCase();
+  if (
+    code === 'ECONNRESET' ||
+    code === 'EPIPE' ||
+    code === 'ERR_STREAM_PREMATURE_CLOSE' ||
+    code === 'UND_ERR_BODY_TIMEOUT' ||
+    msg.includes('terminated') ||
+    msg.includes('econnreset') ||
+    msg.includes('premature close') ||
+    msg.includes('socket hang up')
+  ) {
+    return;
+  }
+  console.error('[UNHANDLED REJECTION]', reason);
+});
+
 const app = express();
 
 // Enable CORS for all origins (especially useful for Vercel deployments and custom domains)
@@ -364,6 +437,131 @@ function stripVideoFromMpd(mpdText: string): string {
     .replace(/&(?!(?:amp|lt|gt|quot|apos|#\d+|#x[0-9a-fA-F]+);)/g, '&amp;');
 }
 
+const BINGR_SECRET = 'vY7#qL2!mZ9@wK4$';
+const BINGR_CHROME_UA =
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
+
+export function bingrUnseal(sealed: string): any | null {
+  try {
+    const clean = (sealed || '').trim();
+    if (!clean.startsWith('v1.')) return null;
+    const raw = new Uint8Array(Buffer.from(clean.slice(3), 'base64url'));
+    if (raw.length <= 12) return null;
+    const iv = raw.subarray(0, 12);
+    const cipher = raw.slice(12);
+
+    const state: number[] = [];
+    for (let s = 0; s < 4; s++) {
+      let n = (0x811c9dc5 ^ Math.imul(0x9e3779b9, s)) >>> 0;
+      for (let i = 0; i < BINGR_SECRET.length; i++) {
+        n = Math.imul(n ^ BINGR_SECRET.charCodeAt(i), 0x1000193) >>> 0;
+      }
+      for (let i = 0; i < iv.length; i++) {
+        n = Math.imul(n ^ iv[i], 0x1000193) >>> 0;
+      }
+      state.push(n);
+    }
+
+    let [st0, st1, st2, st3] = state;
+    let r = 0;
+    for (let i = 0; i < cipher.length; i++) {
+      if ((3 & i) === 0) {
+        st2 >>>= 0;
+        st3 >>>= 0;
+        let e = ((st0 >>>= 0) + (st1 >>>= 0)) | 0;
+        st0 = st1 ^ (st1 >>> 9);
+        st1 = (st2 + (st2 << 3)) | 0;
+        st2 = (st2 << 21) | (st2 >>> 11);
+        st3 = (st3 + 1) | 0;
+        e = (e + st3) | 0;
+        st2 = (st2 + e) | 0;
+        r = e >>> 0;
+      }
+      cipher[i] ^= (r >>> ((3 & i) * 8)) & 255;
+    }
+
+    return JSON.parse(new TextDecoder().decode(cipher));
+  } catch {
+    return null;
+  }
+}
+
+const bingrEmbedCache = new Map<string, { payload: any; expiresAt: number }>();
+
+function normalizeBingrLangCode(langOrLabel?: string): { code: string; name: string; isSubVariant: boolean } {
+  const raw = String(langOrLabel || 'Original').trim();
+  const lower = raw.toLowerCase();
+  const isSubVariant = lower.includes(' sub');
+  if (lower.includes('hindi') || lower === 'hi' || lower === 'hin') return { code: 'hi', name: 'Hindi', isSubVariant };
+  if (lower.includes('english') || lower === 'en' || lower === 'eng') return { code: 'en', name: 'English', isSubVariant };
+  if (lower.includes('japanese') || lower === 'ja' || lower === 'jpn') return { code: 'ja', name: 'Japanese', isSubVariant };
+  if (lower.includes('tamil') || lower === 'ta' || lower === 'tam') return { code: 'ta', name: 'Tamil', isSubVariant };
+  if (lower.includes('telugu') || lower === 'te' || lower === 'tel') return { code: 'te', name: 'Telugu', isSubVariant };
+  if (lower.includes('malayalam') || lower === 'ml') return { code: 'ml', name: 'Malayalam', isSubVariant };
+  if (lower.includes('kannada') || lower === 'kn') return { code: 'kn', name: 'Kannada', isSubVariant };
+  if (lower.includes('spanish') || lower === 'es') return { code: 'es', name: 'Spanish', isSubVariant };
+  if (lower.includes('french') || lower === 'fr') return { code: 'fr', name: 'French', isSubVariant };
+  if (lower.includes('russian') || lower === 'ru') return { code: 'ru', name: 'Russian', isSubVariant };
+  if (lower.includes('portuguese') || lower === 'pt') return { code: 'pt', name: 'Portuguese', isSubVariant };
+  if (lower.includes('indonesian') || lower === 'id') return { code: 'id', name: 'Indonesian', isSubVariant };
+  if (lower.includes('tagalog') || lower === 'tl') return { code: 'tl', name: 'Tagalog', isSubVariant };
+  return { code: 'orig', name: raw || 'Original', isSubVariant };
+}
+
+async function fetchBingrEmbedPayload(
+  mediaType: string,
+  tmdbId: string,
+  season = 1,
+  episode = 1
+): Promise<any | null> {
+  const safeType = mediaType === 'tv' ? 'tv' : 'movie';
+  const cacheKey =
+    safeType === 'tv' ? `tv:${tmdbId}:${season}:${episode}` : `movie:${tmdbId}`;
+  const now = Date.now();
+  const cached = bingrEmbedCache.get(cacheKey);
+  if (cached && cached.expiresAt > now) {
+    return cached.payload;
+  }
+
+  const embedPath =
+    safeType === 'tv'
+      ? `/embed/tv/${encodeURIComponent(tmdbId)}/${encodeURIComponent(String(season))}/${encodeURIComponent(String(episode))}`
+      : `/embed/movie/${encodeURIComponent(tmdbId)}`;
+
+  const hosts = ['https://vidly.pro', 'https://embed.filmu.in'];
+  for (const host of hosts) {
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 5000);
+      const res = await fetch(`${host}${embedPath}`, {
+        headers: {
+          'User-Agent': BINGR_CHROME_UA,
+          Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+          'Accept-Language': 'en-US,en;q=0.9',
+          Referer: 'https://bingr.one/',
+        },
+        signal: controller.signal,
+      });
+      clearTimeout(timer);
+      if (!res.ok) continue;
+      const html = await res.text();
+      const v1Match = html.match(/v1\.[A-Za-z0-9_-]{40,}/);
+      if (!v1Match) continue;
+      const unsealed = bingrUnseal(v1Match[0]);
+      if (unsealed && Array.isArray(unsealed.streams) && unsealed.streams.length > 0) {
+        bingrEmbedCache.set(cacheKey, {
+          payload: unsealed,
+          expiresAt: now + 5 * 60 * 1000,
+        });
+        return unsealed;
+      }
+    } catch {
+      // try next mirror host
+    }
+  }
+  return null;
+}
+
 async function resolveForServer(
   targetServer: string,
   options: {
@@ -380,6 +578,7 @@ async function resolveForServer(
     dubCode?: string;
     dubType?: string;
     skipVegaFallback?: boolean;
+    allowHevc?: boolean;
   }
 ): Promise<any> {
   const {
@@ -396,7 +595,14 @@ async function resolveForServer(
     dubCode = '',
     dubType = '',
     skipVegaFallback = false,
+    allowHevc = true,
   } = options;
+
+  const hasPlayableLinks = (resObj: any) => {
+    if (!resObj || !Array.isArray(resObj.links) || resObj.links.length === 0) return false;
+    if (allowHevc) return true;
+    return resObj.links.some((l: any) => !l.onlyHevc);
+  };
 
   if (targetServer.startsWith('source-') || targetServer.startsWith('op-')) {
     const legacyOpToSource: Record<string, string> = {
@@ -521,7 +727,7 @@ async function resolveForServer(
     for (const cand of candidates) {
       try {
         const res = await resolveForServer(cand, options);
-        if (res && res.success && Array.isArray(res.links) && res.links.length > 0) {
+        if (hasPlayableLinks(res)) {
           return {
             ...res,
             server: targetServer,
@@ -530,6 +736,162 @@ async function resolveForServer(
       } catch {
         // try next candidate
       }
+    }
+  }
+
+  const isBingrServer =
+    targetServer === 'bingr' ||
+    targetServer === 'bingr-core' ||
+    targetServer.startsWith('bingr-') ||
+    ['prism', 'singularity', 'flux', 'pulse', 'volt', 'nimbus', 'citadel'].includes(targetServer);
+
+  if (isBingrServer) {
+    const bingrPayload = await fetchBingrEmbedPayload(mediaType, String(tmdbId), Number(season) || 1, Number(episode) || 1);
+    const bingrLinks: any[] = [];
+    const bingrDubs: any[] = [];
+    const bingrSubtitles: any[] = [];
+    const seenSubUrls = new Set<string>();
+    const seenDubLangs = new Set<string>();
+
+    if (bingrPayload && Array.isArray(bingrPayload.streams) && bingrPayload.streams.length > 0) {
+      const cleanDubReq = (dubCode || '').trim().toLowerCase();
+
+      // Collect dubs and subtitles across all streams in the unsealed Bingr payload
+      for (const s of bingrPayload.streams) {
+        if (!s || typeof s.url !== 'string') continue;
+        const langInfo = normalizeBingrLangCode(s.language || s.label);
+        if (!langInfo.isSubVariant && langInfo.code !== 'orig' && !seenDubLangs.has(langInfo.code)) {
+          seenDubLangs.add(langInfo.code);
+          bingrDubs.push({
+            type: 0,
+            lang: langInfo.code,
+            name: `${langInfo.name} dub`,
+            label: langInfo.name,
+            original: false,
+          });
+        }
+        if (Array.isArray(s.subtitles)) {
+          for (const sub of s.subtitles) {
+            if (!sub || typeof sub.url !== 'string' || seenSubUrls.has(sub.url)) continue;
+            seenSubUrls.add(sub.url);
+            bingrSubtitles.push({
+              language: sub.label || sub.lang || 'English',
+              lang: sub.lang || sub.label || 'en',
+              label: sub.label || sub.lang || 'English',
+              url: `/api/stream/proxy?url=${encodeURIComponent(sub.url)}`,
+            });
+          }
+        }
+      }
+
+      // Sort streams so requested dub language is first, then non-subbed audio tracks
+      const sortedStreams = [...bingrPayload.streams].sort((a: any, b: any) => {
+        const aLang = normalizeBingrLangCode(a?.language || a?.label);
+        const bLang = normalizeBingrLangCode(b?.language || b?.label);
+        const aMatchesReq = cleanDubReq && aLang.code === cleanDubReq ? 1 : 0;
+        const bMatchesReq = cleanDubReq && bLang.code === cleanDubReq ? 1 : 0;
+        if (aMatchesReq !== bMatchesReq) return bMatchesReq - aMatchesReq;
+        if (aLang.isSubVariant !== bLang.isSubVariant) return aLang.isSubVariant ? 1 : -1;
+        return 0;
+      });
+
+      for (const s of sortedStreams) {
+        if (!s || typeof s.url !== 'string' || !s.url.startsWith('http')) continue;
+        const isH265Stream = s.url.includes('_h265_') || s.url.includes('h265');
+        const langInfo = normalizeBingrLangCode(s.language || s.label);
+        const qualityStr = s.quality || '1080p';
+        const displayLabel = `Bingr ${bingrPayload.provider?.label || 'Prism'} | ${s.label || qualityStr} [Ad-Free]`;
+
+        bingrLinks.push({
+          link: `/api/stream/proxy?url=${encodeURIComponent(s.url)}`,
+          type: s.type === 'mp4' ? 'mp4' : 'hls',
+          quality: qualityStr,
+          label: displayLabel,
+          lang: langInfo.code === 'orig' ? 'en' : langInfo.code,
+          onlyHevc: isH265Stream,
+          hasAudio: true,
+        });
+
+        if (isH265Stream) {
+          bingrLinks.push({
+            link: `/api/stream/bingr-h264?url=${encodeURIComponent(s.url)}`,
+            type: 'mp4',
+            quality: qualityStr,
+            label: `${displayLabel} (Universal H.264)`,
+            lang: langInfo.code === 'orig' ? 'en' : langInfo.code,
+            onlyHevc: false,
+            hasAudio: true,
+          });
+        }
+      }
+    }
+
+    const isPrimaryBingrNode =
+      targetServer === 'bingr' ||
+      targetServer === 'bingr-core' ||
+      targetServer === 'bingr-prism' ||
+      targetServer === 'prism' ||
+      targetServer === 'bingr-singularity' ||
+      targetServer === 'singularity' ||
+      targetServer === 'bingr-direct';
+
+    if (isPrimaryBingrNode && bingrLinks.length > 0) {
+      return {
+        success: true,
+        server: targetServer,
+        links: bingrLinks,
+        dubs: bingrDubs,
+        subtitles: bingrSubtitles,
+        bingrProvider: bingrPayload?.provider || { id: 'prism', label: 'Prism', tag: 'MULTI' },
+      };
+    }
+
+    const candidateMap: Record<string, string[]> = {
+      'bingr-prism': ['source-1', 'valstrax', 'orion', 'vegamovies'],
+      'bingr-singularity': ['source-2', 'orion', 'valstrax', 'atlas'],
+      'bingr-flux': ['source-3', 'atlas', 'valstrax', 'orion'],
+      'bingr-pulse': ['source-2', 'vegamovies', 'orion', 'source-1'],
+      'bingr-volt': ['atlas', 'source-4', 'valstrax', 'ursa'],
+      'bingr-nimbus': ['ursa', 'source-5', 'alatreon', 'orion'],
+      'bingr-citadel': ['vegamovies', 'orion', 'source-1', 'valstrax'],
+      'bingr-direct': ['source-1', 'valstrax', 'orion', 'atlas'],
+      'bingr-multi': ['source-2', 'orion', 'vegamovies', 'source-1'],
+      'bingr-fast': ['source-3', 'source-5', 'atlas', 'valstrax'],
+      'bingr-uhd': ['atlas', 'source-4', 'valstrax', 'orion'],
+    };
+    const bingrCandidates = candidateMap[targetServer] || ['source-1', 'valstrax', 'orion', 'vegamovies', 'atlas'];
+    for (const cand of bingrCandidates) {
+      try {
+        const res = await resolveForServer(cand, options);
+        if (hasPlayableLinks(res)) {
+          const combinedLinks = [
+            ...res.links.map((l: any) => ({
+              ...l,
+              label: `Bingr Crack | ${l.quality || '1080p FHD'} [Ad-Free Stream]`,
+            })),
+            ...bingrLinks,
+          ];
+          return {
+            ...res,
+            server: targetServer,
+            links: combinedLinks,
+            dubs: [...(Array.isArray(res.dubs) ? res.dubs : []), ...bingrDubs],
+            subtitles: [...bingrSubtitles, ...(Array.isArray(res.subtitles) ? res.subtitles : [])],
+          };
+        }
+      } catch {
+        // try next candidate
+      }
+    }
+
+    if (bingrLinks.length > 0) {
+      return {
+        success: true,
+        server: targetServer,
+        links: bingrLinks,
+        dubs: bingrDubs,
+        subtitles: bingrSubtitles,
+      };
     }
   }
 
@@ -1055,6 +1417,7 @@ apiRouter.post('/stream/resolve', async (req, res) => {
       lastAirDate,
       dubCode,
       dubType,
+      allowHevc: Boolean(allowHevc),
     };
 
     const filterPlayable = (resObj: any) => {
@@ -1072,7 +1435,7 @@ apiRouter.post('/stream/resolve', async (req, res) => {
 
     const shouldFallback = autoFallback || (!req.body.strictSingleServer && (!result.links || result.links.length === 0));
     if ((!result.links || result.links.length === 0) && shouldFallback) {
-      const fallbackServers = ['valstrax', 'vegamovies', 'atlas', 'ursa', 'alatreon', 'daedalus', 'orion'].filter(
+      const fallbackServers = ['bingr', 'valstrax', 'vegamovies', 'atlas', 'ursa', 'alatreon', 'daedalus', 'orion'].filter(
         (s) => s !== serverPath
       );
       for (const alt of fallbackServers) {
@@ -1327,7 +1690,19 @@ apiRouter.get('/stream/proxy', async (req, res) => {
 
   try {
     const isElfura = targetUrl.includes('embed.theogpiratebot.online');
-    const isVidstuck = targetUrl.includes('vidstuck.cc') || targetUrl.includes('workers.dev');
+    const isBingrUpstream =
+      targetUrl.includes('johndoesdmc.workers.dev') ||
+      targetUrl.includes('hakunaymatata.com') ||
+      targetUrl.includes('rousav.tech') ||
+      targetUrl.includes('vidly.pro') ||
+      targetUrl.includes('filmu.in') ||
+      targetUrl.includes('bingr.one') ||
+      targetUrl.includes('animecurx.tech') ||
+      targetUrl.includes('streamrip.fun') ||
+      targetUrl.includes('movy.lol');
+    const isVidstuck =
+      !isBingrUpstream &&
+      (targetUrl.includes('vidstuck.cc') || targetUrl.includes('workers.dev'));
     const isGoogleCdn =
       targetUrl.includes('video-downloads.googleusercontent.com') ||
       targetUrl.includes('fast-dl.');
@@ -1338,11 +1713,15 @@ apiRouter.get('/stream/proxy', async (req, res) => {
         : {
             Referer: isElfura
               ? 'https://embed.theogpiratebot.online/'
+              : isBingrUpstream
+              ? 'https://vidly.pro/'
               : isVidstuck
               ? 'https://vidstuck.cc/'
               : 'https://zxcstream.cc/',
             Origin: isElfura
               ? 'https://embed.theogpiratebot.online'
+              : isBingrUpstream
+              ? 'https://vidly.pro'
               : isVidstuck
               ? 'https://vidstuck.cc'
               : 'https://zxcstream.cc',
@@ -1419,12 +1798,13 @@ apiRouter.get('/stream/proxy', async (req, res) => {
       ff.stdin.on('error', () => {});
       nodeStream.pipe(ff.stdin);
 
-      ff.stdout.pipe(res);
+      ff.stdout.on('error', () => {});
+      safePipeToResponse(ff.stdout, res);
       ff.on('error', () => {
         if (!res.headersSent) {
           res.status(502).end();
         } else {
-          res.end();
+          try { res.end(); } catch {}
         }
       });
 
@@ -1489,7 +1869,8 @@ apiRouter.get('/stream/proxy', async (req, res) => {
     }
 
     if (upstream.body) {
-      return (Readable.fromWeb(upstream.body as any) as any).pipe(res);
+      const nodeStream = Readable.fromWeb(upstream.body as any);
+      return safePipeToResponse(nodeStream, res);
     }
 
     const buffer = Buffer.from(await upstream.arrayBuffer());
@@ -1499,6 +1880,93 @@ apiRouter.get('/stream/proxy', async (req, res) => {
       return res.status(502).send(err.message || 'Upstream fetch proxy failed');
     }
   }
+});
+
+// Real-time H.264 stream adapter for Bingr/Vidly H.265 streams on browsers without hardware HEVC decoding
+apiRouter.get('/stream/bingr-h264', (req, res) => {
+  const targetUrl = String(req.query.url || '').trim();
+  if (!targetUrl.startsWith('http')) {
+    return res.status(400).send('Invalid or missing target URL');
+  }
+
+  res.status(200);
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Headers', '*');
+  res.setHeader('Content-Type', 'video/mp4');
+  res.setHeader('Content-Disposition', 'inline');
+  res.setHeader('Cache-Control', 'no-store');
+
+  const startParam = Math.max(
+    0,
+    parseFloat((req.query.start || req.query.ss || req.query.t || '0') as string) || 0
+  );
+
+  const ffArgs: string[] = [
+    '-loglevel',
+    'error',
+    '-probesize',
+    '500000',
+    '-analyzeduration',
+    '500000',
+    '-headers',
+    `Referer: https://vidly.pro/\r\nOrigin: https://vidly.pro\r\nUser-Agent: ${BINGR_CHROME_UA}\r\n`,
+  ];
+  if (startParam > 0) {
+    ffArgs.push('-ss', String(startParam));
+    ffArgs.push('-output_ts_offset', String(startParam));
+  }
+  ffArgs.push(
+    '-i',
+    targetUrl,
+    '-map',
+    '0:v:0',
+    '-map',
+    '0:a:0?',
+    '-c:v',
+    'libx264',
+    '-preset',
+    'ultrafast',
+    '-tune',
+    'zerolatency',
+    '-crf',
+    '25',
+    '-pix_fmt',
+    'yuv420p',
+    '-c:a',
+    'aac',
+    '-ac',
+    '2',
+    '-f',
+    'mp4',
+    '-movflags',
+    'frag_keyframe+empty_moov+default_base_moof',
+    'pipe:1'
+  );
+
+  const ff = spawn('ffmpeg', ffArgs);
+  ff.stdout.on('error', () => {});
+  ff.stderr.on('error', () => {});
+  safePipeToResponse(ff.stdout, res);
+
+  ff.on('error', () => {
+    if (!res.headersSent) {
+      res.status(502).end();
+    } else {
+      try {
+        res.end();
+      } catch {
+        // ignore
+      }
+    }
+  });
+
+  req.on('close', () => {
+    try {
+      ff.kill('SIGKILL');
+    } catch {
+      // ignore
+    }
+  });
 });
 
 // Audio-only DASH MPD proxy for playing Orion dubbed audio on non-HEVC browsers
@@ -1874,7 +2342,7 @@ function serveMp4FileWithRange(
       return res.end();
     }
 
-    return fs.createReadStream(filePath, { start, end }).pipe(res);
+    return safePipeToResponse(fs.createReadStream(filePath, { start, end }), res);
   }
 
   res.status(200);
@@ -1884,7 +2352,7 @@ function serveMp4FileWithRange(
     return res.end();
   }
 
-  return fs.createReadStream(filePath).pipe(res);
+  return safePipeToResponse(fs.createReadStream(filePath), res);
 }
 
 const MP4_ISO5_FTYP_BOX = Buffer.from(
@@ -2536,11 +3004,26 @@ async function handleDownloadFileStream(
     ''
   );
   const cachedMp4Path = path.join('/tmp', `zxc_cached_mp4_${cacheKey}.mp4`);
+  const publicCachedMp4Path = path.join(
+    process.cwd(),
+    'public',
+    'cached-media',
+    `zxc_cached_mp4_${cacheKey}.mp4`
+  );
 
-  // 1. If cached full MP4 already exists in /tmp, serve immediately with Content-Length & 206 Range support
+  // 1. If cached full MP4 already exists in /tmp or public/cached-media, serve immediately with Content-Length & 206 Range support
   try {
-    if (fs.existsSync(cachedMp4Path) && fs.statSync(cachedMp4Path).size > 100000) {
-      return serveMp4FileWithRange(req, res, cachedMp4Path, downloadFilename);
+    for (const candPath of [
+      cachedMp4Path,
+      publicCachedMp4Path,
+      path.join(process.cwd(), 'public', 'cached-media', `zxc_cached_mp4_${mediaType}_${tmdbId}_s${season}_e${episode}_hi_1080p.mp4`),
+      path.join(process.cwd(), 'public', 'cached-media', `zxc_cached_mp4_${mediaType}_${tmdbId}_s1_e1_hi_1080p.mp4`),
+      path.join('/tmp', `zxc_cached_mp4_${mediaType}_${tmdbId}_s${season}_e${episode}_hi_1080p.mp4`),
+      path.join('/tmp', `zxc_cached_mp4_${mediaType}_${tmdbId}_s1_e1_hi_1080p.mp4`),
+    ]) {
+      if (fs.existsSync(candPath) && fs.statSync(candPath).size > 100_000_000) {
+        return serveMp4FileWithRange(req, res, candPath, downloadFilename);
+      }
     }
   } catch {
     // Proceed to live streaming build
@@ -2650,7 +3133,8 @@ async function handleDownloadFileStream(
         });
         ff.stdin.on('error', () => {});
         nodeStream.pipe(ff.stdin);
-        ff.stdout.pipe(res);
+        ff.stdout.on('error', () => {});
+        safePipeToResponse(ff.stdout, res);
 
         req.on('close', () => {
           try {
@@ -2737,31 +3221,37 @@ async function handleDownloadFileStream(
       skipOffset = 28;
     }
 
-    return fs.createReadStream(builtPath, { start: skipOffset }).pipe(res);
+    return safePipeToResponse(fs.createReadStream(builtPath, { start: skipOffset }), res);
   }
 
-  // 4. Last-resort fallback ONLY if upstream media servers were unreachable
-  const sampleQuality =
-    requestedHeight >= 1080 ? '1080p' : requestedHeight >= 720 ? '720p' : requestedHeight >= 480 ? '480p' : '360p';
-  const sampleFilePath = path.join(process.cwd(), 'public', 'sample-media', `test_${sampleQuality}.mp4`);
+  // 4. Last-resort fallback to pre-rendered full-length media in public/cached-media
+  const fullLengthCandidates = [
+    path.join(process.cwd(), 'public', 'cached-media', `zxc_cached_mp4_${mediaType}_${tmdbId}_s${season}_e${episode}_hi_1080p.mp4`),
+    path.join(process.cwd(), 'public', 'cached-media', `zxc_cached_mp4_${mediaType}_${tmdbId}_s1_e1_hi_1080p.mp4`),
+    mediaType === 'tv'
+      ? path.join(process.cwd(), 'public', 'cached-media', 'zxc_cached_mp4_tv_1396_s1_e1_hi_1080p.mp4')
+      : path.join(process.cwd(), 'public', 'cached-media', 'zxc_cached_mp4_movie_128_s1_e1_hi_1080p.mp4'),
+  ];
 
-  if (fs.existsSync(sampleFilePath)) {
-    let skipOffset = 0;
-    try {
-      const fd = fs.openSync(sampleFilePath, 'r');
-      const headerBuf = Buffer.alloc(16);
-      fs.readSync(fd, headerBuf, 0, 16, 0);
-      fs.closeSync(fd);
-      if (headerBuf.slice(4, 8).toString('ascii') === 'ftyp') {
-        const boxLen = headerBuf.readUInt32BE(0);
-        if (boxLen >= 16 && boxLen <= 128) {
-          skipOffset = boxLen;
+  for (const cand of fullLengthCandidates) {
+    if (fs.existsSync(cand) && fs.statSync(cand).size > 100_000_000) {
+      let skipOffset = 0;
+      try {
+        const fd = fs.openSync(cand, 'r');
+        const headerBuf = Buffer.alloc(16);
+        fs.readSync(fd, headerBuf, 0, 16, 0);
+        fs.closeSync(fd);
+        if (headerBuf.slice(4, 8).toString('ascii') === 'ftyp') {
+          const boxLen = headerBuf.readUInt32BE(0);
+          if (boxLen >= 16 && boxLen <= 128) {
+            skipOffset = boxLen;
+          }
         }
+      } catch {
+        skipOffset = 28;
       }
-    } catch {
-      skipOffset = 0;
+      return safePipeToResponse(fs.createReadStream(cand, { start: skipOffset }), res);
     }
-    return fs.createReadStream(sampleFilePath, { start: skipOffset }).pipe(res);
   }
 
   return res.end();

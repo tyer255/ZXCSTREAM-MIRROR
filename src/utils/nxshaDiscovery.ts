@@ -42,6 +42,7 @@ export const ALLOWED_NXSHA_PROVIDERS = [
   'pegasus',
   'nova',
   'apollo',
+  'bingr',
 ] as const;
 
 export type AllowedNxshaProvider = (typeof ALLOWED_NXSHA_PROVIDERS)[number];

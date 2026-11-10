@@ -320,8 +320,9 @@ describe('NXSHA Parallel Source Discovery & First-Valid-Source Racing Engine', (
     assert.equal(isAuthorizedNxshaProvider('orion'), true);
     assert.equal(isAuthorizedNxshaProvider('rousav'), true);
     assert.equal(isAuthorizedNxshaProvider('apollo'), true);
+    assert.equal(isAuthorizedNxshaProvider('bingr'), true);
     assert.equal(isAuthorizedNxshaProvider('evil-provider'), false);
-    assert.equal(ALLOWED_NXSHA_PROVIDERS.length, 41);
+    assert.equal(ALLOWED_NXSHA_PROVIDERS.length, 42);
 
     assert.equal(isPrivateOrLoopbackHost('localhost'), true);
     assert.equal(isPrivateOrLoopbackHost('127.0.0.1'), true);

@@ -8,6 +8,7 @@ import {
   PLAYER_HINTS,
   PLAYER_SERVERS,
   OVERPOWER_SERVERS,
+  BINGR_SERVERS,
   NXSHA_SERVERS,
   RawOrionDub,
   detectSingleStreamLanguage,
@@ -97,6 +98,8 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
       ? NXSHA_SERVERS
       : playerMode === 'overpower'
       ? OVERPOWER_SERVERS
+      : playerMode === 'bingr'
+      ? BINGR_SERVERS
       : PLAYER_SERVERS;
   const [servers, setServers] = useState<ServerItemState[]>(() =>
     activeServerList.map((s) => ({
@@ -1741,7 +1744,12 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
         return;
       }
 
-      const activeList = playerMode === 'overpower' ? OVERPOWER_SERVERS : PLAYER_SERVERS;
+      const activeList =
+        playerMode === 'overpower'
+          ? OVERPOWER_SERVERS
+          : playerMode === 'bingr'
+          ? BINGR_SERVERS
+          : PLAYER_SERVERS;
       if (serverIdx >= activeList.length) return;
 
       const serverDef = activeList[serverIdx];
@@ -1789,6 +1797,7 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
             dubCode:
               serverIdx === 0 ||
               serverDef.id.startsWith('source-') ||
+              serverDef.id.startsWith('bingr') ||
               serverDef.id === 'orion' ||
               serverDef.id === 'vegamovies'
                 ? dubCodeToUse
@@ -1796,6 +1805,7 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
             dubType:
               (serverIdx === 0 ||
                 serverDef.id.startsWith('source-') ||
+                serverDef.id.startsWith('bingr') ||
                 serverDef.id === 'orion' ||
                 serverDef.id === 'vegamovies') &&
               dubCodeToUse
@@ -1824,6 +1834,7 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
         loadedStreamDubRef.current =
           serverIdx === 0 ||
           serverDef.id.startsWith('source-') ||
+          serverDef.id.startsWith('bingr') ||
           serverDef.id === 'orion' ||
           serverDef.id === 'vegamovies'
             ? dubCodeToUse.toLowerCase()
@@ -2015,6 +2026,8 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
         ? NXSHA_SERVERS
         : playerMode === 'overpower'
         ? OVERPOWER_SERVERS
+        : playerMode === 'bingr'
+        ? BINGR_SERVERS
         : PLAYER_SERVERS;
     const startIdx = Math.max(0, Math.min(activeList.length - 1, initialServer));
 
@@ -2570,7 +2583,9 @@ export const CustomPlayerView: React.FC<CustomPlayerViewProps> = ({
 
     const currentSrc = v.src || '';
     const isProxyStream =
-      currentSrc.includes('/api/stream/proxy') || currentSrc.includes('/api/nxsha/proxy');
+      currentSrc.includes('/api/stream/proxy') ||
+      currentSrc.includes('/api/nxsha/proxy') ||
+      currentSrc.includes('/api/stream/bingr-h264');
 
     if (isTargetBuffered || !isProxyStream) {
       try {

@@ -496,6 +496,18 @@ const SERVER_SUBTITLES: Record<string, string> = {
   pegasus: 'Zero-Buffer Adaptive HLS (Hindi/EN)',
   nova: 'High-Contrast Cinema 1080p Multi-Audio',
   apollo: 'Universal Failover Stream Node',
+  bingr: 'Zero Ads • High-Speed Direct Stream',
+  'bingr-prism': 'MULTI • Multi-Audio & Subtitles (Ad-Free)',
+  'bingr-singularity': 'HD • Direct High-Speed HLS (Ad-Free)',
+  'bingr-flux': 'HD • Fast Adaptive Stream (Ad-Free)',
+  'bingr-pulse': 'HD • Multi-Language Stream (Ad-Free)',
+  'bingr-volt': 'HD • Low-Latency Cinema Node (Ad-Free)',
+  'bingr-nimbus': 'HD • Cloud Edge Cluster (Ad-Free)',
+  'bingr-citadel': 'MULTI • Hindi & Dual-Audio (Ad-Free)',
+  'bingr-direct': '100% Ad-Free • 1080p Ultra-Low Latency',
+  'bingr-multi': 'Multi-Audio • 18 Languages & Subtitles',
+  'bingr-fast': 'Fast HLS Adaptive Edge Stream',
+  'bingr-uhd': 'High Bitrate 4K / 1080p Stream',
 };
 
 export const PlayerServerCarousel: React.FC<{

@@ -1,4 +1,4 @@
-export type PlayerMode = 'custom' | 'builtin' | 'nxsha' | 'anime' | 'overpower';
+export type PlayerMode = 'custom' | 'builtin' | 'nxsha' | 'anime' | 'overpower' | 'bingr';
 export type MediaType = 'movie' | 'tv';
 
 export interface PlayerUrlOptions {
@@ -175,7 +175,9 @@ export function buildPlayerUrl(options: PlayerUrlOptions): string {
   }
 
   const endpoint =
-    options.playerMode === 'overpower'
+    options.playerMode === 'bingr'
+      ? 'bingr'
+      : options.playerMode === 'overpower'
       ? 'overpower'
       : options.playerMode === 'nxsha'
       ? 'nxsha'
@@ -314,6 +316,73 @@ export const PLAYER_SERVERS = [
   { index: 4, id: 'ursa', label: 'Ursa V' },
   { index: 5, id: 'alatreon', label: 'Alatreon VI' },
   { index: 6, id: 'daedalus', label: 'Daedalus VII' },
+  { index: 7, id: 'bingr', label: 'Bingr Core · Ad-Free' },
+] as const;
+
+export const BINGR_SERVERS = [
+  {
+    index: 0,
+    id: 'bingr-prism',
+    label: 'Prism · MULTI',
+    name: 'Prism',
+    badge: 'MULTI • Multi-Audio & Subtitles (Ad-Free)',
+    quality: '1080p FHD',
+    latencyMs: 14,
+  },
+  {
+    index: 1,
+    id: 'bingr-singularity',
+    label: 'Edge · HD',
+    name: 'Edge',
+    badge: 'HD • Direct High-Speed HLS (Ad-Free)',
+    quality: '1080p FHD',
+    latencyMs: 18,
+  },
+  {
+    index: 2,
+    id: 'bingr-flux',
+    label: 'Flux · HD',
+    name: 'Flux',
+    badge: 'HD • Fast Adaptive Stream (Ad-Free)',
+    quality: '1080p FHD',
+    latencyMs: 21,
+  },
+  {
+    index: 3,
+    id: 'bingr-pulse',
+    label: 'Pulse · HD',
+    name: 'Pulse',
+    badge: 'HD • Multi-Language Stream (Ad-Free)',
+    quality: '1080p FHD',
+    latencyMs: 24,
+  },
+  {
+    index: 4,
+    id: 'bingr-volt',
+    label: 'Volt · HD',
+    name: 'Volt',
+    badge: 'HD • Low-Latency Cinema Node (Ad-Free)',
+    quality: '1080p FHD',
+    latencyMs: 27,
+  },
+  {
+    index: 5,
+    id: 'bingr-nimbus',
+    label: 'Nimbus · HD',
+    name: 'Nimbus',
+    badge: 'HD • Cloud Edge Cluster (Ad-Free)',
+    quality: '1080p FHD',
+    latencyMs: 30,
+  },
+  {
+    index: 6,
+    id: 'bingr-citadel',
+    label: 'Citadel · MULTI',
+    name: 'Citadel',
+    badge: 'MULTI • Hindi & Dual-Audio (Ad-Free)',
+    quality: '1080p FHD',
+    latencyMs: 33,
+  },
 ] as const;
 
 export const OVERPOWER_SERVERS = [
@@ -434,6 +503,15 @@ export const OVERPOWER_SERVERS = [
     quality: '720p HD',
     latencyMs: 65,
   },
+  {
+    index: 13,
+    id: 'bingr',
+    label: 'Bingr Core · Ad-Free',
+    name: 'Bingr Core',
+    badge: 'Zero Ads • High-Speed Direct Stream',
+    quality: '1080p FHD',
+    latencyMs: 20,
+  },
 ] as const;
 
 export const NXSHA_SERVERS = [
@@ -478,6 +556,7 @@ export const NXSHA_SERVERS = [
   { index: 38, id: 'pegasus', label: 'AethoPegasus (Zero-Buffer Hindi/EN)' },
   { index: 39, id: 'nova', label: 'AethoNova (Cinema 1080p Multi-Audio)' },
   { index: 40, id: 'apollo', label: 'AethoApollo (Universal Failover)' },
+  { index: 41, id: 'bingr', label: 'Bingr Core (Ad-Free Master)' },
 ] as const;
 
 export const PLAYER_HINTS = [
@@ -881,14 +960,48 @@ export function parseAppRoute(pathname: string): AppRoute {
     };
   }
 
-  // Standard Embed / Custom / NXSHA / OVER POWER Player Routes: /embed/movie/:id or /embed/tv/:id/:s/:e
-  if ((first === 'player' || first === 'embed' || first === 'nxsha' || first === 'overpower') && (second === 'movie' || second === 'tv') && third) {
+  // Dedicated Bingr Crack Player Routes:
+  // /bingr/movie/:id or /bingr/tv/:id/:s/:e
+  // /bingr/watch/movie/:id or /bingr/watch/tv/:id/:s/:e
+  // /watch/movie/:id or /watch/tv/:id/:s/:e
+  if (
+    (first === 'bingr' || first === 'watch') &&
+    (second === 'movie' || second === 'tv' || (second === 'watch' && (third === 'movie' || third === 'tv')))
+  ) {
+    const isNestedWatch = second === 'watch';
+    const mediaType = isNestedWatch ? third : second;
+    const tmdbId = isNestedWatch ? fourth : third;
+    const sStr = isNestedWatch ? fifth : fourth;
+    const eStr = isNestedWatch ? segments[5] : fifth;
+
+    if (tmdbId) {
+      const season = Math.max(1, Number.parseInt(sStr ?? '1', 10) || 1);
+      const episode = Math.max(1, Number.parseInt(eStr ?? '1', 10) || 1);
+      return {
+        page: 'player',
+        playerMode: 'bingr',
+        mediaType: mediaType as MediaType,
+        tmdbId,
+        season,
+        episode,
+      };
+    }
+  }
+
+  // Standard Embed / Custom / NXSHA / OVER POWER / BINGR Player Routes: /embed/movie/:id or /embed/tv/:id/:s/:e
+  if (
+    (first === 'player' || first === 'embed' || first === 'nxsha' || first === 'overpower' || first === 'bingr') &&
+    (second === 'movie' || second === 'tv') &&
+    third
+  ) {
     const season = Math.max(1, Number.parseInt(fourth ?? '1', 10) || 1);
     const episode = Math.max(1, Number.parseInt(fifth ?? '1', 10) || 1);
     return {
       page: 'player',
       playerMode:
-        first === 'overpower'
+        first === 'bingr'
+          ? 'bingr'
+          : first === 'overpower'
           ? 'overpower'
           : first === 'nxsha'
           ? 'nxsha'
